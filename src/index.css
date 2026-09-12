@@ -1,0 +1,108 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Claude-inspired light: warm cream palette with terracotta accent. */
+  --bg-0: #FAF6F1;
+  --bg-1: #F0EBE3;
+  --bg-2: #FFFFFF;
+  --bg-3: #EDE8E0;
+  --bg-4: #DDD7CE;
+  --text-primary: #1A1612;
+  --text-secondary: #6B6560;
+  --text-muted: #9B9590;
+  --accent: #C96442;
+  --accent-hover: #B85A3A;
+  --accent-soft: rgba(201, 100, 66, 0.10);
+  --border: #E8E2DA;
+  --success: #2D8A56;
+  --error: #C43E2E;
+  --warning: #B8762B;
+  --glass: rgba(250, 246, 241, 0.82);
+  --glass-border: rgba(0, 0, 0, 0.05);
+  --font-mono: 'SF Mono', 'JetBrains Mono', 'Menlo', 'Cascadia Code', ui-monospace, monospace;
+
+  /* Syntax palette — warm light */
+  --syntax-keyword: #9D4EDD;
+  --syntax-string: #C96442;
+  --syntax-number: #2D8A56;
+  --syntax-comment: #9B9590;
+  --syntax-property: #3D6BA8;
+  --syntax-function: #8B6340;
+  --syntax-type: #267F99;
+  --syntax-constant: #9D4EDD;
+}
+
+.dark {
+  /* Claude-inspired dark: warm dark surface with lighter terracotta accent. */
+  --bg-0: #1A1915;
+  --bg-1: #14130F;
+  --bg-2: #242320;
+  --bg-3: #2E2D28;
+  --bg-4: #3A3833;
+  --text-primary: #F0EDE8;
+  --text-secondary: #A5A09A;
+  --text-muted: #706B65;
+  --accent: #DA7756;
+  --accent-hover: #E88A6A;
+  --accent-soft: rgba(218, 119, 86, 0.15);
+  --border: #353330;
+  --success: #4AAA6F;
+  --error: #E05A4A;
+  --warning: #D4993E;
+  --glass: rgba(26, 25, 21, 0.82);
+  --glass-border: rgba(255, 255, 255, 0.05);
+
+  /* Syntax palette — warm dark */
+  --syntax-keyword: #C9A0DC;
+  --syntax-string: #DA7756;
+  --syntax-number: #A0D4B5;
+  --syntax-comment: #706B65;
+  --syntax-property: #8BB8E8;
+  --syntax-function: #D4B896;
+  --syntax-type: #6DC9B0;
+  --syntax-constant: #C9A0DC;
+}
+
+.syntax-keyword  { color: var(--syntax-keyword); }
+.syntax-string   { color: var(--syntax-string); }
+.syntax-number   { color: var(--syntax-number); }
+.syntax-comment  { color: var(--syntax-comment); font-style: italic; }
+.syntax-property { color: var(--syntax-property); }
+.syntax-function { color: var(--syntax-function); }
+.syntax-type     { color: var(--syntax-type); }
+.syntax-constant { color: var(--syntax-constant); }
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+::selection { background: var(--accent-soft); }
+.ff-mono { font-family: var(--font-mono); }
+
+body {
+  font-family: 'Söhne', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
+  background-color: var(--bg-0);
+  color: var(--text-primary);
+  height: 100vh;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  letter-spacing: -0.011em;
+}
+
+#root { height: 100vh; }
+
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--bg-4); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+input, textarea, select, button { font-family: inherit; }
+
+@layer components {
+  .glass {
+    background: var(--glass);
+    backdrop-filter: blur(24px) saturate(1.4);
+    -webkit-backdrop-filter: blur(24px) saturate(1.4);
+    border: 1px solid var(--glass-border);
+  }
+}

@@ -1,0 +1,44 @@
+# Dependencies and build outputs
+node_modules/
+dist/
+dist-electron/
+release/
+coverage/
+*.tsbuildinfo
+
+# Credentials, certificates, and local application state
+.env
+.env.*
+!.env.example
+certs/
+*.pem
+*.key
+*.pfx
+*.p12
+*.cer
+*.crt
+*.keystore
+*.mobileprovision
+providers.json
+settings.json
+conversations.json
+messages.json
+remote-tls.json
+.conecode/
+.claude/
+.codex/
+.agents/
+
+# Machine-local files and temporary media
+.DS_Store
+Thumbs.db
+*.log
+/*.jpg
+*.dmg
+*.exe
+*.zip
+*.blockmap
+
+# Optional vendor binaries are installed separately
+resources/bin/*
+!resources/bin/.gitkeep
