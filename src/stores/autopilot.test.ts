@@ -12,6 +12,7 @@ import type { ProjectIdea } from '../core/agenda/newProject';
 // nothing after the click, so every one of these steps has to hold on its own.
 
 let createdDirs: string[];
+let writtenFiles: { path: string; content: string }[];
 let execCalls: { command: string; cwd?: string }[];
 let execResults: { success: boolean; stdout: string; stderr: string; exitCode: number }[];
 let sentPrompts: string[];
@@ -34,6 +35,7 @@ function fakeAgentReply(content: string) {
 
 beforeEach(() => {
   createdDirs = [];
+  writtenFiles = [];
   execCalls = [];
   execResults = [];
   sentPrompts = [];
@@ -44,6 +46,7 @@ beforeEach(() => {
       app: { getSystemInfo: async () => ({ homedir: '/home/me' }) },
       fs: {
         createDir: async (p: string) => { createdDirs.push(p); return true; },
+        writeFile: async (path: string, content: string) => { writtenFiles.push({ path, content }); return true; },
         readDir: async () => existingProjects.map((name) => ({ name, path: `/x/${name}`, isDirectory: true })),
         glob: async () => ['/proj/package.json'],
         readFile: async () => null,
@@ -89,6 +92,17 @@ describe('autopilot: one click, no further input', () => {
     expect(createdDirs).toContain('/home/me/ConeCode Projects');
     expect(createdDirs).toContain('/home/me/ConeCode Projects/cli-tool');
     expect(useAutopilotStore.getState().projectDir).toBe('/home/me/ConeCode Projects/cli-tool');
+  });
+
+  it('seeds README.md in the new empty project folder', async () => {
+    await useAutopilotStore.getState().run(idea, 'p1', 'm1');
+
+    const readme = writtenFiles.find((f) => f.path === '/home/me/ConeCode Projects/cli-tool/README.md');
+    expect(readme).toBeTruthy();
+    expect(readme!.content).toContain('# CLI Tool');
+    expect(readme!.content).toContain('## Install');
+    expect(readme!.content).toContain('## Run');
+    expect(readme!.content).toContain('## Test');
   });
 
   it('never overwrites an existing project of the same name', async () => {

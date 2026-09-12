@@ -87,13 +87,59 @@ Rules:
 /** How the agent must report the command that proves the project works. */
 export const VERIFY_MARKER = 'VERIFY_COMMAND:';
 
+/**
+ * Written the moment an empty project folder is created, so every from-scratch
+ * task starts with a README the agent must keep accurate rather than one it
+ * may forget to add.
+ */
+export function starterProjectReadme(title: string): string {
+  return `# ${title}
+
+Scaffolded by ConeCode. Keep this README accurate as the project grows.
+
+## What it is
+
+<!-- Who this is for, and what it does. -->
+
+## Features
+
+- <!-- core features -->
+
+## Stack
+
+<!-- Languages, frameworks, package manager. -->
+
+## Install
+
+\`\`\`bash
+# real install command
+\`\`\`
+
+## Run
+
+\`\`\`bash
+# real run command
+\`\`\`
+
+## Test
+
+\`\`\`bash
+# real test / verify command
+\`\`\`
+
+## Notes
+
+<!-- Status, limitations, next steps. -->
+`;
+}
+
 export function buildAutopilotPrompt(idea: { title: string; description: string; stack: string }, dir: string): string {
   return `Build this project completely on your own. I will not be watching, and I will not answer questions — every decision is yours.
 
 PROJECT: ${idea.title}
 WHAT IT DOES: ${idea.description}
 SUGGESTED STACK: ${idea.stack} (change it if something else genuinely fits better)
-DIRECTORY: ${dir} (already created and empty — put everything there, and never write outside it)
+DIRECTORY: ${dir} (already created; a starter README.md is present — put everything there, never write outside it)
 
 Do all of this, in order, without stopping to ask:
 1. Scaffold the project: real directory structure, package/config files, and a .gitignore.
@@ -101,7 +147,7 @@ Do all of this, in order, without stopping to ask:
 3. Install dependencies with the real package manager, and use only packages that exist on the public registry.
 4. Write at least one meaningful test that exercises the main behaviour — not a trivial assert(true).
 5. RUN the install, the build (if any) and the tests yourself. Read the output. If anything fails, fix it and run it again. Keep going until it genuinely passes; a project that does not run is not finished.
-6. Write a README with what it is and the exact commands to install, run and test it.
+6. Complete README.md (seeded when the folder was created): what it is, features, stack, and the exact commands to install, run and test. Do not leave placeholder sections.
 7. REVIEW FROM THE TOP. Go back to the start and read the finished project as if someone had just handed it to you: re-read the description above and tick off every feature against the code that actually exists, then open every file you wrote, end to end. Look for what a passing test does not catch — a feature from the description you never built, a stub left behind, a README command that does not match the real scripts, an import whose package was never installed. Fix anything you find, run the tests again, and repeat until a full pass turns up nothing.
 
 Hard requirements:

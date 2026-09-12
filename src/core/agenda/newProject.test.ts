@@ -7,6 +7,7 @@ import {
   guessVerifyCommand,
   buildAutopilotPrompt,
   buildRepairPrompt,
+  starterProjectReadme,
   FALLBACK_IDEAS,
   VERIFY_MARKER,
 } from './newProject';
@@ -141,6 +142,12 @@ describe('the autopilot instruction', () => {
     expect(prompt).toMatch(/repeat until a full pass turns up nothing/i);
   });
 
+  it('requires completing the seeded README, not leaving placeholders', () => {
+    expect(prompt).toMatch(/README\.md/i);
+    expect(prompt).toMatch(/Do not leave placeholder sections/i);
+    expect(prompt).toMatch(/starter README\.md is present/i);
+  });
+
   it('gates the verify marker on that review, not on the tests alone', () => {
     expect(prompt).toMatch(/tests genuinely pass AND that review turns up nothing/i);
   });
@@ -173,5 +180,16 @@ describe('the repair instruction', () => {
   it('truncates a huge log instead of blowing the context', () => {
     const prompt = buildRepairPrompt('npm test', 'x'.repeat(50000), 2, 3);
     expect(prompt.length).toBeLessThan(8000);
+  });
+});
+
+describe('starterProjectReadme', () => {
+  it('seeds a titled README with install/run/test sections', () => {
+    const md = starterProjectReadme('CLI Tool');
+    expect(md).toContain('# CLI Tool');
+    expect(md).toContain('## Install');
+    expect(md).toContain('## Run');
+    expect(md).toContain('## Test');
+    expect(md).toContain('Keep this README accurate');
   });
 });

@@ -167,6 +167,12 @@ describe('buildNewProjectPrompt', () => {
     expect(prompt).toContain('not placeholders');
     expect(prompt).toContain('stop and ask me');
   });
+
+  it('requires README.md with real install/run/test commands', () => {
+    const prompt = buildNewProjectPrompt('a todo CLI', '/tmp/new');
+    expect(prompt).toMatch(/README\.md/i);
+    expect(prompt).toMatch(/install\/run\/test/i);
+  });
 });
 
 describe('recommendNext', () => {

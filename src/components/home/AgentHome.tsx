@@ -1,15 +1,17 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import {
   FiRefreshCw, FiFolder, FiPlus, FiGitBranch, FiClock, FiArrowRight, FiZap,
-  FiAlertCircle, FiTool, FiFileText, FiCheckSquare, FiPackage, FiCornerDownLeft,
-  FiSearch, FiEdit3, FiPlay,
+  FiAlertCircle, FiTool, FiFileText, FiCheckSquare, FiPackage,
+  FiPlay,
 } from 'react-icons/fi';
 import {
   useAgendaStore, useChatStore, useLanguageStore, useModelStore, useWorkspaceStore,
 } from '../../stores';
-import { buildNewProjectPrompt, buildResumePrompt, recommendNext, type SuggestedTask, type TaskKind } from '../../core/agenda/agenda';
+import { buildResumePrompt, recommendNext, type SuggestedTask, type TaskKind } from '../../core/agenda/agenda';
 import AppIcon from '../common/AppIcon';
 import ProjectIdeas from './ProjectIdeas';
+import ProjectBriefComposer from './ProjectBriefComposer';
+import NextActionDialog from './NextActionDialog';
 
 const KIND_STYLE: Record<TaskKind, { icon: JSX.Element; color: string; bg: string }> = {
   bug: { icon: <FiAlertCircle size={14} />, color: 'text-red-500', bg: 'bg-red-500/10' },
@@ -59,8 +61,6 @@ export default function AgentHome() {
   const scanWorkspace = useAgendaStore((s) => s.scanWorkspace);
   const loadResume = useAgendaStore((s) => s.loadResume);
 
-  const [idea, setIdea] = useState('');
-  const [showNewProject, setShowNewProject] = useState(false);
 
   // The greeting follows the clock rather than being one fixed line.
   const greetingKey = useMemo(() => {
@@ -109,21 +109,7 @@ export default function AgentHome() {
     await sendMessage(buildResumePrompt(candidate), model.providerId, model.id);
   };
 
-  const createProject = async () => {
-    if (!idea.trim() || !model) return;
-    let dir = rootPath;
-    if (!dir) {
-      await openFolder();
-      dir = useWorkspaceStore.getState().rootPath;
-      if (!dir) return; // user cancelled the picker
-    }
-    const text = idea;
-    setIdea('');
-    setShowNewProject(false);
-    await sendMessage(buildNewProjectPrompt(text, dir), model.providerId, model.id);
-  };
-
-  // The screen makes the call; the user only has to agree.
+  // The screen makes the call; the user only has to agree — or rewrite it in the dialog.
   const recommendation = useMemo(() => recommendNext({
     hasFolder: !!rootPath,
     dirty: scan?.git.dirty ?? 0,
@@ -132,21 +118,10 @@ export default function AgentHome() {
     topTask: tasks[0]?.title,
   }), [rootPath, scan, resume, tasks]);
 
-  const actOnRecommendation = () => {
-    switch (recommendation.kind) {
-      case 'resume': {
-        const target = resume.find((r) => r.openTodos.length) || resume[0];
-        if (target) void resumeWork(target);
-        break;
-      }
-      case 'review': void start(t('homeReviewPrompt')); break;
-      case 'task': if (tasks[0]) void start(tasks[0].prompt); break;
-      case 'tests': void start(t('recTestsPrompt')); break;
-      case 'start':
-        if (!rootPath) void openFolder();
-        else document.getElementById('conecode-new-project')?.scrollIntoView({ behavior: 'smooth' });
-        break;
-    }
+  const ideasSectionRef = useRef<HTMLElement>(null);
+  const scrollToIdeas = () => {
+    ideasSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    document.getElementById('conecode-project-idea')?.focus({ preventScroll: true });
   };
 
   const busy = scanning || suggesting;
@@ -197,27 +172,18 @@ export default function AgentHome() {
         </div>
       </div>
 
-      {/* ---- The call: one recommended next action ---- */}
-      <button
-        onClick={actOnRecommendation}
-        disabled={!model && recommendation.kind !== 'start'}
-        className="w-full mb-6 text-left rounded-xl border border-[var(--accent)]/40 bg-[var(--accent-soft)] px-4 py-3 hover:border-[var(--accent)] transition-colors group disabled:opacity-50"
-      >
-        <div className="flex items-center gap-2">
-          <FiArrowRight size={14} className="text-[var(--accent)] shrink-0" />
-          <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--accent)]">
-            {t('recLabel')}
-          </span>
-        </div>
-        <div className="mt-1 flex items-baseline gap-2 flex-wrap">
-          <span className="text-sm font-medium text-[var(--text-primary)]">
-            {t(recommendation.key)}
-          </span>
-          {recommendation.detail && (
-            <span className="text-xs text-[var(--text-secondary)] truncate">{recommendation.detail}</span>
-          )}
-        </div>
-      </button>
+      <ProjectBriefComposer />
+
+      {/* ---- The call: one recommended next action, as a real dialog ---- */}
+      <NextActionDialog
+        recommendation={recommendation}
+        tasks={tasks}
+        resume={resume}
+        hasFolder={!!rootPath}
+        onSend={start}
+        onOpenFolder={() => void openFolder()}
+        onScrollToIdeas={scrollToIdeas}
+      />
 
       {/* ---- The main event: work the agent found ---- */}
       <section className="mb-6">
@@ -326,38 +292,16 @@ export default function AgentHome() {
       )}
 
       {/* ---- Start something new: pick one, it builds itself ---- */}
-      <section id="conecode-new-project">
+      <section id="conecode-new-project" ref={ideasSectionRef}>
         <ProjectIdeas />
-        {!showNewProject ? (
-          <div className="mt-2.5 grid grid-cols-2 gap-2.5">
-            <QuickAction icon={<FiPlus size={15} />} label={t('homeNewProject')} desc={t('homeNewProjectDesc')}
-              onClick={() => setShowNewProject(true)} />
-            <QuickAction icon={<FiFolder size={15} />} label={t('openFolder')} desc={t('homeOpenFolderDesc')}
-              onClick={openFolder} />
-          </div>
-        ) : (
-          <div className="mt-2.5 rounded-xl border border-[var(--accent)]/40 bg-[var(--bg-2)] p-3">
-            <div className="text-xs text-[var(--text-secondary)] mb-2">{t('homeNewProjectHint')}</div>
-            <div className="flex items-center gap-2">
-              <input
-                autoFocus
-                value={idea}
-                onChange={(e) => setIdea(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') void createProject(); if (e.key === 'Escape') setShowNewProject(false); }}
-                placeholder={t('homeNewProjectPlaceholder')}
-                className="flex-1 px-3 py-2 rounded-lg bg-[var(--bg-3)] border border-[var(--border)] text-sm text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
-              />
-              <button onClick={createProject} disabled={!idea.trim() || !model}
-                className="shrink-0 inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[var(--accent)] text-white text-xs font-medium hover:bg-[var(--accent-hover)] disabled:opacity-40">
-                <FiCornerDownLeft size={12} /> {t('homeCreate')}
-              </button>
-              <button onClick={() => setShowNewProject(false)}
-                className="shrink-0 px-3 py-2 rounded-lg bg-[var(--bg-3)] text-[var(--text-secondary)] text-xs hover:bg-[var(--bg-4)]">
-                {t('cancel')}
-              </button>
-            </div>
-          </div>
-        )}
+        <div className="mt-2.5 grid grid-cols-2 gap-2.5">
+          <QuickAction icon={<FiPlus size={15} />} label={t('homeNewProject')} desc={t('homeNewProjectDesc')}
+            onClick={() => {
+              document.getElementById('conecode-project-idea')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              document.getElementById('conecode-project-idea')?.focus({ preventScroll: true });
+            }} />
+          <QuickAction icon={<FiFolder size={15} />} label={t('openFolder')} desc={t('homeOpenFolderDesc')} onClick={openFolder} />
+        </div>
       </section>
 
       {!model && (

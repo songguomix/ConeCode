@@ -9,6 +9,7 @@ import {
   guessVerifyCommand,
   parseIdeas,
   slugify,
+  starterProjectReadme,
   uniqueFolderName,
   type ProjectIdea,
 } from '../core/agenda/newProject';
@@ -191,8 +192,9 @@ export const useAutopilotStore = create<AutopilotStore>((set, get) => ({
 /**
  * Create the project folder without asking: <home>/ConeCode Projects/<slug>,
  * de-duplicated so a second "CLI Tool" never lands on top of the first.
+ * Seeds README.md so every empty-folder start begins with docs in place.
  */
-async function createProjectDir(title: string): Promise<string | null> {
+export async function createProjectDir(title: string): Promise<string | null> {
   const api = window.electronAPI;
   const info = await api.app.getSystemInfo().catch(() => null as any);
   const home = info?.homedir;
@@ -208,7 +210,14 @@ async function createProjectDir(title: string): Promise<string | null> {
   const name = uniqueFolderName(slugify(title), (n) => taken.has(n));
 
   const dir = `${base}/${name}`;
-  return (await api.fs.createDir(dir)) ? dir : null;
+  if (!(await api.fs.createDir(dir))) return null;
+  // Every empty-folder start seeds a README so the project is never left undocumented.
+  try {
+    await api.fs.writeFile(`${dir}/README.md`, starterProjectReadme(title));
+  } catch {
+    // Seeding docs must not block creating the project folder itself.
+  }
+  return dir;
 }
 
 /**

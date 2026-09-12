@@ -235,7 +235,7 @@ export function buildNewProjectPrompt(idea: string, targetDir: string): string {
 
 ${idea}
 
-Do it properly: pick a suitable, current stack and explain the choice in one line; scaffold the real directory structure and config; write the initial working code (not placeholders); add a README with exact install/run/test commands; and add one test that actually passes. Run the install and the test to prove it works before reporting done. If the directory already has files, stop and ask me before touching anything.`;
+Do it properly: pick a suitable, current stack and explain the choice in one line; scaffold the real directory structure and config; write the initial working code (not placeholders); write README.md first with what the project is and exact install/run/test commands (keep it accurate as you work); and add one test that actually passes. Run the install and the test to prove it works before reporting done. If the directory already has files, stop and ask me before touching anything.`;
 }
 
 /** Ranking for display: value first, then cheapness, then safety. */
