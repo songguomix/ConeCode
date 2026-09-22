@@ -15,6 +15,19 @@ function loadEditorWidth(): number {
   return DEFAULT_EDITOR_WIDTH;
 }
 
+// Sidebar file tree stays open by default so folders remain browsable; the
+// choice is remembered so Codex-style chat-first layouts persist across restarts.
+const FILE_TREE_OPEN_KEY = 'conecode.fileTreeOpen';
+
+function loadFileTreeOpen(): boolean {
+  try {
+    const raw = localStorage.getItem(FILE_TREE_OPEN_KEY);
+    if (raw == null) return true;
+    return raw !== '0';
+  } catch {}
+  return true;
+}
+
 /** The left column shows one of these at a time; both stay mounted. */
 export type WorkbenchTab = 'code' | 'preview';
 
@@ -34,7 +47,10 @@ interface UIStore {
   editorDirty: boolean;
   inputContent: string;
   editorWidthPct: number;
+  /** Sidebar file tree section expanded (persisted). */
+  fileTreeOpen: boolean;
   toggleSidebar: () => void;
+  toggleFileTree: () => void;
   toggleSettings: () => void;
   toggleModelSelector: () => void;
   closeModelSelector: () => void;
@@ -73,7 +89,13 @@ export const useUIStore = create<UIStore>((set) => ({
   editorDirty: false,
   inputContent: '',
   editorWidthPct: loadEditorWidth(),
+  fileTreeOpen: loadFileTreeOpen(),
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
+  toggleFileTree: () => set((s) => {
+    const next = !s.fileTreeOpen;
+    try { localStorage.setItem(FILE_TREE_OPEN_KEY, next ? '1' : '0'); } catch {}
+    return { fileTreeOpen: next };
+  }),
   toggleSettings: () => set((s) => ({ settingsOpen: !s.settingsOpen })),
   toggleModelSelector: () => set((s) => ({ modelSelectorOpen: !s.modelSelectorOpen })),
   closeModelSelector: () => set({ modelSelectorOpen: false }),

@@ -1,9 +1,14 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import { FiPlus, FiSettings, FiTrash2, FiGlobe, FiEdit3, FiMenu, FiTerminal, FiFileText, FiSmartphone, FiMonitor, FiCpu, FiGrid, FiShield, FiGitBranch, FiLoader } from 'react-icons/fi';
-import { useChatStore, useUIStore, useLanguageStore, usePreviewStore, useComputerStore, useModelStore, useCodeChangesStore } from '../../stores';
+import {
+  FiPlus, FiSettings, FiTrash2, FiGlobe, FiEdit3, FiMenu, FiTerminal, FiFileText,
+  FiSmartphone, FiMonitor, FiCpu, FiGrid, FiShield, FiGitBranch, FiLoader,
+  FiFolder, FiChevronDown, FiChevronRight,
+} from 'react-icons/fi';
+import { useChatStore, useUIStore, useLanguageStore, usePreviewStore, useComputerStore, useModelStore, useCodeChangesStore, useWorkspaceStore } from '../../stores';
 import { mostUrgentDot, type DotKind } from './panelDot';
 import FileTree from './FileTree';
+import { groupConversationsByRoot, type ConversationGroup } from './conversationGroups';
 import type { Locale } from '../../stores/language.store';
 
 interface PanelItem {
@@ -37,6 +42,9 @@ export default function Sidebar() {
   const [panelsOpen, setPanelsOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState('');
+  // Collapsed group keys. Default expanded — Codex shows the chats under each
+  // mother folder without requiring a click first.
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => new Set());
   const conversations = useChatStore((s) => s.conversations);
   const activeConversationId = useChatStore((s) => s.activeConversationId);
   const runningConversationIds = useChatStore((s) => Object.keys(s.streamingRuns));
@@ -65,6 +73,20 @@ export default function Sidebar() {
   const computerEnabled = useComputerStore((s) => s.enabled);
   const { locale, setLocale, t } = useLanguageStore();
   const changes = useCodeChangesStore((s) => s.changes);
+  const rootPath = useWorkspaceStore((s) => s.rootPath);
+  const fileTreeOpen = useUIStore((s) => s.fileTreeOpen);
+  const toggleFileTree = useUIStore((s) => s.toggleFileTree);
+
+  const groups = useMemo(() => groupConversationsByRoot(conversations), [conversations]);
+
+  const toggleGroup = (key: string) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
 
   // Five panel toggles used to sit in the toolbar as unlabelled 32px icons with
   // no gap between them. They are one menu now: labelled, and the row has room.
@@ -150,59 +172,42 @@ export default function Sidebar() {
       </div>
 
       <div className="flex-1 overflow-y-auto px-2">
-        <div className="space-y-0.5">
-          {conversations.map((conv) => (
-            <div key={conv.id}
-              onClick={() => { if (editingId !== conv.id) setActiveConversation(conv.id); }}
-              className={`group flex items-center gap-2.5 px-3 py-2 rounded-xl cursor-pointer text-[13px] transition-all ${
-                activeConversationId === conv.id
-                  ? 'bg-[var(--bg-3)] text-[var(--text-primary)] font-medium'
-                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-3)]/50'
-              }`}>
-              {editingId === conv.id ? (
-                <input
-                  value={editTitle}
-                  onChange={(e) => setEditTitle(e.target.value)}
-                  onBlur={() => handleRename(conv.id)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !(e.nativeEvent as any).isComposing) handleRename(conv.id);
-                    if (e.key === 'Escape') setEditingId(null);
-                  }}
-                  className="flex-1 bg-[var(--bg-2)] border border-[var(--accent)] rounded-lg px-2 py-0.5 text-sm outline-none"
-                  autoFocus
-                  onClick={(e) => e.stopPropagation()}
-                />
-              ) : (
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-1.5 min-w-0">
-                    {runningConversationIds.includes(conv.id) && (
-                      <FiLoader size={12} className="shrink-0 text-[var(--accent)] animate-spin" />
-                    )}
-                    <span className="truncate">{conv.title}</span>
-                  </div>
-                  {changedFileNames(conv.id).length > 0 && (
-                    <div className="mt-0.5 truncate text-[10px] font-normal text-[var(--text-muted)]">
-                      {changedFileNames(conv.id).join(', ')}
-                    </div>
-                  )}
-                </div>
-              )}
-              <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                <button onClick={(e) => { e.stopPropagation(); setEditingId(conv.id); setEditTitle(conv.title); }}
-                  className="p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-4)]">
-                  <FiEdit3 size={12} />
-                </button>
-                <button onClick={(e) => { e.stopPropagation(); deleteConversation(conv.id); }}
-                  className="p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--error)] hover:bg-[var(--bg-4)]">
-                  <FiTrash2 size={12} />
-                </button>
-              </div>
-            </div>
+        {/* Codex-style: mother folder on top, its chats nested underneath. */}
+        <div className="space-y-1">
+          {groups.map((group) => (
+            <ProjectGroup
+              key={group.key || '__none__'}
+              group={group}
+              label={group.kind === 'none' ? t('sidebarNoProject') : group.label}
+              collapsed={collapsedGroups.has(group.key)}
+              onToggle={() => toggleGroup(group.key)}
+              activeConversationId={activeConversationId}
+              runningConversationIds={runningConversationIds}
+              editingId={editingId}
+              editTitle={editTitle}
+              setEditTitle={setEditTitle}
+              setEditingId={setEditingId}
+              onRename={handleRename}
+              onSelect={setActiveConversation}
+              onDelete={deleteConversation}
+              changedFileNames={changedFileNames}
+            />
           ))}
         </div>
 
-        <div className="border-t border-[var(--border)] mt-2">
-          <FileTree />
+        <div className="border-t border-[var(--border)] mt-2 pt-1">
+          <button
+            onClick={toggleFileTree}
+            className="w-full flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)] hover:bg-[var(--bg-2)] hover:text-[var(--text-secondary)] transition-colors"
+            aria-expanded={fileTreeOpen}
+          >
+            {fileTreeOpen ? <FiChevronDown size={12} /> : <FiChevronRight size={12} />}
+            <FiFolder size={12} className="text-yellow-500" />
+            <span className="flex-1 text-left truncate">{t('sidebarFiles')}</span>
+          </button>
+          {/* Without a workspace the open-folder button must stay reachable even
+              when the section is collapsed — otherwise the user is locked out. */}
+          {(fileTreeOpen || !rootPath) && <FileTree />}
         </div>
       </div>
 
@@ -238,6 +243,99 @@ export default function Sidebar() {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function ProjectGroup({
+  group, label, collapsed, onToggle,
+  activeConversationId, runningConversationIds,
+  editingId, editTitle, setEditTitle, setEditingId,
+  onRename, onSelect, onDelete, changedFileNames,
+}: {
+  group: ConversationGroup;
+  label: string;
+  collapsed: boolean;
+  onToggle: () => void;
+  activeConversationId: string | null;
+  runningConversationIds: string[];
+  editingId: string | null;
+  editTitle: string;
+  setEditTitle: (v: string) => void;
+  setEditingId: (v: string | null) => void;
+  onRename: (id: string) => void;
+  onSelect: (id: string) => void;
+  onDelete: (id: string) => void;
+  changedFileNames: (conversationId: string) => string[];
+}) {
+  return (
+    <div>
+      <button
+        onClick={onToggle}
+        className="w-full flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)] hover:bg-[var(--bg-2)] hover:text-[var(--text-secondary)] transition-colors"
+        title={group.rootPath || label}
+        aria-expanded={!collapsed}
+      >
+        {collapsed ? <FiChevronRight size={12} /> : <FiChevronDown size={12} />}
+        {group.kind === 'folder'
+          ? <FiFolder size={12} className="text-yellow-500 shrink-0" />
+          : <FiFileText size={12} className="shrink-0" />}
+        <span className="flex-1 text-left truncate">{label}</span>
+        <span className="text-[10px] font-normal tabular-nums opacity-70">{group.conversations.length}</span>
+      </button>
+
+      {!collapsed && (
+        <div className="space-y-0.5 pl-1">
+          {group.conversations.map((conv) => (
+            <div key={conv.id}
+              onClick={() => { if (editingId !== conv.id) onSelect(conv.id); }}
+              className={`group flex items-center gap-2.5 px-3 py-2 rounded-xl cursor-pointer text-[13px] transition-all ${
+                activeConversationId === conv.id
+                  ? 'bg-[var(--bg-3)] text-[var(--text-primary)] font-medium'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-3)]/50'
+              }`}>
+              {editingId === conv.id ? (
+                <input
+                  value={editTitle}
+                  onChange={(e) => setEditTitle(e.target.value)}
+                  onBlur={() => onRename(conv.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !(e.nativeEvent as any).isComposing) onRename(conv.id);
+                    if (e.key === 'Escape') setEditingId(null);
+                  }}
+                  className="flex-1 bg-[var(--bg-2)] border border-[var(--accent)] rounded-lg px-2 py-0.5 text-sm outline-none"
+                  autoFocus
+                  onClick={(e) => e.stopPropagation()}
+                />
+              ) : (
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    {runningConversationIds.includes(conv.id) && (
+                      <FiLoader size={12} className="shrink-0 text-[var(--accent)] animate-spin" />
+                    )}
+                    <span className="truncate">{conv.title}</span>
+                  </div>
+                  {changedFileNames(conv.id).length > 0 && (
+                    <div className="mt-0.5 truncate text-[10px] font-normal text-[var(--text-muted)]">
+                      {changedFileNames(conv.id).join(', ')}
+                    </div>
+                  )}
+                </div>
+              )}
+              <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button onClick={(e) => { e.stopPropagation(); setEditingId(conv.id); setEditTitle(conv.title); }}
+                  className="p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-4)]">
+                  <FiEdit3 size={12} />
+                </button>
+                <button onClick={(e) => { e.stopPropagation(); onDelete(conv.id); }}
+                  className="p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--error)] hover:bg-[var(--bg-4)]">
+                  <FiTrash2 size={12} />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
