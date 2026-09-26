@@ -438,7 +438,7 @@ export default function ChatInput() {
         )}
 
         {/* Composer box */}
-        <div className="rounded-[20px] border border-[var(--border)] bg-[var(--bg-2)] pl-4 pr-2 py-2 focus-within:border-[var(--accent)]/50 transition-colors shadow-sm">
+        <div className="rounded-[28px] border border-[var(--border)] bg-[var(--bg-2)] pl-4 pr-2 py-2 focus-within:border-[var(--accent)]/50 transition-colors shadow-sm">
           <div className="flex items-end gap-3">
             <button
               onClick={handleAttach}
