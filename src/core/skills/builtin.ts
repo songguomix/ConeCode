@@ -194,6 +194,64 @@ Never commit or push unless explicitly asked to.`,
 
 Never trade clarity for speed without a measurement proving the trade was worth it.`,
   },
+
+  // ---- Marketplace shelf (MiMo-style) ---------------------------------
+  {
+    id: 'ui-polish',
+    name: '界面打磨',
+    description: 'Polish UI motion, spacing, and accessibility. Use when asked to make the interface feel refined.',
+    tags: ['ui', 'design', 'a11y'],
+    body: `# 界面打磨\n\n1. Prefer transform/opacity animations; honor prefers-reduced-motion.\n2. Keep contrast AA+ for body text.\n3. Reuse existing design tokens — do not invent new hex colors casually.`,
+  },
+  {
+    id: 'test-hardening',
+    name: '测试加固',
+    description: 'Add or repair tests without greenwashing. Use when fixing bugs or raising coverage.',
+    tags: ['test', 'quality'],
+    body: `# 测试加固\n\n1. Write a failing test that proves the bug first.\n2. Never weaken assertions to make CI green.\n3. Prefer behavior tests over mock-only checks.`,
+  },
+  {
+    id: 'perf-triage',
+    name: '性能分诊',
+    description: 'Diagnose UI stutter and re-render storms. Use when the app feels slow.',
+    tags: ['perf', 'react'],
+    body: `# 性能分诊\n\n1. Profile the hot path before editing.\n2. Fix subscription identity and memo boundaries first.\n3. Measure before/after with a concrete scenario.`,
+  },
+  {
+    id: 'secure-edit',
+    name: '安全改动',
+    description: 'Harden auth, secrets, and boundary checks. Use when touching security-sensitive code.',
+    tags: ['security'],
+    body: `# 安全改动\n\n1. Never log secrets. Validate all external input.\n2. Prefer least privilege. No disabled TLS or checks.\n3. Call out residual risk in the summary.`,
+  },
+  {
+    id: 'i18n-ready',
+    name: '多语言就绪',
+    description: 'Ship en/zh/ja strings together. Use when adding any user-visible copy.',
+    tags: ['i18n'],
+    body: `# 多语言就绪\n\n1. Add keys for en, zh, ja together.\n2. Never hardcode UI copy in components.\n3. Keep labels short; hints can be longer.`,
+  },
+  {
+    id: 'release-check',
+    name: '发布检查',
+    description: 'Pre-flight typecheck, tests, build, and smoke. Use when finishing or shipping work.',
+    tags: ['release'],
+    body: `# 发布检查\n\n1. Run typecheck, tests, and build.\n2. Smoke the golden path once.\n3. List what you did NOT verify.`,
+  },
+  {
+    id: 'public-api-design',
+    name: '公开 API 设计',
+    description: 'Design clear, evolvable interfaces. Use when shaping public functions or IPC.',
+    tags: ['api', 'architecture'],
+    body: `# API 设计\n\n1. Name by caller intent, not implementation.\n2. Make illegal states unrepresentable where cheap.\n3. Version or document breaking changes explicitly.`,
+  },
+  {
+    id: 'docs-sync',
+    name: '文档同步',
+    description: 'Keep README and real behavior aligned. Use when docs drift from code.',
+    tags: ['docs'],
+    body: `# 文档同步\n\n1. Read the public API and the README claims.\n2. Fix the lie in docs or code — not both with hand-waving.\n3. Keep examples runnable.`,
+  },
 ];
 
 export function findBuiltin(id: string): CatalogSkill | undefined {

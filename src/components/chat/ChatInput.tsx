@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
-import { FiSquare, FiPaperclip, FiX, FiFile, FiArrowUp, FiMap } from 'react-icons/fi';
+import { FiSquare, FiPaperclip, FiX, FiFile, FiArrowUp, FiMap, FiPlus, FiTarget, FiList, FiLayers, FiZap } from 'react-icons/fi';
 import { useMemoryStore, useChatStore, useModelStore, useLanguageStore, useWorkspaceStore, useSettingsStore, useUIStore, useGoalStore } from '../../stores';
 import {
   BUILTIN_COMMANDS, parseSlashInput, matchCommands, findCommand, expandTemplate,
@@ -29,6 +29,7 @@ export default function ChatInput() {
   const createConversation = useChatStore((s) => s.createConversation);
   const planMode = useChatStore((s) => s.planMode);
   const togglePlanMode = useChatStore((s) => s.togglePlanMode);
+  const [plusOpen, setPlusOpen] = useState(false);
   const selectedModel = useModelStore((s) => s.getSelectedModel());
   const { t } = useLanguageStore();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -144,6 +145,18 @@ export default function ChatInput() {
       case 'plan':
         togglePlanMode();
         break;
+      case 'mode': {
+        const m = args.trim().toLowerCase();
+        if (m === 'plan') { togglePlanMode(); break; }
+        if (m === 'task' || m === 'goal') { setInput('/goal '); break; }
+        // orchestrate / rsi: leave a typed prompt so the user can continue;
+        // full overlays live behind these labels.
+        const hint = m === 'rsi' ? t('modeRsi') : m === 'orchestrate' ? t('modeOrchestrate') : '';
+        if (hint) {
+          await pushNotice(`**${hint}** — ${m === 'rsi' ? '设定目标后自主找突破口并迭代到收敛。' : '主控拆解、子智能体调研、汇总裁决。'}`, pid, mid);
+        }
+        break;
+      }
       case 'goal': {
         const goalText = args.trim();
         if (!goalText) {
@@ -448,18 +461,50 @@ export default function ChatInput() {
               <FiPaperclip size={18} />
             </button>
 
-            <button
-              onClick={togglePlanMode}
-              title={t('planModeHint')}
-              className={`h-9 rounded-xl flex items-center justify-center gap-1.5 transition-colors shrink-0 mb-0.5 ${
-                planMode
-                  ? 'px-2.5 text-[var(--accent)] bg-[var(--accent-soft)]'
-                  : 'w-9 text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-3)]'
-              }`}
-            >
-              <FiMap size={16} />
-              {planMode && <span className="text-xs font-medium">{t('planMode')}</span>}
-            </button>
+            {/* + menu: Plan / Task / Orchestrate / RSI — keeps the composer calm. */}
+            <div className="relative shrink-0 mb-0.5">
+              <button
+                onClick={() => setPlusOpen((v) => !v)}
+                title={t('modeMenu')}
+                className={`w-9 h-9 rounded-xl flex items-center justify-center transition-colors ${
+                  plusOpen || planMode
+                    ? 'text-[var(--accent)] bg-[var(--accent-soft)]'
+                    : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-3)]'
+                }`}
+              >
+                <FiPlus size={18} />
+              </button>
+              {plusOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setPlusOpen(false)} />
+                  <div
+                    className="absolute bottom-full left-0 mb-2 w-56 rounded-2xl border border-[var(--border)] bg-[var(--bg-2)] shadow-xl z-50 py-1.5 anim-menu"
+                    style={{ ['--menu-origin' as any]: 'bottom left', ['--menu-shift' as any]: '6px' }}
+                  >
+                    {([
+                      { key: 'plan', label: t('modePlan'), icon: <FiMap size={14} />, active: planMode, on: () => togglePlanMode() },
+                      { key: 'task', label: t('modeTask'), icon: <FiTarget size={14} />, active: false, on: () => setInput('/goal ') },
+                      { key: 'orch', label: t('modeOrchestrate'), icon: <FiList size={14} />, active: false, on: () => setInput('/mode orchestrate ') },
+                      { key: 'rsi', label: t('modeRsi'), icon: <FiZap size={14} />, active: false, on: () => setInput('/mode rsi ') },
+                    ] as const).map((item) => (
+                      <button
+                        key={item.key}
+                        onClick={() => { item.on(); setPlusOpen(false); }}
+                        className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-[13px] transition-colors ${
+                          item.active
+                            ? 'text-[var(--accent)] bg-[var(--accent-soft)]'
+                            : 'text-[var(--text-secondary)] hover:bg-[var(--bg-3)]'
+                        }`}
+                      >
+                        {item.icon}
+                        <span className="flex-1 text-left">{item.label}</span>
+                        {item.active && <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)]" />}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
 
             <textarea
               ref={textareaRef}

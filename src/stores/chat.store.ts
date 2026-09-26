@@ -11,6 +11,7 @@ import { formatMemoryFiles } from '../core/memory/memoryFiles';
 import { useSkillsStore } from './skills.store';
 import { useComputerStore } from './computer.store';
 import { useGoalStore, type ConversationGoal } from './goal.store';
+import { resolveEffort } from '../core/model/resolveEffort';
 import type { ChangeKind } from './codeChanges.store';
 import {
   buildToolset,
@@ -992,6 +993,14 @@ function isMacPlatform(): boolean {
   return typeof navigator !== 'undefined' && /Mac/.test(navigator.platform || '');
 }
 
+function lastUserText(messages: ChatMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role === 'user' && typeof m.content === 'string') return m.content;
+  }
+  return '';
+}
+
 function buildSystemMessages(
   modelName: string = 'the configured AI model',
   planMode = false,
@@ -1536,7 +1545,8 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
             providerId,
             modelId,
             messages: allMessages,
-            reasoningEffort,
+            // Auto intensity resolves per-turn from the user's ask (codex-style).
+            reasoningEffort: resolveEffort(reasoningEffort, lastUserText(allMessages)),
             maxTokens,
             // Tags every chunk and keys the main-process abort controller, so
             // concurrent conversations never cancel or mix each other's output.
@@ -2347,7 +2357,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   error: null,
   messageEdits: {},
   workspaceSnapshots: new Map(),
-  reasoningEffort: 'medium',
+  reasoningEffort: 'auto',
   planMode: false,
   reviewMode: false,
 
