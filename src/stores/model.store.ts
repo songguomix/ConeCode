@@ -154,6 +154,7 @@ export const useModelStore = create<ModelStore>((set, get) => ({
       return false;
     } finally {
       useInstallGateStore.getState().end(jobId);
+      void import('./chat.store').then((m) => m.useChatStore.getState().continueAfterInstall?.());
     }
   },
 
@@ -203,6 +204,7 @@ export const useModelStore = create<ModelStore>((set, get) => ({
       set({ loading: false });
     } finally {
       useInstallGateStore.getState().end(jobId);
+      void import('./chat.store').then((m) => m.useChatStore.getState().continueAfterInstall?.());
     }
   },
 

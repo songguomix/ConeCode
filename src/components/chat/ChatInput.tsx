@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { FiSquare, FiPaperclip, FiX, FiFile, FiArrowUp, FiMap } from 'react-icons/fi';
 import { useMemoryStore, useChatStore, useModelStore, useLanguageStore, useWorkspaceStore, useSettingsStore, useUIStore, useGoalStore } from '../../stores';
+import { useInstallGateStore, isHolding } from '../../stores/installGate.store';
 import {
   BUILTIN_COMMANDS, parseSlashInput, matchCommands, findCommand, expandTemplate,
   type SlashCommand,
@@ -28,6 +29,7 @@ export default function ChatInput() {
   const pushNotice = useChatStore((s) => s.pushNotice);
   const createConversation = useChatStore((s) => s.createConversation);
   const planMode = useChatStore((s) => s.planMode);
+  const installHolding = useInstallGateStore((s) => isHolding(s.jobs));
   const togglePlanMode = useChatStore((s) => s.togglePlanMode);
   const selectedModel = useModelStore((s) => s.getSelectedModel());
   const { t } = useLanguageStore();
@@ -483,7 +485,7 @@ export default function ChatInput() {
               </button>
             ) : (
               <button onClick={handleSend}
-                disabled={!input.trim() || isSavingEdit}
+                disabled={!input.trim() || isSavingEdit || installHolding}
                 title={sendWithEnter ? t('sendHintEnter') : t('sendHintCmd')}
                 className="w-9 h-9 rounded-full flex items-center justify-center transition-all bg-[var(--accent)] text-white disabled:opacity-30 hover:bg-[var(--accent-hover)] shrink-0 mb-0.5">
                 <FiArrowUp size={18} />

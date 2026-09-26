@@ -11,7 +11,7 @@ import { formatMemoryFiles } from '../core/memory/memoryFiles';
 import { useSkillsStore } from './skills.store';
 import { useComputerStore } from './computer.store';
 import { useGoalStore, type ConversationGoal } from './goal.store';
-import { useInstallGateStore } from './installGate.store';
+import { useInstallGateStore, isHolding } from './installGate.store';
 import type { ChangeKind } from './codeChanges.store';
 import {
   buildToolset,
@@ -914,11 +914,14 @@ async function maybeResumeAfterInstall() {
   if (!model) return;
   const chat = useChatStore.getState();
   if (chat.streamingRuns[convId]) return; // already running again
-  await chat.sendMessage(
-    'Installs finished. Activate and continue the work you were doing.',
-    model.providerId,
-    model.id,
-  );
+  // sendMessage is active-conversation scoped — switch back to the held chat
+  // first so the continue prompt lands in the right thread.
+  if (chat.activeConversationId !== convId) {
+    await chat.setActiveConversation(convId);
+  }
+  const { useLanguageStore } = await import('./language.store');
+  const line = useLanguageStore.getState().t('installContinue');
+  await useChatStore.getState().sendMessage(line, model.providerId, model.id);
 }
 
 function buildSystemMessages(
@@ -1886,7 +1889,7 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
             // Install gate: surface "installing" while the file lands. The agent
             // loop already waits on this tool — no extra stop; UI-driven installs
             // hold generation via holdModelForInstall().
-            const dlId = `download:${action.url}`;
+            const dlId = `download:${Date.now()}:${action.url}`;
             const gate = useInstallGateStore.getState();
             gate.begin(dlId, action.url || 'download', 'download');
             try {
@@ -2414,6 +2417,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   sendMessage: async (content, providerId, modelId) => {
+    // Hold: do not start a new run while something is installing — the
+    // auto-continue path is the only sender until the gate releases.
+    if (isHolding(useInstallGateStore.getState().jobs)) return;
     let convId = get().activeConversationId;
     if (!convId) {
       convId = await get().createConversation(providerId, modelId);
