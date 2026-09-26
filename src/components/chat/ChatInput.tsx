@@ -240,7 +240,7 @@ export default function ChatInput() {
   };
 
   const handleSend = async () => {
-    if (isStreaming || isSavingEdit) return;
+    if (isStreaming || isSavingEdit || installHolding) return;
     const text = input;
     if (!text.trim()) return;
 

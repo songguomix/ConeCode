@@ -914,14 +914,28 @@ async function maybeResumeAfterInstall() {
   if (!model) return;
   const chat = useChatStore.getState();
   if (chat.streamingRuns[convId]) return; // already running again
-  // sendMessage is active-conversation scoped — switch back to the held chat
-  // first so the continue prompt lands in the right thread.
-  if (chat.activeConversationId !== convId) {
-    await chat.setActiveConversation(convId);
-  }
+  // Target the held conversation by id — sendMessage is active-conv scoped and
+  // setActiveConversation can race, so post the continue turn ourselves.
   const { useLanguageStore } = await import('./language.store');
   const line = useLanguageStore.getState().t('installContinue');
-  await useChatStore.getState().sendMessage(line, model.providerId, model.id);
+  const userMsg: Message = {
+    id: uuidv4(),
+    conversationId: convId,
+    role: 'user',
+    content: line,
+    createdAt: Date.now(),
+  };
+  await window.electronAPI.message.create(userMsg);
+  if (chat.activeConversationId === convId) {
+    useChatStore.setState((s) => ({ messages: [...s.messages, userMsg] }));
+  }
+  // Best-effort UI switch; the run is bound to convId regardless.
+  if (chat.activeConversationId !== convId) {
+    void chat.setActiveConversation(convId);
+  }
+  const canContinue = await autoCompactIfNeeded(convId, model.providerId, model.id);
+  if (!canContinue) return;
+  await runAgentLoop(convId, model.providerId, model.id);
 }
 
 function buildSystemMessages(
@@ -2509,6 +2523,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   editMessage: async (messageId, content, providerId, modelId) => {
+    if (isHolding(useInstallGateStore.getState().jobs)) return;
     const { messages, activeConversationId: convId } = get();
     const index = messages.findIndex((m) => m.id === messageId && m.conversationId === convId);
     const original = messages[index];
@@ -2550,6 +2565,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   resendMessage: async (messageId) => {
+    if (isHolding(useInstallGateStore.getState().jobs)) return;
     const { messages } = get();
     const msgIndex = messages.findIndex((m) => m.id === messageId);
     if (msgIndex === -1) return;
