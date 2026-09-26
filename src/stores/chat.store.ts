@@ -11,6 +11,7 @@ import { formatMemoryFiles } from '../core/memory/memoryFiles';
 import { useSkillsStore } from './skills.store';
 import { useComputerStore } from './computer.store';
 import { useGoalStore, type ConversationGoal } from './goal.store';
+import { useInstallGateStore } from './installGate.store';
 import type { ChangeKind } from './codeChanges.store';
 import {
   buildToolset,
@@ -898,6 +899,26 @@ function platformLabel(): string {
 // The renderer has no `process`; seatbelt is macOS-only.
 function isMacPlatform(): boolean {
   return typeof navigator !== 'undefined' && /Mac/.test(navigator.platform || '');
+}
+
+
+/**
+ * When the last install ends, re-activate the model and continue the held
+ * conversation (Claude-style: pause during download, resume when ready).
+ */
+async function maybeResumeAfterInstall() {
+  const gate = useInstallGateStore.getState();
+  const convId = gate.release();
+  if (!convId) return;
+  const model = (await import('./model.store')).useModelStore.getState().getSelectedModel();
+  if (!model) return;
+  const chat = useChatStore.getState();
+  if (chat.streamingRuns[convId]) return; // already running again
+  await chat.sendMessage(
+    'Installs finished. Activate and continue the work you were doing.',
+    model.providerId,
+    model.id,
+  );
 }
 
 function buildSystemMessages(
@@ -1862,7 +1883,18 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
             break;
           }
           case 'download': {
-            result = await window.electronAPI.net.download(action.url!, action.path!);
+            // Install gate: surface "installing" while the file lands. The agent
+            // loop already waits on this tool — no extra stop; UI-driven installs
+            // hold generation via holdModelForInstall().
+            const dlId = `download:${action.url}`;
+            const gate = useInstallGateStore.getState();
+            gate.begin(dlId, action.url || 'download', 'download');
+            try {
+              result = await window.electronAPI.net.download(action.url!, action.path!);
+            } finally {
+              gate.end(dlId);
+              void maybeResumeAfterInstall();
+            }
             break;
           }
           case 'mcp_call': {
@@ -2225,6 +2257,10 @@ interface ChatStore {
   editMessage: (messageId: string, content: string, providerId: string, modelId: string) => Promise<void>;
   /** Stop the agent run of one conversation (defaults to the active one). */
   stopGeneration: (conversationId?: string) => void;
+  /** Stop a live run because an install started; it will auto-continue after. */
+  holdModelForInstall: (label: string, id?: string, kind?: 'download' | 'tool' | 'model' | 'skill' | 'dep') => void;
+  /** Release install hold and auto-continue the held conversation. */
+  continueAfterInstall: () => Promise<void>;
   clearError: () => void;
   compactConversation: (providerId: string, modelId: string) => Promise<void>;
   pushNotice: (markdown: string, providerId?: string, modelId?: string) => Promise<void>;
@@ -2534,6 +2570,20 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
 
     await get().editMessage(messageId, msg.content, providerId, modelId);
+  },
+
+  holdModelForInstall: (label, id = `ui-${Date.now()}`, kind = 'tool') => {
+    const gate = useInstallGateStore.getState();
+    gate.begin(id, label, kind);
+    const convId = get().activeConversationId;
+    if (convId && get().streamingRuns[convId]) {
+      get().stopGeneration(convId);
+      gate.markResume(convId);
+    }
+  },
+
+  continueAfterInstall: async () => {
+    await maybeResumeAfterInstall();
   },
 
   stopGeneration: (conversationId) => {

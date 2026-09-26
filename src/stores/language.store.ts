@@ -26,6 +26,8 @@ const translations: Record<Locale, Record<string, string>> = {
     "briefCopyFailed": "Copy failed. Select the prompt and copy it manually.",
     // Sidebar
     'newChat': 'New Chat',
+    'installHolding': 'Installing — model paused, will continue when done',
+    'installContinue': 'Installs finished. Activate and continue the work you were doing.',
     'settings': 'Settings',
     'language': 'Language',
     // Chat
@@ -599,6 +601,8 @@ const translations: Record<Locale, Record<string, string>> = {
     "briefStartFailed": "项目启动失败，Prompt 已保留，可复制或重试。",
     "briefCopyFailed": "复制失败，请选中 Prompt 手动复制。",
     'newChat': '新对话',
+    'installHolding': '安装中 — 模型已暂停，完成后自动继续',
+    'installContinue': '安装完成。激活模型并继续之前的工作。',
     'settings': '设置',
     'language': '语言',
     'typeMessage': '输入消息...',
@@ -1163,6 +1167,8 @@ const translations: Record<Locale, Record<string, string>> = {
     "briefStartFailed": "開始できませんでした。プロンプトはコピーまたは再試行できます。",
     "briefCopyFailed": "コピーできませんでした。プロンプトを選択して手動でコピーしてください。",
     'newChat': '新しいチャット',
+    'installHolding': 'インストール中 — モデル一時停止、完了後に自動再開',
+    'installContinue': 'インストール完了。モデルを再開して作業を続けます。',
     'settings': '設定',
     'language': '言語',
     'typeMessage': 'メッセージを入力...',
