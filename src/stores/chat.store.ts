@@ -8,6 +8,7 @@ import { useTodosStore, type TodoStatus } from './todos.store';
 import { useMemoryStore } from './memory.store';
 import type { MemoryEntry } from '../core/memory/memory';
 import { formatMemoryFiles } from '../core/memory/memoryFiles';
+import { agentModePrompt, type AgentMode } from '../core/agents/modePrompts';
 import { useSkillsStore } from './skills.store';
 import { useComputerStore } from './computer.store';
 import { useGoalStore, type ConversationGoal } from './goal.store';
@@ -907,6 +908,7 @@ function buildSystemMessages(
   goal?: ConversationGoal,
   reviewMode = false,
   workspace = useWorkspaceStore.getState(),
+  agentMode: AgentMode = 'standard',
 ): ChatMessage[] {
   const settings = useSettingsStore.getState();
   const ws = workspace;
@@ -1032,6 +1034,8 @@ ${parallelRule}
   }
 
   // Plan Mode — read-only investigation, then a plan for the user to approve.
+  // Review and Plan win over agentMode: a read-only overlay must not be diluted
+  // by an execution protocol that expects mutations.
   if (reviewMode) {
     systemMessages.push({
       role: 'system',
@@ -1046,6 +1050,9 @@ Report only actionable defects introduced by the reviewed changes. Order finding
 
 Investigate the request thoroughly, then present a concise, numbered implementation plan as your FINAL message in Markdown: the files you'll change, what each change does, and any risks or open questions. Do not output a json action in that final message. The user will review the plan and turn off Plan Mode to let you execute it.`,
     });
+  } else if (agentMode !== 'standard') {
+    const overlay = agentModePrompt(agentMode);
+    if (overlay) systemMessages.push({ role: 'system', content: overlay });
   }
 
   // Extend the base-prompt breakpoint through the workspace-specific context
@@ -1363,6 +1370,7 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
   const taskWorkspace = { ...workspaceAtStart, allRoots: () => workspaceRoots };
   const planMode = get().planMode;
   const reviewMode = get().reviewMode;
+  const agentMode = get().agentMode;
   const reasoningEffort = get().reasoningEffort;
 
   const { useCodeChangesStore } = await import('./codeChanges.store');
@@ -1400,6 +1408,7 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
           useGoalStore.getState().goals[convId],
           reviewMode,
           taskWorkspace,
+          agentMode,
         ),
         // Local UI notices (/help, /diff output, etc.) are shown in the
         // transcript but must not be replayed to the model as context; tool
@@ -2210,6 +2219,13 @@ interface ChatStore {
   // produce a plan instead of editing (Codex / Claude Code style).
   planMode: boolean;
   reviewMode: boolean;
+  /**
+   * Execution protocol: standard coding loop, long-running goal pursuit,
+   * multi-agent orchestration, or bounded recursive self-improvement.
+   * Plan/Review overlays suppress this while they are active.
+   */
+  agentMode: AgentMode;
+  setAgentMode: (mode: AgentMode) => void;
   setPlanMode: (on: boolean) => void;
   togglePlanMode: () => void;
   setReviewMode: (on: boolean) => void;
@@ -2244,8 +2260,14 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   reasoningEffort: 'medium',
   planMode: false,
   reviewMode: false,
+  agentMode: 'standard',
 
   setReasoningEffort: (effort) => set({ reasoningEffort: effort }),
+  setAgentMode: (mode) => set({
+    agentMode: mode,
+    // Plan is read-only; an execution protocol only makes sense with it off.
+    planMode: mode === 'standard' ? get().planMode : false,
+  }),
   setPlanMode: (on) => set({ planMode: on }),
   togglePlanMode: () => set((s) => ({ planMode: !s.planMode })),
   setReviewMode: (on) => set({ reviewMode: on }),

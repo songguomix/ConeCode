@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
-import { FiSquare, FiPaperclip, FiX, FiFile, FiArrowUp, FiMap } from 'react-icons/fi';
+import { FiSquare, FiPaperclip, FiX, FiFile, FiArrowUp, FiMap, FiLayers, FiChevronDown } from 'react-icons/fi';
+import { AGENT_MODES, AGENT_MODE_LABEL_KEYS, type AgentMode } from '../../core/agents/modePrompts';
 import { useMemoryStore, useChatStore, useModelStore, useLanguageStore, useWorkspaceStore, useSettingsStore, useUIStore, useGoalStore } from '../../stores';
 import {
   BUILTIN_COMMANDS, parseSlashInput, matchCommands, findCommand, expandTemplate,
@@ -29,6 +30,9 @@ export default function ChatInput() {
   const createConversation = useChatStore((s) => s.createConversation);
   const planMode = useChatStore((s) => s.planMode);
   const togglePlanMode = useChatStore((s) => s.togglePlanMode);
+  const agentMode = useChatStore((s) => s.agentMode);
+  const setAgentMode = useChatStore((s) => s.setAgentMode);
+  const [modeOpen, setModeOpen] = useState(false);
   const selectedModel = useModelStore((s) => s.getSelectedModel());
   const { t } = useLanguageStore();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -144,6 +148,16 @@ export default function ChatInput() {
       case 'plan':
         togglePlanMode();
         break;
+      case 'mode': {
+        const wanted = args.trim().toLowerCase() as AgentMode;
+        if (!wanted || !AGENT_MODES.includes(wanted)) {
+          setInput('/mode ');
+          requestAnimationFrame(() => textareaRef.current?.focus());
+          break;
+        }
+        setAgentMode(wanted);
+        break;
+      }
       case 'goal': {
         const goalText = args.trim();
         if (!goalText) {
@@ -461,6 +475,49 @@ export default function ChatInput() {
               {planMode && <span className="text-xs font-medium">{t('planMode')}</span>}
             </button>
 
+            <div className="relative shrink-0 mb-0.5">
+              <button
+                onClick={() => setModeOpen(!modeOpen)}
+                title={t(AGENT_MODE_LABEL_KEYS[agentMode].hint)}
+                className={`h-9 rounded-xl flex items-center justify-center gap-1 transition-colors ${
+                  agentMode !== 'standard' || modeOpen
+                    ? 'px-2 text-[var(--accent)] bg-[var(--accent-soft)]'
+                    : 'w-9 text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-3)]'
+                }`}
+              >
+                <FiLayers size={15} />
+                {(agentMode !== 'standard' || modeOpen) && (
+                  <span className="text-xs font-medium max-w-[88px] truncate">
+                    {t(AGENT_MODE_LABEL_KEYS[agentMode].label)}
+                  </span>
+                )}
+                {(agentMode !== 'standard' || modeOpen) && <FiChevronDown size={12} />}
+              </button>
+              {modeOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setModeOpen(false)} />
+                  <div className="absolute bottom-full left-0 mb-1 w-64 bg-[var(--bg-2)] border border-[var(--border)] rounded-xl shadow-xl z-50 overflow-hidden py-1">
+                    {AGENT_MODES.map((m) => (
+                      <button
+                        key={m}
+                        onClick={() => { setAgentMode(m); setModeOpen(false); }}
+                        className={`w-full text-left px-3 py-2 transition-colors ${
+                          agentMode === m ? 'bg-[var(--accent-soft)]' : 'hover:bg-[var(--bg-3)]'
+                        }`}
+                      >
+                        <div className={`text-[13px] font-medium ${agentMode === m ? 'text-[var(--accent)]' : 'text-[var(--text-primary)]'}`}>
+                          {t(AGENT_MODE_LABEL_KEYS[m].label)}
+                        </div>
+                        <div className="text-[11px] text-[var(--text-muted)] mt-0.5 leading-snug">
+                          {t(AGENT_MODE_LABEL_KEYS[m].hint)}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+
             <textarea
               ref={textareaRef}
               value={input}
@@ -471,7 +528,13 @@ export default function ChatInput() {
               onPaste={handlePaste}
               onCompositionStart={handleCompositionStart}
               onCompositionEnd={handleCompositionEnd}
-              placeholder={planMode ? `${t('planMode')} · ${t('typeMessage')}` : t('typeMessage')}
+              placeholder={
+                planMode
+                  ? `${t('planMode')} · ${t('typeMessage')}`
+                  : agentMode !== 'standard'
+                    ? `${t(AGENT_MODE_LABEL_KEYS[agentMode].label)} · ${t('typeMessage')}`
+                    : t('typeMessage')
+              }
               rows={1}
               className="flex-1 bg-transparent border-0 py-2 text-[15px] resize-none outline-none max-h-[200px] overflow-y-auto placeholder:text-[var(--text-muted)]"
             />
