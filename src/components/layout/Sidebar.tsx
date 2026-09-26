@@ -160,13 +160,25 @@ export default function Sidebar() {
                 className="absolute top-full right-0 mt-1 w-44 bg-[var(--bg-2)] border border-[var(--border)] rounded-xl shadow-xl z-50 overflow-hidden py-1 anim-menu">
                 {primaryPanels.map((p) => (
                   <button key={p.key} role="menuitemcheckbox" aria-checked={p.open}
-                    onClick={() => { p.toggle(); setPanelsOpen(false); }}
+                    onClick={() => p.toggle()}
                     className={`w-full flex items-center gap-2.5 px-3 py-2 text-[13px] transition-colors ${
                       p.open ? 'bg-[var(--accent-soft)] text-[var(--accent)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-3)]'
                     }`}>
                     {p.icon}
                     <span className="flex-1 text-left truncate">{p.label}</span>
                     {p.dot && <StatusDot kind={p.dot} />}
+                    <span
+                      aria-hidden
+                      className={`relative w-8 h-[18px] rounded-full transition-colors shrink-0 ${
+                        p.open ? 'bg-[var(--accent)]' : 'bg-[var(--bg-4)]'
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-[2px] h-[14px] w-[14px] rounded-full bg-white shadow transition-transform ${
+                          p.open ? 'translate-x-[16px]' : 'translate-x-[2px]'
+                        }`}
+                      />
+                    </span>
                   </button>
                 ))}
                 <div className="my-1 border-t border-[var(--border)]" />
@@ -175,13 +187,25 @@ export default function Sidebar() {
                 </div>
                 {extraPanels.map((p) => (
                   <button key={p.key} role="menuitemcheckbox" aria-checked={p.open}
-                    onClick={() => { p.toggle(); setPanelsOpen(false); }}
+                    onClick={() => p.toggle()}
                     className={`w-full flex items-center gap-2.5 px-3 py-2 text-[13px] transition-colors ${
                       p.open ? 'bg-[var(--accent-soft)] text-[var(--accent)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-3)]'
                     }`}>
                     {p.icon}
                     <span className="flex-1 text-left truncate">{p.label}</span>
                     {p.dot && <StatusDot kind={p.dot} />}
+                    <span
+                      aria-hidden
+                      className={`relative w-8 h-[18px] rounded-full transition-colors shrink-0 ${
+                        p.open ? 'bg-[var(--accent)]' : 'bg-[var(--bg-4)]'
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-[2px] h-[14px] w-[14px] rounded-full bg-white shadow transition-transform ${
+                          p.open ? 'translate-x-[16px]' : 'translate-x-[2px]'
+                        }`}
+                      />
+                    </span>
                   </button>
                 ))}
               </div>
