@@ -35,11 +35,11 @@ export default function AppShell() {
   const [terminalMounted, setTerminalMounted] = useState(false);
   useEffect(() => { if (terminalOpen) setTerminalMounted(true); }, [terminalOpen]);
 
-  // The left column is a workbench holding the editor and the preview. Only one
-  // shows at a time, but both stay mounted (and laid out) so switching tabs
-  // never reloads the previewed page or loses scroll position.
-  const workbenchOpen = !!selectedFile || previewOpen;
-  const activeTab = previewOpen && (workbenchTab === 'preview' || !selectedFile) ? 'preview' : 'code';
+  // The left column is the code editor. The browser/preview docks on the RIGHT
+  // so "open what we built" sits beside the chat — click-to-annotate then lands
+  // in the composer without covering the transcript.
+  const workbenchOpen = !!selectedFile;
+  const previewDockOpen = previewOpen;
 
   // Opening a file from the tree brings the code forward.
   useEffect(() => { if (selectedFile) setWorkbenchTab('code'); }, [selectedFile, setWorkbenchTab]);
@@ -91,13 +91,8 @@ export default function AppShell() {
                     {/* visibility (not display:none) keeps the hidden panel's box
                         alive — a collapsed <webview> comes back blank. */}
                     {selectedFile && (
-                      <div className="absolute inset-0" style={{ visibility: activeTab === 'code' ? 'visible' : 'hidden' }}>
+                      <div className="absolute inset-0">
                         <EditorPanel />
-                      </div>
-                    )}
-                    {previewOpen && (
-                      <div className="absolute inset-0" style={{ visibility: activeTab === 'preview' ? 'visible' : 'hidden' }}>
-                        <PreviewPanel />
                       </div>
                     )}
                   </div>
@@ -131,6 +126,12 @@ export default function AppShell() {
               )}
               <ChatView />
             </div>
+            {/* Browser / project preview docks on the right of the chat. */}
+            {previewDockOpen && (
+              <div className="w-[42%] min-w-[280px] max-w-[560px] shrink-0 flex flex-col border-l border-[var(--border)] anim-message">
+                <PreviewPanel />
+              </div>
+            )}
           </div>
           {terminalMounted && (
             <div className={terminalOpen ? 'h-[280px] shrink-0' : 'hidden'}>

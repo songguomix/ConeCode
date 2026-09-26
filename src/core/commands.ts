@@ -39,6 +39,7 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
   { name: 'compact', description: 'cmdCompact', kind: 'client' },
   { name: 'plan', description: 'cmdPlan', kind: 'client' },
   { name: 'goal', description: 'cmdGoal', kind: 'client' },
+  { name: 'mode', description: 'cmdMode', kind: 'client' },
   { name: 'review', description: 'cmdReview', kind: 'client' },
   { name: 'worktree', description: 'cmdWorktree', kind: 'client' },
   { name: 'init', description: 'cmdInit', kind: 'prompt', template: INIT_TEMPLATE },
