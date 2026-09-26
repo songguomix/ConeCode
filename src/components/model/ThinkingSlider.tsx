@@ -25,17 +25,25 @@ const LEVELS: {
 
 export default function ThinkingSlider({ value, onChange }: ThinkingSliderProps) {
   const { t } = useLanguageStore();
+  const index = Math.max(0, LEVELS.findIndex((l) => l.value === value));
+  const n = LEVELS.length;
+  // Slot-based layout: equal columns, pill tracks the same grid cells so it
+  // cannot drift (translate % of the pill's own width used to misalign).
+  const slot = 100 / n;
 
   return (
     <div className="flex items-center gap-1.5">
-      <div className="relative flex items-center bg-[var(--bg-3)]/80 rounded-2xl p-0.5 overflow-hidden">
-        {/* Sliding pill — transform/opacity only. */}
+      <div
+        className="relative grid bg-[var(--bg-3)]/80 rounded-2xl p-0.5 overflow-hidden"
+        style={{ gridTemplateColumns: `repeat(${n}, minmax(0, 1fr))` }}
+      >
         <div
-          className="absolute top-0.5 bottom-0.5 rounded-xl bg-[var(--bg-0)] shadow-sm border border-[var(--border)]/80 transition-transform duration-200"
+          aria-hidden
+          className="absolute top-0.5 bottom-0.5 rounded-xl bg-[var(--bg-0)] shadow-sm border border-[var(--border)]/80"
           style={{
-            width: `calc(${100 / LEVELS.length}% - 2px)`,
-            transform: `translate3d(calc(${LEVELS.findIndex((l) => l.value === value) * 100}% + 1px), 0, 0)`,
-            left: 0,
+            left: `calc(${index * slot}% + 2px)`,
+            width: `calc(${slot}% - 4px)`,
+            transition: 'left 180ms cubic-bezier(0.22, 1, 0.36, 1)',
           }}
         />
         {LEVELS.map((level) => {
@@ -46,7 +54,7 @@ export default function ThinkingSlider({ value, onChange }: ThinkingSliderProps)
               key={level.value}
               onClick={() => onChange(level.value)}
               title={t(level.descKey)}
-              className={`relative z-10 min-w-[36px] px-2 h-7 rounded-xl text-[11px] font-semibold flex items-center justify-center gap-1 transition-colors ${
+              className={`relative z-10 h-7 rounded-xl text-[11px] font-semibold flex items-center justify-center gap-1 transition-colors ${
                 active
                   ? 'text-[var(--accent)]'
                   : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
