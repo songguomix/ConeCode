@@ -1001,6 +1001,7 @@ function lastUserText(messages: ChatMessage[]): string {
     if (m.role === 'user' && typeof m.content === 'string') return m.content;
   }
   return '';
+}
 
 /**
  * When the last install ends, re-activate the model and continue the held

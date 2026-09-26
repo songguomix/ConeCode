@@ -184,7 +184,6 @@ export default function Sidebar() {
                     {p.dot && <StatusDot kind={p.dot} />}
                   </button>
                 ))}
-))}
               </div>
             </>
           )}
