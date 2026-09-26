@@ -21,6 +21,10 @@ function logTunnel(s: string) {
 // `mac.extraResources` → `bin/`). In dev it lives under the project `resources/`.
 // Returns null when no bundled binary exists for this platform/arch.
 function bundledCloudflared(): string | null {
+  // Prefer a self-downloaded binary (userData/bin) — works on every Mac/Windows
+  // arch without shipping one per platform in the installer.
+  const downloaded = installedCloudflared();
+  if (downloaded) return downloaded;
   const name =
     process.platform === 'darwin' && process.arch === 'arm64' ? 'cloudflared-darwin-arm64'
     : process.platform === 'win32' ? 'cloudflared-win-x64.exe'
@@ -32,6 +36,14 @@ function bundledCloudflared(): string | null {
   const bin = path.join(base, name);
   if (!fs.existsSync(bin)) return null;
   // electron-builder may not preserve the executable bit; ensure it here.
+  try { fs.chmodSync(bin, 0o755); } catch {}
+  return bin;
+}
+
+/** cloudflared installed by the platform-adaptive one-click download. */
+function installedCloudflared(): string | null {
+  const bin = path.join(app.getPath('userData'), 'bin', process.platform === 'win32' ? 'cloudflared.exe' : 'cloudflared');
+  if (!fs.existsSync(bin)) return null;
   try { fs.chmodSync(bin, 0o755); } catch {}
   return bin;
 }

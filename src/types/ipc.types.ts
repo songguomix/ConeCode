@@ -262,6 +262,7 @@ export interface ElectronAPI {
     status: () => Promise<any>;
     setPassword: (pw: string | null) => Promise<any>;
     installNgrok: () => Promise<{ ok: boolean; path?: string; error?: string }>;
+    installCloudflared: () => Promise<{ ok: boolean; path?: string; error?: string }>;
     kick: (id: string) => Promise<any>;
     publish: (frame: any) => Promise<boolean>;
     onCommand: (callback: (cmd: any) => void) => () => void;
