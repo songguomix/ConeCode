@@ -928,16 +928,21 @@ async function maybeResumeAfterInstall() {
   // store's message array (the active thread), so a background resume must
   // either make it active or skip compacting.
   await useChatStore.getState().setActiveConversation(convId);
-  const live = useChatStore.getState();
-  if (live.streamingRuns[convId]) return;
+  if (useChatStore.getState().streamingRuns[convId]) return;
 
   await window.electronAPI.message.create(userMsg);
-  if (live.activeConversationId === convId) {
+  // Re-read after await: the user may have switched chats meanwhile.
+  const afterCreate = useChatStore.getState();
+  if (afterCreate.activeConversationId === convId) {
     useChatStore.setState((s) =>
       s.activeConversationId === convId ? { messages: [...s.messages, userMsg] } : {},
     );
-    const canContinue = await autoCompactIfNeeded(convId, model.providerId, model.id);
-    if (!canContinue) return;
+    // Compact only when this thread is still the active one (autoCompactIfNeeded
+    // reads the visible message array).
+    if (useChatStore.getState().activeConversationId === convId) {
+      const canContinue = await autoCompactIfNeeded(convId, model.providerId, model.id);
+      if (!canContinue) return;
+    }
   }
   // runAgentLoop reloads this conversation's transcript by id when it is not
   // active, so the continue turn is never sent as another chat's context.
