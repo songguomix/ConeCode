@@ -912,10 +912,8 @@ async function maybeResumeAfterInstall() {
   if (!convId) return;
   const model = (await import('./model.store')).useModelStore.getState().getSelectedModel();
   if (!model) return;
-  const chat = useChatStore.getState();
-  if (chat.streamingRuns[convId]) return; // already running again
-  // Target the held conversation by id — sendMessage is active-conv scoped and
-  // setActiveConversation can race, so post the continue turn ourselves.
+  if (useChatStore.getState().streamingRuns[convId]) return;
+
   const { useLanguageStore } = await import('./language.store');
   const line = useLanguageStore.getState().t('installContinue');
   const userMsg: Message = {
@@ -925,16 +923,24 @@ async function maybeResumeAfterInstall() {
     content: line,
     createdAt: Date.now(),
   };
+
+  // Prefer the held thread on screen first: autoCompactIfNeeded reads the
+  // store's message array (the active thread), so a background resume must
+  // either make it active or skip compacting.
+  await useChatStore.getState().setActiveConversation(convId);
+  const live = useChatStore.getState();
+  if (live.streamingRuns[convId]) return;
+
   await window.electronAPI.message.create(userMsg);
-  if (chat.activeConversationId === convId) {
-    useChatStore.setState((s) => ({ messages: [...s.messages, userMsg] }));
+  if (live.activeConversationId === convId) {
+    useChatStore.setState((s) =>
+      s.activeConversationId === convId ? { messages: [...s.messages, userMsg] } : {},
+    );
+    const canContinue = await autoCompactIfNeeded(convId, model.providerId, model.id);
+    if (!canContinue) return;
   }
-  // Best-effort UI switch; the run is bound to convId regardless.
-  if (chat.activeConversationId !== convId) {
-    void chat.setActiveConversation(convId);
-  }
-  const canContinue = await autoCompactIfNeeded(convId, model.providerId, model.id);
-  if (!canContinue) return;
+  // runAgentLoop reloads this conversation's transcript by id when it is not
+  // active, so the continue turn is never sent as another chat's context.
   await runAgentLoop(convId, model.providerId, model.id);
 }
 
