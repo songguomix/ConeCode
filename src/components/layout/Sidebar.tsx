@@ -95,17 +95,20 @@ export default function Sidebar() {
     });
   };
 
-  // Five panel toggles used to sit in the toolbar as unlabelled 32px icons with
-  // no gap between them. They are one menu now: labelled, and the row has room.
-  const panels: PanelItem[] = [
+  // Primary panels earn toolbar-menu slots; low-frequency tools live under a
+  // second section so the list stays scannable (integration pass: 7 → 4 + more).
+  const primaryPanels: PanelItem[] = [
     { key: 'terminal', icon: <FiTerminal size={15} />, label: t('terminal'), open: terminalOpen, toggle: toggleTerminal },
     { key: 'changed', icon: <FiFileText size={15} />, label: t('changedFiles'), open: changedFilesOpen, toggle: toggleChangedFiles },
     { key: 'review', icon: <FiShield size={15} />, label: t('codeReview'), open: reviewOpen, toggle: toggleReview },
-    { key: 'worktrees', icon: <FiGitBranch size={15} />, label: t('worktrees'), open: worktreesOpen, toggle: toggleWorktrees },
     { key: 'preview', icon: <FiMonitor size={15} />, label: t('preview'), open: previewOpen, toggle: togglePreview, dot: previewState === 'idle' ? null : previewState === 'running' ? 'success' : previewState === 'starting' ? 'warning-pulse' : 'error' },
+  ];
+  const extraPanels: PanelItem[] = [
+    { key: 'worktrees', icon: <FiGitBranch size={15} />, label: t('worktrees'), open: worktreesOpen, toggle: toggleWorktrees },
     { key: 'remote', icon: <FiSmartphone size={15} />, label: t('remoteControl'), open: remoteOpen, toggle: toggleRemote },
     { key: 'computer', icon: <FiCpu size={15} />, label: t('computerControl'), open: computerOpen, toggle: toggleComputer, dot: computerEnabled ? 'error-pulse' : null },
   ];
+  const panels = [...primaryPanels, ...extraPanels];
   // Live state must survive being folded into a menu: a running dev server, and
   // above all the agent holding the real mouse, stay visible on the trigger.
   const triggerDot = mostUrgentDot(panels.map((p) => p.dot));
@@ -155,7 +158,7 @@ export default function Sidebar() {
               <div className="fixed inset-0 z-40" onClick={() => setPanelsOpen(false)} />
               <div role="menu"
                 className="absolute top-full right-0 mt-1 w-44 bg-[var(--bg-2)] border border-[var(--border)] rounded-xl shadow-xl z-50 overflow-hidden py-1 anim-menu">
-                {panels.map((p) => (
+                {primaryPanels.map((p) => (
                   <button key={p.key} role="menuitemcheckbox" aria-checked={p.open}
                     onClick={() => { p.toggle(); setPanelsOpen(false); }}
                     className={`w-full flex items-center gap-2.5 px-3 py-2 text-[13px] transition-colors ${
@@ -166,6 +169,22 @@ export default function Sidebar() {
                     {p.dot && <StatusDot kind={p.dot} />}
                   </button>
                 ))}
+                <div className="my-1 border-t border-[var(--border)]" />
+                <div className="px-3 pb-1 text-[10px] uppercase tracking-wider text-[var(--text-muted)]">
+                  {t('panelsMore')}
+                </div>
+                {extraPanels.map((p) => (
+                  <button key={p.key} role="menuitemcheckbox" aria-checked={p.open}
+                    onClick={() => { p.toggle(); setPanelsOpen(false); }}
+                    className={`w-full flex items-center gap-2.5 px-3 py-2 text-[13px] transition-colors ${
+                      p.open ? 'bg-[var(--accent-soft)] text-[var(--accent)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-3)]'
+                    }`}>
+                    {p.icon}
+                    <span className="flex-1 text-left truncate">{p.label}</span>
+                    {p.dot && <StatusDot kind={p.dot} />}
+                  </button>
+                ))}
+))}
               </div>
             </>
           )}

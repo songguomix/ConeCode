@@ -537,6 +537,7 @@ const translations: Record<Locale, Record<string, string>> = {
     'detectHint': 'Enter Base URL + API Key, then auto-detect available models and their context windows.',
     // Changed files panel
     'panels': 'Panels',
+    'panelsMore': 'More tools',
     'openFile': 'Open file…',
     'changedFiles': 'Changed files',
     'filesChanged': 'files changed',
@@ -1103,6 +1104,7 @@ const translations: Record<Locale, Record<string, string>> = {
     'detectHint': '填入 Base URL 与 API Key，自动识别可用模型及其上下文长度。',
     // Changed files panel
     'panels': '面板',
+    'panelsMore': '更多工具',
     'openFile': '打开文件…',
     'changedFiles': '修改的文件',
     'filesChanged': '个文件已更改',
@@ -1669,6 +1671,7 @@ const translations: Record<Locale, Record<string, string>> = {
     'detectHint': 'Base URL と API キーを入力すると、利用可能なモデルとコンテキスト長を自動検出します。',
     // Changed files panel
     'panels': 'パネル',
+    'panelsMore': 'その他のツール',
     'openFile': 'ファイルを開く…',
     'changedFiles': '変更ファイル',
     'filesChanged': '件のファイルを変更',
