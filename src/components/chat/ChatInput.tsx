@@ -488,10 +488,11 @@ export default function ChatInput() {
                       {t('modeMenu')}
                     </div>
                     {([
+                      // Standard is the default working mode.
+                      { key: 'std', label: t('agentModeStandard'), icon: <FiLayers size={14} />, mode: 'standard' as AgentMode },
                       { key: 'task', label: t('modeTask'), icon: <FiTarget size={14} />, mode: 'goal' as AgentMode },
                       { key: 'orch', label: t('modeOrchestrate'), icon: <FiList size={14} />, mode: 'orchestrate' as AgentMode },
                       { key: 'rsi', label: t('modeRsi'), icon: <FiZap size={14} />, mode: 'rsi' as AgentMode },
-                      { key: 'std', label: t('agentModeStandard'), icon: <FiLayers size={14} />, mode: 'standard' as AgentMode },
                     ] as const).map((item) => (
                       <button
                         key={item.key}
