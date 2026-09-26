@@ -55,18 +55,22 @@ function remoteStatus() {
   // The password rides in the QR/URL (so scanning auto-connects); it's URL-encoded.
   const pw = remoteServer.getPassword();
   const pwq = pw ? `&p=${encodeURIComponent(pw)}` : '';
+  // Pairing URL carries this install's TLS fingerprint so the phone can pin it.
+  const fp = remoteServer.fingerprint;
+  const fpq = fp ? `&fp=${fp}` : '';
   const lanUrls = running && port && token
-    ? lanAddresses().map((ip) => `https://${ip}:${port}/?t=${token}${pwq}`)
+    ? lanAddresses().map((ip) => `https://${ip}:${port}/?t=${token}${pwq}${fpq}`)
     : [];
   return {
     running,
     port,
     token,
     lanUrls,
-    tunnelUrl: running && remoteTunnelUrl ? remoteTunnelUrl + pwq : null,
+    tunnelUrl: running && remoteTunnelUrl ? remoteTunnelUrl + pwq + fpq : null,
     clients: remoteServer.clientCount(),
     devices: remoteServer.clientList(),
     hasPassword: remoteServer.hasPassword(),
+    fingerprint: remoteServer.fingerprint,
   };
 }
 

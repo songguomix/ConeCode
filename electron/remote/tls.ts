@@ -3,7 +3,20 @@ import path from 'path';
 import { X509Certificate, createPrivateKey } from 'crypto';
 import { generate } from 'selfsigned';
 
-export interface RemoteTls { key: string; cert: string }
+import { createHash } from 'crypto';
+
+/**
+ * SHA-256 fingerprint of a PEM certificate's DER bytes, lowercase hex.
+ * Embedded in the pairing URL (`fp=`) so a phone can pin THIS install's
+ * self-signed cert instead of a globally bundled one.
+ */
+export function certFingerprint(certPem: string): string {
+  const x509 = new X509Certificate(certPem);
+  return createHash('sha256').update(x509.raw).digest('hex');
+}
+
+
+export interface RemoteTls { key: string; cert: string; fingerprint: string }
 
 // A fresh installation creates its own identity. Never ship private keys in source.
 export async function loadRemoteTls(dataDir: string): Promise<RemoteTls> {
@@ -16,7 +29,7 @@ export async function loadRemoteTls(dataDir: string): Promise<RemoteTls> {
     }
     if (Date.parse(certificate.validTo) > Date.now() + 86400000) {
       if (process.platform !== 'win32') fs.chmodSync(filename, 0o600);
-      return saved;
+      return { ...saved, fingerprint: certFingerprint(saved.cert) };
     }
   }
   const pems = await generate([{ name: 'commonName', value: 'ConeCode Remote' }], {
@@ -34,10 +47,10 @@ export async function loadRemoteTls(dataDir: string): Promise<RemoteTls> {
       ] },
     ],
   });
-  const tls = { key: pems.private, cert: pems.cert };
+  const tls = { key: pems.private, cert: pems.cert, fingerprint: certFingerprint(pems.cert) };
   fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
   const temporary = `${filename}.tmp`;
-  fs.writeFileSync(temporary, JSON.stringify(tls), { mode: 0o600 });
+  fs.writeFileSync(temporary, JSON.stringify({ key: tls.key, cert: tls.cert }), { mode: 0o600 });
   fs.renameSync(temporary, filename);
   return tls;
 }
