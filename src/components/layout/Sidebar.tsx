@@ -125,7 +125,7 @@ export default function Sidebar() {
             <>
               <div className="fixed inset-0 z-40" onClick={() => setPanelsOpen(false)} />
               <div role="menu"
-                className="absolute top-full right-0 mt-1 w-44 bg-[var(--bg-2)] border border-[var(--border)] rounded-xl shadow-xl z-50 overflow-hidden py-1">
+                className="absolute top-full right-0 mt-1 w-44 bg-[var(--bg-2)] border border-[var(--border)] rounded-xl shadow-xl z-50 overflow-hidden py-1 anim-menu">
                 {panels.map((p) => (
                   <button key={p.key} role="menuitemcheckbox" aria-checked={p.open}
                     onClick={() => { p.toggle(); setPanelsOpen(false); }}
@@ -154,7 +154,7 @@ export default function Sidebar() {
           {conversations.map((conv) => (
             <div key={conv.id}
               onClick={() => { if (editingId !== conv.id) setActiveConversation(conv.id); }}
-              className={`group flex items-center gap-2.5 px-3 py-2 rounded-xl cursor-pointer text-[13px] transition-all ${
+              className={`group flex items-center gap-2.5 px-3 py-2 rounded-xl cursor-pointer text-[13px] transition-colors ${
                 activeConversationId === conv.id
                   ? 'bg-[var(--bg-3)] text-[var(--text-primary)] font-medium'
                   : 'text-[var(--text-secondary)] hover:bg-[var(--bg-3)]/50'
@@ -221,7 +221,7 @@ export default function Sidebar() {
             {langOpen && (
               <>
                 <div className="fixed inset-0 z-40" onClick={() => setLangOpen(false)} />
-                <div className="absolute bottom-full right-0 mb-1 w-36 bg-[var(--bg-2)] border border-[var(--border)] rounded-xl shadow-xl z-50 overflow-hidden py-1">
+                <div className="absolute bottom-full right-0 mb-1 w-36 bg-[var(--bg-2)] border border-[var(--border)] rounded-xl shadow-xl z-50 overflow-hidden py-1 anim-menu" style={{ ['--menu-origin' as any]: 'bottom right', ['--menu-shift' as any]: '6px' }}>
                   {LOCALES.map((l) => (
                     <button key={l.value}
                       onClick={() => { setLocale(l.value); setLangOpen(false); }}

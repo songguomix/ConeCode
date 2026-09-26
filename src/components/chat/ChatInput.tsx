@@ -402,7 +402,7 @@ export default function ChatInput() {
       <div className="relative max-w-[900px] mx-auto w-full px-4 pt-2 pb-1">
         {/* Slash-command palette */}
         {showSlash && (
-          <div className="absolute bottom-full left-6 right-6 mb-1 max-h-64 overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--bg-2)] shadow-lg z-50 py-1">
+          <div className="absolute bottom-full left-6 right-6 mb-1 max-h-64 overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--bg-2)] shadow-lg z-50 py-1 anim-menu" style={{ ['--menu-origin' as any]: 'bottom left', ['--menu-shift' as any]: '6px' }}>
             <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-[var(--text-muted)] font-medium">{t('commandsTitle')}</div>
             {slashMatches.map((c, i) => (
               <button
@@ -421,7 +421,7 @@ export default function ChatInput() {
 
         {/* @-mention file palette */}
         {showMention && (
-          <div className="absolute bottom-full left-6 right-6 mb-1 max-h-64 overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--bg-2)] shadow-lg z-50 py-1">
+          <div className="absolute bottom-full left-6 right-6 mb-1 max-h-64 overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--bg-2)] shadow-lg z-50 py-1 anim-menu" style={{ ['--menu-origin' as any]: 'bottom left', ['--menu-shift' as any]: '6px' }}>
             <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-[var(--text-muted)] font-medium">{t('mentionFiles')}</div>
             {mentionMatches.map((f, i) => (
               <button
@@ -478,14 +478,14 @@ export default function ChatInput() {
 
             {isStreaming ? (
               <button onClick={() => stopGeneration()}
-                className="w-9 h-9 rounded-full bg-[var(--accent)] text-white flex items-center justify-center hover:bg-[var(--accent-hover)] transition-colors shrink-0 mb-0.5">
+                className="w-9 h-9 rounded-full bg-[var(--accent)] text-white flex items-center justify-center hover:bg-[var(--accent-hover)] transition-colors shrink-0 mb-0.5 anim-press">
                 <FiSquare size={14} />
               </button>
             ) : (
               <button onClick={handleSend}
                 disabled={!input.trim() || isSavingEdit}
                 title={sendWithEnter ? t('sendHintEnter') : t('sendHintCmd')}
-                className="w-9 h-9 rounded-full flex items-center justify-center transition-all bg-[var(--accent)] text-white disabled:opacity-30 hover:bg-[var(--accent-hover)] shrink-0 mb-0.5">
+                className="w-9 h-9 rounded-full flex items-center justify-center transition-all bg-[var(--accent)] text-white disabled:opacity-30 hover:bg-[var(--accent-hover)] shrink-0 mb-0.5 anim-press">
                 <FiArrowUp size={18} />
               </button>
             )}

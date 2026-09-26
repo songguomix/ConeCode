@@ -151,8 +151,8 @@ export default function SettingsModal() {
   const [section, setSection] = useState<(typeof SECTIONS)[number]['id']>('general');
 
   return (
-    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50">
-      <div className="w-[880px] h-[78vh] bg-[var(--bg-0)] border border-[var(--border)] rounded-2xl shadow-2xl flex overflow-hidden">
+    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 anim-scrim">
+      <div className="w-[880px] h-[78vh] bg-[var(--bg-0)] border border-[var(--border)] rounded-2xl shadow-2xl flex overflow-hidden anim-modal">
 
         {/* ---- Left rail ---- */}
         <div className="w-[200px] shrink-0 bg-[var(--bg-1)] border-r border-[var(--border)] flex flex-col">

@@ -71,7 +71,7 @@ export default function ProjectIdeas() {
 
       <div className="grid grid-cols-3 gap-2.5">
         {loadingIdeas && ideas.length === 0 && [0, 1, 2, 3, 4, 5].map((i) => (
-          <div key={i} className="rounded-xl border border-[var(--border)] bg-[var(--bg-2)] p-3 min-h-[112px] animate-pulse">
+          <div key={i} className="rounded-xl border border-[var(--border)] bg-[var(--bg-2)] p-3 min-h-[112px] anim-shimmer">
             <div className="h-3 w-2/3 rounded bg-[var(--bg-3)]" />
             <div className="mt-2.5 h-2.5 w-full rounded bg-[var(--bg-3)]" />
             <div className="mt-1.5 h-2.5 w-4/5 rounded bg-[var(--bg-3)]" />

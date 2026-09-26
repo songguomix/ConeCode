@@ -290,7 +290,7 @@ export default function MessageContent({
         return <MarkdownText key={i} text={seg.text} />;
       })}
       {toolCalls?.map((call) => <ActionCard key={call.id} action={toCardAction(call)} />)}
-      {streaming && <span className="animate-pulse">▌</span>}
+      {streaming && <span className="anim-caret">▌</span>}
     </div>
   );
 }

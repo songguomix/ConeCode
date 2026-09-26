@@ -376,7 +376,7 @@ function QuickAction({
 
 function SkeletonCard() {
   return (
-    <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-2)] p-3 animate-pulse">
+    <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-2)] p-3 anim-shimmer">
       <div className="flex items-center gap-2">
         <div className="w-6 h-6 rounded-lg bg-[var(--bg-3)]" />
         <div className="h-3 rounded bg-[var(--bg-3)] flex-1" />
