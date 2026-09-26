@@ -216,7 +216,7 @@ export default function ChatView() {
             <div className="min-w-0">
               {streamingContent
                 ? <MessageContent content={streamingContent} streaming />
-                : <span className="text-[15px] text-[var(--text-muted)] animate-pulse">
+                : <span className="text-[15px] text-[var(--text-muted)] anim-caret">
                     {streamingToolName
                       ? `${t('callingTool')} ${streamingToolName}...`
                       : streamingStatus === 'thinking' ? t('thinking') + '...' : '...'}

@@ -65,7 +65,10 @@ function MessageBubble({
     return `${minutes}m ${remainingSeconds}s`;
   };
 
-  const topMargin = (isContinuation ? 'mt-1.5' : 'mt-6') + (dimmed ? ' opacity-45' : '');
+  const topMargin =
+    (isContinuation ? 'mt-1.5' : 'mt-6') +
+    (dimmed ? ' opacity-45' : '') +
+    ' anim-message';
 
   if (isToolResult) {
     const preview = message.content.split('\n')[0].replace(/^Result for /, '').slice(0, 80);

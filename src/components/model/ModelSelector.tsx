@@ -203,7 +203,8 @@ export default function ModelSelector() {
       </div>
 
       {isOpen && (
-        <div className="absolute bottom-full left-6 right-6 mb-1 bg-[var(--bg-2)] border border-[var(--border)] rounded-xl shadow-lg overflow-hidden z-50"
+        <div className="absolute bottom-full left-6 right-6 mb-1 bg-[var(--bg-2)] border border-[var(--border)] rounded-xl shadow-lg overflow-hidden z-50 anim-menu"
+          style={{ ['--menu-origin' as any]: 'bottom center', ['--menu-shift' as any]: '6px' }}
           onKeyDown={handleKeyDown}>
           <div className="p-2 border-b border-[var(--border)]">
             <div className="flex items-center gap-2 px-3 py-2 bg-[var(--bg-0)] rounded-xl">

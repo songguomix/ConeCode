@@ -118,7 +118,7 @@ export default function TerminalPanel() {
           {menuOpen && (
             <>
               <div className="fixed inset-0 z-40" onClick={() => setMenuOpen(false)} />
-              <div className="absolute bottom-full left-0 mb-1.5 w-60 bg-[var(--bg-2)] border border-[var(--border)] rounded-xl shadow-xl z-50 overflow-hidden py-1.5">
+              <div className="absolute bottom-full left-0 mb-1.5 w-60 bg-[var(--bg-2)] border border-[var(--border)] rounded-xl shadow-xl z-50 overflow-hidden py-1.5 anim-menu" style={{ ['--menu-origin' as any]: 'bottom left', ['--menu-shift' as any]: '6px' }}>
                 <div className="px-3 py-1 text-xs font-medium text-[var(--text-muted)]">{t('terminals')}</div>
                 <div className="max-h-64 overflow-y-auto">
                   {tabs.map((tab) => (
