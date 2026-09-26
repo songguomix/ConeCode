@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useMemo } from 'react';
 import { FiSquare, FiPaperclip, FiX, FiFile, FiArrowUp, FiMap, FiPlus, FiTarget, FiList, FiLayers, FiZap, FiChevronDown } from 'react-icons/fi';
 import { AGENT_MODES, AGENT_MODE_LABEL_KEYS, type AgentMode } from '../../core/agents/modePrompts';
 import { useMemoryStore, useChatStore, useModelStore, useLanguageStore, useWorkspaceStore, useSettingsStore, useUIStore, useGoalStore } from '../../stores';
+import { useInstallGateStore, isHolding } from '../../stores/installGate.store';
 import {
   BUILTIN_COMMANDS, parseSlashInput, matchCommands, findCommand, expandTemplate,
   type SlashCommand,
@@ -29,6 +30,7 @@ export default function ChatInput() {
   const pushNotice = useChatStore((s) => s.pushNotice);
   const createConversation = useChatStore((s) => s.createConversation);
   const planMode = useChatStore((s) => s.planMode);
+  const installHolding = useInstallGateStore((s) => isHolding(s.jobs));
   const togglePlanMode = useChatStore((s) => s.togglePlanMode);
   const [plusOpen, setPlusOpen] = useState(false);
   const agentMode = useChatStore((s) => s.agentMode);
@@ -253,7 +255,7 @@ export default function ChatInput() {
   };
 
   const handleSend = async () => {
-    if (isStreaming || isSavingEdit) return;
+    if (isStreaming || isSavingEdit || installHolding) return;
     const text = input;
     if (!text.trim()) return;
 
@@ -579,7 +581,7 @@ export default function ChatInput() {
               </button>
             ) : (
               <button onClick={handleSend}
-                disabled={!input.trim() || isSavingEdit}
+                disabled={!input.trim() || isSavingEdit || installHolding}
                 title={sendWithEnter ? t('sendHintEnter') : t('sendHintCmd')}
                 className="w-9 h-9 rounded-full flex items-center justify-center transition-all bg-[var(--accent)] text-white disabled:opacity-30 hover:bg-[var(--accent-hover)] shrink-0 mb-0.5 anim-press">
                 <FiArrowUp size={18} />

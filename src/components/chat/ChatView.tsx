@@ -10,6 +10,7 @@ import CommandApprovalModal from './CommandApprovalModal';
 import TodoList from './TodoList';
 import DiffStatPill from './DiffStatPill';
 import GoalProgressRow from './GoalProgressRow';
+import { useInstallGateStore, activeInstallLabel, isHolding } from '../../stores/installGate.store';
 import AgentHome from '../home/AgentHome';
 import { commandsForConversation } from './approvalPresentation';
 
@@ -171,8 +172,18 @@ export default function ChatView() {
     await sendMessage(t('planApproved'), providerId, modelId);
   };
 
+  const installJobs = useInstallGateStore((s) => s.jobs);
+  const installHolding = isHolding(installJobs);
+  const installLabel = activeInstallLabel(installJobs);
+
   return (
     <div className="flex-1 flex flex-col min-h-0 bg-[var(--bg-0)]">
+      {installHolding && (
+        <div className="px-4 py-1.5 text-[11px] flex items-center gap-2 bg-[var(--accent-soft)] text-[var(--accent)] border-b border-[var(--border)]">
+          <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)] animate-pulse shrink-0" />
+          <span className="truncate">{t('installHolding')}{installLabel ? ` · ${installLabel}` : ''}</span>
+        </div>
+      )}
       <div ref={containerRef} className="flex-1 overflow-y-auto py-6">
         <div className="max-w-[900px] mx-auto w-full px-4">
         {/* Nothing said yet — instead of an empty prompt, show the agent's own

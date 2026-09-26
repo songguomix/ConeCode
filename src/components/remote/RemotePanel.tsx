@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { FiX, FiSmartphone, FiCopy, FiCheck, FiGlobe, FiLock } from 'react-icons/fi';
-import { useUIStore, useLanguageStore } from '../../stores';
+import { useUIStore, useLanguageStore, useChatStore } from '../../stores';
+import { useInstallGateStore } from '../../stores/installGate.store';
 import { qrSvg } from '../../core/remote/qr';
 
 interface RemoteState {
@@ -72,6 +73,8 @@ export default function RemotePanel() {
   const installNgrok = async () => {
     setNgrokInstalling(true);
     setNgrokMsg(null);
+    const holdId = `ngrok-${Date.now()}`;
+    useChatStore.getState().holdModelForInstall('ngrok', holdId, 'tool');
     try {
       const r = await api()?.installNgrok();
       setNgrokMsg(r?.ok ? t('ngrokInstalled') : `${t('ngrokInstallFailed')}: ${r?.error || ''}`);
@@ -79,6 +82,8 @@ export default function RemotePanel() {
       setNgrokMsg(`${t('ngrokInstallFailed')}: ${e?.message || ''}`);
     } finally {
       setNgrokInstalling(false);
+      useInstallGateStore.getState().end(holdId);
+      void useChatStore.getState().continueAfterInstall?.();
     }
   };
 

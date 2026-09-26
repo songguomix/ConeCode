@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { useInstallGateStore } from './installGate.store';
 import type { AIModel } from '../types';
 
 // Models that the user manually flagged as reasoning-capable (the 🧠 toggle).
@@ -137,6 +138,8 @@ export const useModelStore = create<ModelStore>((set, get) => ({
 
   fetchModels: async (providerId) => {
     set({ loading: true });
+    const jobId = `models:${providerId}`;
+    useInstallGateStore.getState().begin(jobId, providerId || 'models', 'model');
     try {
       const models = await window.electronAPI.model.list(providerId);
       set((s) => {
@@ -149,11 +152,16 @@ export const useModelStore = create<ModelStore>((set, get) => ({
       console.error(`Failed to fetch models for provider ${providerId}:`, error);
       set({ loading: false });
       return false;
+    } finally {
+      useInstallGateStore.getState().end(jobId);
+      void import('./chat.store').then((m) => m.useChatStore.getState().continueAfterInstall?.());
     }
   },
 
   fetchAllModels: async () => {
     set({ loading: true });
+    const jobId = 'models:all';
+    useInstallGateStore.getState().begin(jobId, 'models', 'model');
     try {
       const providers = await window.electronAPI.provider.list();
       const grouped = new Map<string, AIModel[]>();
@@ -194,6 +202,9 @@ export const useModelStore = create<ModelStore>((set, get) => ({
     } catch (error) {
       console.error('Failed to fetch all models:', error);
       set({ loading: false });
+    } finally {
+      useInstallGateStore.getState().end(jobId);
+      void import('./chat.store').then((m) => m.useChatStore.getState().continueAfterInstall?.());
     }
   },
 

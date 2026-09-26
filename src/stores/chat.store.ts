@@ -13,6 +13,7 @@ import { useSkillsStore } from './skills.store';
 import { useComputerStore } from './computer.store';
 import { useGoalStore, type ConversationGoal } from './goal.store';
 import { resolveEffort } from '../core/model/resolveEffort';
+import { useInstallGateStore, isHolding } from './installGate.store';
 import type { ChangeKind } from './codeChanges.store';
 import {
   buildToolset,
@@ -1000,6 +1001,52 @@ function lastUserText(messages: ChatMessage[]): string {
     if (m.role === 'user' && typeof m.content === 'string') return m.content;
   }
   return '';
+
+/**
+ * When the last install ends, re-activate the model and continue the held
+ * conversation (Claude-style: pause during download, resume when ready).
+ */
+async function maybeResumeAfterInstall() {
+  const gate = useInstallGateStore.getState();
+  const convId = gate.release();
+  if (!convId) return;
+  const model = (await import('./model.store')).useModelStore.getState().getSelectedModel();
+  if (!model) return;
+  if (useChatStore.getState().streamingRuns[convId]) return;
+
+  const { useLanguageStore } = await import('./language.store');
+  const line = useLanguageStore.getState().t('installContinue');
+  const userMsg: Message = {
+    id: uuidv4(),
+    conversationId: convId,
+    role: 'user',
+    content: line,
+    createdAt: Date.now(),
+  };
+
+  // Prefer the held thread on screen first: autoCompactIfNeeded reads the
+  // store's message array (the active thread), so a background resume must
+  // either make it active or skip compacting.
+  await useChatStore.getState().setActiveConversation(convId);
+  if (useChatStore.getState().streamingRuns[convId]) return;
+
+  await window.electronAPI.message.create(userMsg);
+  // Re-read after await: the user may have switched chats meanwhile.
+  const afterCreate = useChatStore.getState();
+  if (afterCreate.activeConversationId === convId) {
+    useChatStore.setState((s) =>
+      s.activeConversationId === convId ? { messages: [...s.messages, userMsg] } : {},
+    );
+    // Compact only when this thread is still the active one (autoCompactIfNeeded
+    // reads the visible message array).
+    if (useChatStore.getState().activeConversationId === convId) {
+      const canContinue = await autoCompactIfNeeded(convId, model.providerId, model.id);
+      if (!canContinue) return;
+    }
+  }
+  // runAgentLoop reloads this conversation's transcript by id when it is not
+  // active, so the continue turn is never sent as another chat's context.
+  await runAgentLoop(convId, model.providerId, model.id);
 }
 
 function buildSystemMessages(
@@ -1987,7 +2034,18 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
             break;
           }
           case 'download': {
-            result = await window.electronAPI.net.download(action.url!, action.path!);
+            // Install gate: surface "installing" while the file lands. The agent
+            // loop already waits on this tool — no extra stop; UI-driven installs
+            // hold generation via holdModelForInstall().
+            const dlId = `download:${Date.now()}:${action.url}`;
+            const gate = useInstallGateStore.getState();
+            gate.begin(dlId, action.url || 'download', 'download');
+            try {
+              result = await window.electronAPI.net.download(action.url!, action.path!);
+            } finally {
+              gate.end(dlId);
+              void maybeResumeAfterInstall();
+            }
             break;
           }
           case 'mcp_call': {
@@ -2357,6 +2415,10 @@ interface ChatStore {
   editMessage: (messageId: string, content: string, providerId: string, modelId: string) => Promise<void>;
   /** Stop the agent run of one conversation (defaults to the active one). */
   stopGeneration: (conversationId?: string) => void;
+  /** Stop a live run because an install started; it will auto-continue after. */
+  holdModelForInstall: (label: string, id?: string, kind?: 'download' | 'tool' | 'model' | 'skill' | 'dep') => void;
+  /** Release install hold and auto-continue the held conversation. */
+  continueAfterInstall: () => Promise<void>;
   clearError: () => void;
   compactConversation: (providerId: string, modelId: string) => Promise<void>;
   pushNotice: (markdown: string, providerId?: string, modelId?: string) => Promise<void>;
@@ -2516,6 +2578,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   sendMessage: async (content, providerId, modelId) => {
+    // Hold: do not start a new run while something is installing — the
+    // auto-continue path is the only sender until the gate releases.
+    if (isHolding(useInstallGateStore.getState().jobs)) return;
     let convId = get().activeConversationId;
     if (!convId) {
       convId = await get().createConversation(providerId, modelId);
@@ -2605,6 +2670,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   editMessage: async (messageId, content, providerId, modelId) => {
+    if (isHolding(useInstallGateStore.getState().jobs)) return;
     const { messages, activeConversationId: convId } = get();
     const index = messages.findIndex((m) => m.id === messageId && m.conversationId === convId);
     const original = messages[index];
@@ -2646,6 +2712,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   resendMessage: async (messageId) => {
+    if (isHolding(useInstallGateStore.getState().jobs)) return;
     const { messages } = get();
     const msgIndex = messages.findIndex((m) => m.id === messageId);
     if (msgIndex === -1) return;
@@ -2672,6 +2739,20 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
 
     await get().editMessage(messageId, msg.content, providerId, modelId);
+  },
+
+  holdModelForInstall: (label, id = `ui-${Date.now()}`, kind = 'tool') => {
+    const gate = useInstallGateStore.getState();
+    gate.begin(id, label, kind);
+    const convId = get().activeConversationId;
+    if (convId && get().streamingRuns[convId]) {
+      get().stopGeneration(convId);
+      gate.markResume(convId);
+    }
+  },
+
+  continueAfterInstall: async () => {
+    await maybeResumeAfterInstall();
   },
 
   stopGeneration: (conversationId) => {
