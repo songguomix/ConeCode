@@ -486,7 +486,7 @@ export default function PreviewPanel() {
                     transform: frame.scale < 1 ? `scale(${frame.scale})` : undefined,
                   }}
                   className={`bg-white overflow-hidden shrink-0 ${
-                    device === 'desktop' ? '' : 'rounded-[20px] border border-[var(--border)] shadow-2xl'
+                    device === 'desktop' ? '' : 'rounded-[28px] border border-[var(--border)] shadow-2xl'
                   }`}
                 >
                   <webview

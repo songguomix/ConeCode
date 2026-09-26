@@ -14,8 +14,15 @@ export default {
           0: '#1A1915', 1: '#14130F', 2: '#242320', 3: '#2E2D28', 4: '#3A3833',
         },
       },
+      // Softer, rounder silhouette across the app — same class names, friendlier shape.
       borderRadius: {
-        '2xl': '1rem',
+        sm: '0.3rem',
+        DEFAULT: '0.45rem',
+        md: '0.6rem',
+        lg: '0.85rem',
+        xl: '1.1rem',
+        '2xl': '1.35rem',
+        '3xl': '1.75rem',
       },
     },
   },
