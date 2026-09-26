@@ -42,6 +42,8 @@ class RemoteServer extends EventEmitter {
 
   port: number | null = null;
   token: string | null = null;
+  /** SHA-256 of this install's remote TLS cert — phones pin it via `fp=`. */
+  fingerprint: string | null = null;
   // Optional extra login factor. The token rides in the QR (convenience); the
   // password is entered/stored separately, so seeing the QR alone isn't enough.
   // Persisted by the renderer and re-applied on start; kept across stop().
@@ -95,6 +97,7 @@ class RemoteServer extends EventEmitter {
       const tls = await loadRemoteTls(dataDir);
       if (generation !== this.generation) throw new Error('Remote start cancelled');
       this.token = crypto.randomBytes(16).toString('hex');
+      this.fingerprint = tls.fingerprint;
       const port = await this.listen(preferredPort, tls);
       if (generation !== this.generation) {
         this.stop();
@@ -121,6 +124,7 @@ class RemoteServer extends EventEmitter {
     }
     this.port = null;
     this.token = null;
+    this.fingerprint = null;
     // Keep the last state frame: the renderer keeps running, so it stays current,
     // and it is replayed to the next phone that connects after a restart — without
     // it, a reconnect would receive a null snapshot and the phone would never leave
