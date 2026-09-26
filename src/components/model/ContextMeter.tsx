@@ -65,7 +65,12 @@ export default function ContextMeter() {
     return total;
   }, [autoIncludeFileContext, selectedFile, fileContent, selectedFileIsImage, contextFiles, maxContextFileSize]);
 
-  const liveTokens = estimateTokens(streamingContent) + estimateTokens(streamingReasoningContent);
+  const liveTokens = useMemo(
+    () => estimateTokens(streamingContent) + estimateTokens(streamingReasoningContent),
+    // estimateTokens is O(n) over the accumulated stream — memo so sibling
+    // re-renders (open flag, theme) don't re-scan multi-KB text.
+    [streamingContent, streamingReasoningContent],
+  );
 
   const convoTokens = messageTokens + liveTokens;
   const used = convoTokens + fileTokens + SYSTEM_PROMPT_TOKENS;

@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { memo, useMemo, useState, type ReactNode } from 'react';
 import {
   FiFileText, FiFolder, FiEdit3, FiFilePlus, FiFolderPlus, FiTrash2,
   FiMove, FiCopy, FiTerminal, FiExternalLink, FiInfo, FiHelpCircle, FiCheck,
@@ -268,7 +268,9 @@ function MarkdownText({ text }: { text: string }) {
 
 // ---------------------------------------------------------------------------
 
-export default function MessageContent({
+export default memo(MessageContent);
+
+function MessageContent({
   content,
   streaming,
   toolCalls,

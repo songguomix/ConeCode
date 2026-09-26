@@ -1,10 +1,14 @@
-import { useState, useRef, useEffect } from 'react';
+import { memo, useState, useRef, useEffect } from 'react';
 import type { Message } from '../../types';
 import { FiCopy, FiCheck, FiRotateCcw, FiChevronDown, FiChevronRight, FiHelpCircle, FiClock, FiZap } from 'react-icons/fi';
 import { useChatStore, useModelStore, useLanguageStore, useSettingsStore } from '../../stores';
 import MessageContent from './MessageContent';
 
-export default function MessageBubble({
+/**
+ * Memoized: historical rows must not re-parse markdown every time a stream
+ * token lands. Props that change (editing, continuation) stay explicit.
+ */
+function MessageBubble({
   message,
   isContinuation = false,
   dimmed = false,
@@ -17,7 +21,7 @@ export default function MessageBubble({
   // Folded into a summary: still readable, visibly out of the model's context.
   dimmed?: boolean;
   editing?: boolean;
-  onEdit?: () => void;
+  onEdit?: (id: string) => void;
   onCancelEdit?: () => void;
 }) {
   const isToolResult = message.isToolResult;
@@ -93,7 +97,7 @@ export default function MessageBubble({
 
   const handleEdit = () => {
     if (!isUser || saving) return;
-    onEdit?.();
+    onEdit?.(message.id);
   };
 
   const handleSubmitEdit = () => {
@@ -216,3 +220,5 @@ export default function MessageBubble({
     </div>
   );
 }
+
+export default memo(MessageBubble);

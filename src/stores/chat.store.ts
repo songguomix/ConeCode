@@ -53,11 +53,81 @@ export interface StreamRunState {
 
 const EMPTY_RUN: StreamRunState = { content: '', reasoningContent: '', status: null, toolName: null };
 
+// Token deltas arrive far faster than a frame. A setState per chunk re-renders
+// the whole transcript (markdown re-parse + every MessageBubble). Buffer
+// text/reasoning appends and flush once per animation frame instead.
+type RunDelta = {
+  text: string;
+  reasoning: string;
+  status?: StreamRunState['status'];
+  toolName?: string | null;
+  /** Fresh tokens added since the last flush (for O(1) context estimates). */
+  addedTokens: number;
+};
+const pendingRunDeltas = new Map<string, RunDelta>();
+let runDeltaHandle: number | null = null;
+
+function ensureDelta(convId: string): RunDelta {
+  let d = pendingRunDeltas.get(convId);
+  if (!d) {
+    d = { text: '', reasoning: '', addedTokens: 0 };
+    pendingRunDeltas.set(convId, d);
+  }
+  return d;
+}
+
+function scheduleRunDeltaFlush() {
+  if (runDeltaHandle != null) return;
+  const raf =
+    typeof requestAnimationFrame === 'function'
+      ? requestAnimationFrame
+      : (fn: FrameRequestCallback) => setTimeout(() => fn(Date.now()), 16) as unknown as number;
+  runDeltaHandle = raf(() => {
+    runDeltaHandle = null;
+    flushRunDeltas();
+  }) as unknown as number;
+}
+
+function flushRunDeltas() {
+  if (pendingRunDeltas.size === 0) return;
+  const batch = [...pendingRunDeltas.entries()];
+  pendingRunDeltas.clear();
+  useChatStore.setState((s) => {
+    let runs = s.streamingRuns;
+    let changed = false;
+    for (const [convId, d] of batch) {
+      const current = runs[convId];
+      if (!current) continue; // run ended mid-frame — drop the rest
+      const next: StreamRunState = {
+        content: d.text ? current.content + d.text : current.content,
+        reasoningContent: d.reasoning ? current.reasoningContent + d.reasoning : current.reasoningContent,
+        status: d.status !== undefined ? d.status : current.status,
+        toolName: d.toolName !== undefined ? d.toolName : current.toolName,
+      };
+      if (
+        next.content === current.content &&
+        next.reasoningContent === current.reasoningContent &&
+        next.status === current.status &&
+        next.toolName === current.toolName
+      ) {
+        continue;
+      }
+      if (!changed) {
+        runs = { ...s.streamingRuns };
+        changed = true;
+      }
+      runs[convId] = next;
+    }
+    return changed ? { streamingRuns: runs } : ({} as any);
+  });
+}
+
 /** Register a new run for `convId`, replacing any stale entry. */
 function startRun(convId: string): AbortController {
   const controller = new AbortController();
   runControllers.set(convId, controller);
   runFinishReasons.set(convId, null);
+  pendingRunDeltas.delete(convId);
   useChatStore.setState((s) => ({
     streamingRuns: { ...s.streamingRuns, [convId]: { ...EMPTY_RUN, status: 'thinking' } },
     isStreaming: true,
@@ -76,10 +146,32 @@ function patchRun(convId: string, patch: Partial<StreamRunState>) {
   });
 }
 
+/**
+ * Append streamed text/reasoning (and optional status) into the per-frame
+ * buffer. Callers that need a synchronous write (run end) should flushRunDeltas
+ * after the last queueRunDelta.
+ */
+function queueRunDelta(convId: string, delta: Partial<Omit<RunDelta, 'text' | 'reasoning' | 'addedTokens'>> & {
+  text?: string;
+  reasoning?: string;
+  addedTokens?: number;
+}) {
+  const d = ensureDelta(convId);
+  if (delta.text) d.text += delta.text;
+  if (delta.reasoning) d.reasoning += delta.reasoning;
+  if (delta.addedTokens) d.addedTokens += delta.addedTokens;
+  if (delta.status !== undefined) d.status = delta.status;
+  if (delta.toolName !== undefined) d.toolName = delta.toolName;
+  scheduleRunDeltaFlush();
+}
+
 /** Remove a conversation's run and recompute the any-run `isStreaming` flag. */
 function endRun(convId: string) {
   runControllers.delete(convId);
   runFinishReasons.delete(convId);
+  // Apply any last buffered tokens before the run disappears.
+  if (pendingRunDeltas.has(convId)) flushRunDeltas();
+  pendingRunDeltas.delete(convId);
   useChatStore.setState((s) => {
     if (!s.streamingRuns[convId]) return {} as any;
     const runs = { ...s.streamingRuns };
@@ -2669,26 +2761,24 @@ if (typeof window !== 'undefined' && (window as any).electronAPI?.chat?.onChunk)
     // A chunk for a run that already ended must not resurrect stale state.
     if (!run) return;
     if (chunk?.type === 'thinking') {
-      patchRun(convId, { status: 'thinking' });
+      queueRunDelta(convId, { status: 'thinking' });
     } else if (chunk?.type === 'reasoning') {
-      patchRun(convId, {
-        reasoningContent: run.reasoningContent + chunk.content,
-        status: 'thinking',
-      });
+      const piece = typeof chunk.content === 'string' ? chunk.content : '';
+      queueRunDelta(convId, { reasoning: piece, status: 'thinking' });
     } else if (chunk?.type === 'text') {
-      patchRun(convId, {
-        content: run.content + chunk.content,
-        status: 'writing',
-      });
+      const piece = typeof chunk.content === 'string' ? chunk.content : '';
+      queueRunDelta(convId, { text: piece, status: 'writing' });
     } else if (chunk?.type === 'tool_call') {
       // The model started a native tool call — its arguments stream in next, so
       // show which tool rather than an anonymous spinner.
-      patchRun(convId, { toolName: chunk.toolName || null, status: 'writing' });
+      queueRunDelta(convId, { toolName: chunk.toolName || null, status: 'writing' });
     } else if (chunk?.type === 'done') {
       runFinishReasons.set(convId, chunk.finishReason ?? runFinishReasons.get(convId) ?? null);
       if (chunk.reasoning_content) {
-        patchRun(convId, { reasoningContent: chunk.reasoning_content });
+        queueRunDelta(convId, { reasoning: chunk.reasoning_content });
       }
+      // Apply anything still buffered before the run is torn down by endRun.
+      flushRunDeltas();
     }
   });
 }

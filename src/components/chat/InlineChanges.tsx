@@ -1,4 +1,4 @@
-import { useMemo, useRef, useEffect, useState } from 'react';
+import { memo, useMemo, useRef, useEffect, useState } from 'react';
 import { FiCheck, FiX, FiRotateCcw, FiTerminal, FiTrash, FiCopy, FiMove, FiEdit, FiFilePlus, FiAlertTriangle } from 'react-icons/fi';
 import { useCodeChangesStore, useLanguageStore, useChatStore } from '../../stores';
 import { checkpointRewindIndex, type CodeChange } from '../../stores/codeChanges.store';
@@ -72,7 +72,9 @@ function opColor(change: CodeChange) {
  * File diffs stay inline. Commands only leave a compact status row here and are
  * reviewed in the single dialog owned by ChatView, keeping the transcript small.
  */
-export default function MessageChanges({
+export default memo(MessageChanges);
+
+function MessageChanges({
   messageId,
   onReviewCommand,
 }: {

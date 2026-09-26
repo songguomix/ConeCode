@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState, useMemo, Fragment } from 'react';
+import { useRef, useEffect, useState, useMemo, useCallback, Fragment } from 'react';
 import { FiMap, FiPlay, FiEdit3, FiChevronDown, FiChevronRight } from 'react-icons/fi';
 import { useChatStore, useLanguageStore, useCodeChangesStore, useWorkspaceStore, useModelStore, useSettingsStore } from '../../stores';
 import { orderForDisplay } from '../../stores/chat.store';
@@ -39,6 +39,8 @@ export default function ChatView() {
   // right where they were, folded behind the summary and one click away.
   const [showCompacted, setShowCompacted] = useState(false);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const onEditMessage = useCallback((id: string) => setEditingMessageId(id), []);
+  const onCancelEditMessage = useCallback(() => setEditingMessageId(null), []);
   const isEditing = rawMessages.some((m) => m.id === editingMessageId);
   useEffect(() => { setEditingMessageId(null); }, [activeConversationId]);
   const messages = useMemo(() => orderForDisplay(rawMessages), [rawMessages]);
@@ -201,8 +203,8 @@ export default function ChatView() {
                 isContinuation={i > 0 && isAiSide(messages[i - 1]) === isAiSide(msg)}
                 dimmed={compactedIds.has(msg.id)}
                 editing={editingMessageId === msg.id}
-                onEdit={() => setEditingMessageId(msg.id)}
-                onCancelEdit={() => setEditingMessageId(null)}
+                onEdit={onEditMessage}
+                onCancelEdit={onCancelEditMessage}
               />
               <MessageChanges messageId={msg.id} onReviewCommand={setReviewCommandId} />
             </Fragment>

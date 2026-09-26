@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { FiPlus, FiSettings, FiTrash2, FiGlobe, FiEdit3, FiMenu, FiTerminal, FiFileText, FiSmartphone, FiMonitor, FiCpu, FiGrid, FiShield, FiGitBranch, FiLoader } from 'react-icons/fi';
 import { useChatStore, useUIStore, useLanguageStore, usePreviewStore, useComputerStore, useModelStore, useCodeChangesStore } from '../../stores';
@@ -39,7 +39,14 @@ export default function Sidebar() {
   const [editTitle, setEditTitle] = useState('');
   const conversations = useChatStore((s) => s.conversations);
   const activeConversationId = useChatStore((s) => s.activeConversationId);
-  const runningConversationIds = useChatStore((s) => Object.keys(s.streamingRuns));
+  // String keys are referentially stable across runs with the same members, so
+  // token flushes that only rewrite streamingRuns[...].content don't re-render
+  // the sidebar. Object.keys() alone allocated a new array every store tick.
+  const runningKey = useChatStore((s) => Object.keys(s.streamingRuns).join('\0'));
+  const runningConversationIds = useMemo(
+    () => (runningKey ? runningKey.split('\0') : []),
+    [runningKey],
+  );
   const setActiveConversation = useChatStore((s) => s.setActiveConversation);
   const deleteConversation = useChatStore((s) => s.deleteConversation);
   const renameConversation = useChatStore((s) => s.renameConversation);
