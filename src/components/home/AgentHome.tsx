@@ -130,9 +130,9 @@ export default function AgentHome() {
   const showSkeletons = suggesting || (scanning && tasks.length === 0);
 
   return (
-    <div className="max-w-[900px] mx-auto w-full py-4">
+    <div className="max-w-[900px] mx-auto w-full py-4 px-4 min-w-0">
       {/* ---- Header: who you are, where you are ---- */}
-      <div className="flex items-start gap-3 mb-6">
+      <div className="flex items-start gap-3 mb-6 min-w-0">
         <AppIcon size={40} className="rounded-xl" />
         <div className="min-w-0 flex-1">
           <h1 className="text-xl font-semibold text-[var(--text-primary)] leading-tight">
@@ -186,16 +186,16 @@ export default function AgentHome() {
       />
 
       {/* ---- The main event: work the agent found ---- */}
-      <section className="mb-6">
-        <div className="flex items-center gap-2 mb-2.5">
-          <h2 className="text-sm font-semibold text-[var(--text-primary)]">{t('homeFindWork')}</h2>
+      <section className="mb-6 min-w-0">
+        <div className="flex items-center gap-2 mb-2.5 min-w-0">
+          <h2 className="text-sm font-semibold text-[var(--text-primary)] truncate">{t('homeFindWork')}</h2>
           {generatedAt && !busy && (
-            <span className="text-[11px] text-[var(--text-muted)]">{timeAgo(generatedAt, t)}</span>
+            <span className="text-[11px] text-[var(--text-muted)] shrink-0">{timeAgo(generatedAt, t)}</span>
           )}
           <button
             onClick={() => model && findWork(model.providerId, model.id, true)}
             disabled={!rootPath || !model || busy}
-            className="ml-auto inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-[var(--bg-3)] text-[var(--text-secondary)] border border-[var(--border)] hover:border-[var(--accent)] hover:text-[var(--accent)] transition-colors disabled:opacity-40 disabled:hover:border-[var(--border)]"
+            className="ml-auto inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-[var(--bg-3)] text-[var(--text-secondary)] border border-[var(--border)] hover:border-[var(--accent)] hover:text-[var(--accent)] transition-colors disabled:opacity-40 disabled:hover:border-[var(--border)] shrink-0"
           >
             <FiRefreshCw size={11} className={busy ? 'animate-spin' : ''} />
             {tasks.length ? t('homeRefindWork') : t('homeFindWorkAction')}
@@ -210,11 +210,11 @@ export default function AgentHome() {
             action={{ label: t('openFolder'), onClick: openFolder }}
           />
         ) : showSkeletons ? (
-          <div className="grid grid-cols-2 gap-2.5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
             {[0, 1, 2, 3].map((i) => <SkeletonCard key={i} />)}
           </div>
         ) : tasks.length ? (
-          <div className="grid grid-cols-2 gap-2.5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
             {tasks.map((task) => <TaskCard key={task.id} task={task} onStart={() => start(task.prompt)} t={t} />)}
           </div>
         ) : (
@@ -229,13 +229,13 @@ export default function AgentHome() {
 
       {/* ---- Pick up yesterday's thread ---- */}
       {resume.length > 0 && (
-        <section className="mb-6">
+        <section className="mb-6 min-w-0">
           <h2 className="text-sm font-semibold text-[var(--text-primary)] mb-2.5">{t('homeResume')}</h2>
-          <div className="space-y-2">
+          <div className="space-y-2 min-w-0">
             {resume.map((r) => (
               <div key={r.conversationId}
-                className="group rounded-xl border border-[var(--border)] bg-[var(--bg-2)] p-3 hover:border-[var(--accent)]/50 transition-colors">
-                <div className="flex items-start gap-3">
+                className="group rounded-xl border border-[var(--border)] bg-[var(--bg-2)] p-3 hover:border-[var(--accent)]/50 transition-colors min-w-0">
+                <div className="flex items-start gap-3 min-w-0">
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium text-[var(--text-primary)] truncate">{r.title}</span>
@@ -292,9 +292,9 @@ export default function AgentHome() {
       )}
 
       {/* ---- Start something new: pick one, it builds itself ---- */}
-      <section id="conecode-new-project" ref={ideasSectionRef}>
+      <section id="conecode-new-project" ref={ideasSectionRef} className="min-w-0">
         <ProjectIdeas />
-        <div className="mt-2.5 grid grid-cols-2 gap-2.5">
+        <div className="mt-2.5 grid grid-cols-1 sm:grid-cols-2 gap-2.5">
           <QuickAction icon={<FiPlus size={15} />} label={t('homeNewProject')} desc={t('homeNewProjectDesc')}
             onClick={() => {
               document.getElementById('conecode-project-idea')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -316,13 +316,13 @@ function TaskCard({ task, onStart, t }: { task: SuggestedTask; onStart: () => vo
   return (
     <button
       onClick={onStart}
-      className="group text-left rounded-xl border border-[var(--border)] bg-[var(--bg-2)] p-3 hover:border-[var(--accent)] hover:bg-[var(--bg-3)]/40 transition-all flex flex-col gap-2"
+      className="group text-left rounded-xl border border-[var(--border)] bg-[var(--bg-2)] p-3 hover:border-[var(--accent)] hover:bg-[var(--bg-3)]/40 transition-all flex flex-col gap-2 min-w-0 overflow-hidden"
     >
-      <div className="flex items-start gap-2">
+      <div className="flex items-start gap-2 min-w-0">
         <span className={`shrink-0 w-6 h-6 rounded-lg flex items-center justify-center ${style.bg} ${style.color}`}>
           {style.icon}
         </span>
-        <span className="text-sm font-medium text-[var(--text-primary)] leading-snug flex-1">{task.title}</span>
+        <span className="text-sm font-medium text-[var(--text-primary)] leading-snug flex-1 min-w-0 break-words">{task.title}</span>
         <FiArrowRight size={13} className="shrink-0 mt-1 text-[var(--text-muted)] opacity-0 group-hover:opacity-100 group-hover:text-[var(--accent)] transition-all" />
       </div>
 
@@ -360,16 +360,16 @@ function QuickAction({
 }) {
   return (
     <button onClick={onClick} disabled={disabled}
-      className={`text-left rounded-xl border p-3 transition-all disabled:opacity-40 ${
+      className={`text-left rounded-xl border p-3 transition-all disabled:opacity-40 min-w-0 overflow-hidden ${
         accent
           ? 'border-[var(--accent)]/40 bg-[var(--accent-soft)] hover:border-[var(--accent)]'
           : 'border-[var(--border)] bg-[var(--bg-2)] hover:border-[var(--accent)]/50'
       }`}>
-      <div className="flex items-center gap-2">
-        <span className={accent ? 'text-[var(--accent)]' : 'text-[var(--text-secondary)]'}>{icon}</span>
-        <span className="text-sm font-medium text-[var(--text-primary)]">{label}</span>
+      <div className="flex items-center gap-2 min-w-0">
+        <span className={`shrink-0 ${accent ? 'text-[var(--accent)]' : 'text-[var(--text-secondary)]'}`}>{icon}</span>
+        <span className="text-sm font-medium text-[var(--text-primary)] truncate">{label}</span>
       </div>
-      <p className="mt-1 text-xs text-[var(--text-muted)]">{desc}</p>
+      <p className="mt-1 text-xs text-[var(--text-muted)] break-words">{desc}</p>
     </button>
   );
 }

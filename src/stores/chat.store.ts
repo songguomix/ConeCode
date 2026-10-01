@@ -1491,15 +1491,6 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
         .filter((s) => s && s.trim())
         .join('\n');
 
-      console.log('[runAgentLoop] turn result', {
-        iteration,
-        contentLen: finalContent.length,
-        reasoningLen: finalReasoningContent.length,
-        finishReason: finishReason(),
-        hasContent: !!finalContent.trim(),
-        hasReasoning: !!finalReasoningContent.trim(),
-      });
-
       // Some models (e.g. Xiaomi mimo-v2.5-pro) put their ENTIRE reply — including
       // the ```json action — into reasoning_content and leave content empty. If
       // content is empty but reasoning has text, promote the reasoning so the
@@ -1592,11 +1583,6 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
           })
         : extractToolActionEntries(finalContent);
 
-      console.log('[runAgentLoop] actions parsed', {
-        native: nativeCalls.length,
-        count: pending.length,
-        actions: pending.map((p) => p.action?.action ?? 'invalid'),
-      });
       if (pending.length === 0) {
         // No action this turn. If the model was cut off at the token limit
         // (finish_reason 'length'), it likely meant to keep going (e.g. emit a
@@ -2184,6 +2170,7 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
 interface WorkspaceSnapshot {
   rootPath: string | null;
   files: any[];
+  extraRoots?: { path: string; files: any[] }[];
   selectedFile: string | null;
   fileContent: string | null;
   contextFiles: { path: string; content: string; isImage?: boolean; dataUrl?: string }[];
@@ -2260,33 +2247,27 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     conversationLoadRequest++;
     const ws = useWorkspaceStore.getState();
 
-    // Whether we're switching AWAY from an existing chat (vs. creating the very
-    // first one). Drives both the snapshot save and the workspace reset below.
-    const hadPrevious = !!state.activeConversationId;
-    if (hadPrevious) {
+    // One folder supports many conversations: a new chat inherits whatever
+    // folder is currently open instead of starting from "Open Folder". The
+    // previous chat's workspace snapshot is still saved, so switching back
+    // restores its editor state — but the folder itself is shared, not wiped.
+    if (state.activeConversationId) {
       const snapshot = ws.saveSnapshot();
       const newSnapshots = new Map(state.workspaceSnapshots);
       newSnapshots.set(state.activeConversationId!, snapshot);
       set({ workspaceSnapshots: newSnapshots });
     }
 
-    // A brand-new chat starts from the "Open Folder" state (rootPath null); a
-    // conversation created implicitly — first message/notice with a folder
-    // already open but no active chat — adopts that folder. Persisting it on the
-    // record keeps the binding across app restarts.
+    // Always adopt the current folder (possibly null). Persisting it on the
+    // record keeps the binding across app restarts, and several records may
+    // legitimately point at the same folder.
     const conv = await window.electronAPI.conversation.create({
       providerId,
       modelId,
-      rootPath: hadPrevious ? null : ws.rootPath,
+      rootPath: ws.rootPath,
     });
     useTodosStore.getState().clearTodos();
     set((s) => ({ conversations: [conv, ...s.conversations], activeConversationId: conv.id, messages: [] }));
-    // Switching away from a previous chat → start the new one with a clean file
-    // area ("Open Folder"); the old chat's snapshot was saved above, so returning
-    // restores its folder. But the FIRST, lazily-created chat has no previous one
-    // — keep whatever folder the user already opened so sending the first message
-    // doesn't wipe their workspace.
-    if (hadPrevious) ws.resetWorkspace();
     return conv.id;
   },
 
@@ -2323,17 +2304,33 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
     const snapshot = state.workspaceSnapshots.get(id);
     if (snapshot) {
-      ws.restoreSnapshot(snapshot);
+      // Same folder as the one already open → keep the live tree (it may have
+      // new files since the snapshot) and only restore editor-side state.
+      // Different folder → restore the whole snapshot.
+      if (snapshot.rootPath === ws.rootPath) {
+        ws.restoreSnapshot({ ...snapshot, files: ws.files, extraRoots: ws.extraRoots });
+      } else {
+        ws.restoreSnapshot(snapshot);
+      }
     } else {
       // No in-memory snapshot (e.g. after an app restart) — fall back to the
       // folder persisted on the conversation record, if it still exists.
       const conv = get().conversations.find((c) => c.id === id);
-      if (conv?.rootPath && (await ws.openFolderPath(conv.rootPath))) {
-        // Re-open the extra folders too. Any that have since been deleted or
-        // moved are skipped rather than failing the whole restore.
-        for (const extra of conv.extraRoots || []) await ws.addRoot(extra);
+      if (conv?.rootPath) {
+        if (conv.rootPath !== ws.rootPath) {
+          if (await ws.openFolderPath(conv.rootPath)) {
+            // Re-open the extra folders too. Any that have since been deleted or
+            // moved are skipped rather than failing the whole restore.
+            for (const extra of conv.extraRoots || []) await ws.addRoot(extra);
+          } else {
+            // Persisted folder is gone. Keep the current workspace instead of
+            // wiping it: other conversations may still be using it.
+          }
+        }
       } else {
-        ws.resetWorkspace();
+        // Legacy conversation with no folder bound (created before multi-chat
+        // per folder). Keep the current folder so a new chat under an open
+        // folder doesn't lose it — the user can close it explicitly.
       }
     }
   },

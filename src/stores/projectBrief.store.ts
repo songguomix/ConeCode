@@ -43,6 +43,9 @@ export const useProjectBriefStore = create<ProjectBriefStore>((set, get) => ({
         ],
       });
       if (request !== generation) return;
+      // parseProjectBrief never throws on non-empty output now: even a
+      // non-JSON reply becomes an editable prompt, so step 2 always has
+      // something to review before step 3 starts the work.
       const brief = parseProjectBrief(result);
       set({ brief, prompt: brief.prompt, generating: false });
     } catch {
@@ -58,20 +61,27 @@ export const useProjectBriefStore = create<ProjectBriefStore>((set, get) => ({
     };
     set({ starting: true, error: null, directory: null });
     try {
-      const directory = await createProjectDir(brief.title);
+      // If a folder is already open, continue in it ("顺下来") instead of
+      // forcing a new one. Only create ~/ConeCode Projects/<slug> when there
+      // is nothing open — describing an idea never requires opening a folder.
+      const existing = useWorkspaceStore.getState().rootPath;
+      const isNewDir = !existing;
+      const directory = existing ?? await createProjectDir(brief.title);
       if (!directory) throw new Error('briefFolderFailed');
       set({ directory });
       checkConversation(initialConversation);
       const chat = useChatStore.getState();
       const id = await chat.createConversation(providerId, modelId);
       checkConversation(id);
-      if (!await useWorkspaceStore.getState().openFolderPath(directory)) throw new Error('briefFolderFailed');
-      checkConversation(id);
+      if (isNewDir) {
+        if (!await useWorkspaceStore.getState().openFolderPath(directory)) throw new Error('briefFolderFailed');
+        checkConversation(id);
+      }
       await chat.setConversationFolder(directory);
       checkConversation(id);
       await chat.renameConversation(id, brief.title);
       checkConversation(id);
-      await chat.sendMessage(projectExecutionPrompt(prompt, directory), providerId, modelId);
+      await chat.sendMessage(projectExecutionPrompt(prompt, directory, isNewDir), providerId, modelId);
     } catch (error) {
       const code = error instanceof Error ? error.message : '';
       set({ error: ['briefFolderFailed', 'briefConversationChanged'].includes(code) ? code : 'briefStartFailed' });

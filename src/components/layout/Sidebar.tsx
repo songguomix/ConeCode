@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import { FiPlus, FiSettings, FiTrash2, FiGlobe, FiEdit3, FiMenu, FiTerminal, FiFileText, FiSmartphone, FiMonitor, FiCpu, FiGrid, FiShield, FiGitBranch, FiLoader } from 'react-icons/fi';
-import { useChatStore, useUIStore, useLanguageStore, usePreviewStore, useComputerStore, useModelStore, useCodeChangesStore } from '../../stores';
+import { FiPlus, FiSettings, FiTrash2, FiGlobe, FiEdit3, FiMenu, FiTerminal, FiFileText, FiSmartphone, FiMonitor, FiCpu, FiGrid, FiShield, FiGitBranch, FiLoader, FiFolder, FiMessageSquare } from 'react-icons/fi';
+import { useChatStore, useUIStore, useLanguageStore, usePreviewStore, useComputerStore, useModelStore, useCodeChangesStore, useWorkspaceStore } from '../../stores';
+import { groupConversationsByFolder } from '../../core/workspace/conversations';
 import { mostUrgentDot, type DotKind } from './panelDot';
 import FileTree from './FileTree';
 import type { Locale } from '../../stores/language.store';
@@ -65,6 +66,14 @@ export default function Sidebar() {
   const computerEnabled = useComputerStore((s) => s.enabled);
   const { locale, setLocale, t } = useLanguageStore();
   const changes = useCodeChangesStore((s) => s.changes);
+  const rootPath = useWorkspaceStore((s) => s.rootPath);
+
+  // One folder holds many conversations: group the list by its bound folder so
+  // it reads as "folder → its chats" instead of one flat, ambiguous list.
+  const groups = useMemo(
+    () => groupConversationsByFolder(conversations, rootPath),
+    [conversations, rootPath],
+  );
 
   // Five panel toggles used to sit in the toolbar as unlabelled 32px icons with
   // no gap between them. They are one menu now: labelled, and the row has room.
@@ -96,7 +105,7 @@ export default function Sidebar() {
   };
 
   return (
-    <div className="w-[260px] bg-[var(--bg-1)] flex flex-col">
+    <div className="w-[260px] flex flex-col bg-[var(--bg-1)]/70 backdrop-blur-2xl border-r border-[var(--glass-border)] min-h-0">
       {/* Drag region — tall enough to clear macOS traffic lights with a
           comfortable gap below them before the toolbar starts. */}
       <div className="h-[58px] shrink-0" style={{ WebkitAppRegion: 'drag' } as any} />
@@ -149,59 +158,109 @@ export default function Sidebar() {
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-2">
-        <div className="space-y-0.5">
-          {conversations.map((conv) => (
-            <div key={conv.id}
-              onClick={() => { if (editingId !== conv.id) setActiveConversation(conv.id); }}
-              className={`group flex items-center gap-2.5 px-3 py-2 rounded-xl cursor-pointer text-[13px] transition-all ${
-                activeConversationId === conv.id
-                  ? 'bg-[var(--bg-3)] text-[var(--text-primary)] font-medium'
-                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-3)]/50'
-              }`}>
-              {editingId === conv.id ? (
-                <input
-                  value={editTitle}
-                  onChange={(e) => setEditTitle(e.target.value)}
-                  onBlur={() => handleRename(conv.id)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !(e.nativeEvent as any).isComposing) handleRename(conv.id);
-                    if (e.key === 'Escape') setEditingId(null);
-                  }}
-                  className="flex-1 bg-[var(--bg-2)] border border-[var(--accent)] rounded-lg px-2 py-0.5 text-sm outline-none"
-                  autoFocus
-                  onClick={(e) => e.stopPropagation()}
-                />
-              ) : (
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-1.5 min-w-0">
-                    {runningConversationIds.includes(conv.id) && (
-                      <FiLoader size={12} className="shrink-0 text-[var(--accent)] animate-spin" />
-                    )}
-                    <span className="truncate">{conv.title}</span>
-                  </div>
-                  {changedFileNames(conv.id).length > 0 && (
-                    <div className="mt-0.5 truncate text-[10px] font-normal text-[var(--text-muted)]">
-                      {changedFileNames(conv.id).join(', ')}
-                    </div>
-                  )}
+      <div className="flex-1 overflow-y-auto px-2 min-w-0">
+        {/* Section 1 — conversations, grouped by folder. */}
+        <div className="px-1 pt-1 pb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)] flex items-center gap-1.5">
+          <FiMessageSquare size={10} />
+          {t('conversations')} · {conversations.length}
+        </div>
+        <div className="space-y-2.5">
+          {groups.map(([folderKey, items]) => {
+            const isCurrent = !!folderKey && folderKey === rootPath;
+            return (
+              <div key={folderKey || '__nofolder__'} className="min-w-0">
+                {/* Folder badge — a floating card above its chats, not a chat row. */}
+                <div
+                  className={`flex items-center gap-1.5 px-2.5 py-2 rounded-xl min-w-0 border backdrop-blur-md transition-all shadow-[0_2px_10px_rgba(0,0,0,0.06)] hover:shadow-[0_4px_14px_rgba(0,0,0,0.10)] hover:-translate-y-px ${
+                    isCurrent
+                      ? 'bg-[var(--accent-soft)] border-[var(--accent)]/35 text-[var(--accent)]'
+                      : 'bg-[var(--bg-2)]/85 border-[var(--border)] text-[var(--text-secondary)]'
+                  }`}
+                  title={folderKey || t('noFolderGroup')}
+                >
+                  <FiFolder size={13} className={`shrink-0 ${folderKey ? 'text-amber-500' : 'text-[var(--text-muted)]'}`} />
+                  <span className="flex-1 truncate text-[11px] font-semibold uppercase tracking-wide min-w-0">
+                    {folderKey ? folderKey.split('/').pop() || folderKey : t('noFolderGroup')}
+                  </span>
+                  <span className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+                    isCurrent ? 'bg-[var(--accent)] text-white' : 'bg-[var(--bg-3)] text-[var(--text-muted)]'
+                  }`}>
+                    {items.length}
+                  </span>
                 </div>
-              )}
-              <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                <button onClick={(e) => { e.stopPropagation(); setEditingId(conv.id); setEditTitle(conv.title); }}
-                  className="p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-4)]">
-                  <FiEdit3 size={12} />
-                </button>
-                <button onClick={(e) => { e.stopPropagation(); deleteConversation(conv.id); }}
-                  className="p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--error)] hover:bg-[var(--bg-4)]">
-                  <FiTrash2 size={12} />
-                </button>
+                {/* Chats hang under the floating folder badge, indented with a guide line. */}
+                <div className="ml-3 pl-2.5 border-l border-[var(--border)] mt-1.5 space-y-0.5">
+                  {items.map((conv) => (
+                    <div key={conv.id}
+                      onClick={() => { if (editingId !== conv.id) setActiveConversation(conv.id); }}
+                      className={`group flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer text-[13px] transition-all min-w-0 ${
+                        activeConversationId === conv.id
+                          ? 'bg-[var(--bg-3)] text-[var(--text-primary)] font-medium shadow-sm'
+                          : 'text-[var(--text-secondary)] hover:bg-[var(--bg-3)]/50'
+                      }`}>
+                      {editingId === conv.id ? (
+                        <input
+                          value={editTitle}
+                          onChange={(e) => setEditTitle(e.target.value)}
+                          onBlur={() => handleRename(conv.id)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && !(e.nativeEvent as any).isComposing) handleRename(conv.id);
+                            if (e.key === 'Escape') setEditingId(null);
+                          }}
+                          className="flex-1 min-w-0 bg-[var(--bg-2)] border border-[var(--accent)] rounded-lg px-2 py-0.5 text-sm outline-none"
+                          autoFocus
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                      ) : (
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span className={`shrink-0 w-1.5 h-1.5 rounded-full ${
+                              runningConversationIds.includes(conv.id)
+                                ? 'bg-[var(--accent)] animate-pulse'
+                                : activeConversationId === conv.id
+                                  ? 'bg-[var(--accent)]'
+                                  : 'bg-[var(--border)]'
+                            }`} />
+                            <span className="truncate">{conv.title}</span>
+                            {runningConversationIds.includes(conv.id) && (
+                              <FiLoader size={11} className="shrink-0 text-[var(--accent)] animate-spin" />
+                            )}
+                          </div>
+                          {changedFileNames(conv.id).length > 0 && (
+                            <div className="mt-0.5 truncate text-[10px] font-normal text-[var(--text-muted)]">
+                              {changedFileNames(conv.id).join(', ')}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity shrink-0">
+                        <button onClick={(e) => { e.stopPropagation(); setEditingId(conv.id); setEditTitle(conv.title); }}
+                          className="p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-4)]">
+                          <FiEdit3 size={12} />
+                        </button>
+                        <button onClick={(e) => { e.stopPropagation(); deleteConversation(conv.id); }}
+                          className="p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--error)] hover:bg-[var(--bg-4)]">
+                          <FiTrash2 size={12} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
+          {conversations.length === 0 && (
+            <p className="px-2 py-1 text-[11px] text-[var(--text-muted)]">{t('homeOpenFolderBody')}</p>
+          )}
         </div>
 
-        <div className="border-t border-[var(--border)] mt-2">
+        {/* Section 2 — the open folder's file tree, labelled so it never reads
+            as part of the conversation list above. */}
+        <div className="border-t border-[var(--border)] mt-3">
+          <div className="px-1 pt-1.5 pb-0.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)] flex items-center gap-1.5">
+            <FiFolder size={10} className="text-amber-500" />
+            {t('files')}
+          </div>
           <FileTree />
         </div>
       </div>

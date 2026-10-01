@@ -14,9 +14,14 @@ describe('parseProjectBrief', () => {
     expect(parseProjectBrief({ choices: [{ message: { content: raw } }] })).toEqual({ title: 'A', prompt: 'B' });
   });
 
-  it('rejects a missing title or prompt', () => {
-    expect(() => parseProjectBrief({ choices: [{ message: { content: '{"title":"A"}' } }] })).toThrow();
-    expect(() => parseProjectBrief({ choices: [{ message: { content: '{"prompt":"B"}' } }] })).toThrow();
+  it('falls back to raw text so output is always a prompt', () => {
+    const onlyTitle = parseProjectBrief({ choices: [{ message: { content: '{"title":"A"}' } }] });
+    expect(onlyTitle.prompt).toContain('{"title":"A"}');
+    const onlyPrompt = parseProjectBrief({ choices: [{ message: { content: '{"prompt":"B"}' } }] });
+    expect(onlyPrompt.prompt).toContain('{"prompt":"B"}');
+    const markdown = parseProjectBrief({ choices: [{ message: { content: '# My App\nBuild it well.' } }] });
+    expect(markdown.title).toBe('My App');
+    expect(markdown.prompt).toContain('Build it well.');
   });
 });
 
@@ -28,6 +33,13 @@ describe('projectExecutionPrompt', () => {
     expect(prompt).toMatch(/README\.md is already in the directory/i);
     expect(prompt).toMatch(/keep README\.md complete and accurate/i);
     expect(prompt).toMatch(/Replace every placeholder section/i);
+  });
+
+  it('reuses an already-open directory without claiming a fresh README', () => {
+    const prompt = projectExecutionPrompt('Build the app.', '/proj/existing', false);
+    expect(prompt).toContain('/proj/existing');
+    expect(prompt).toMatch(/already open, reuse it/i);
+    expect(prompt).toMatch(/Preserve existing user files/i);
   });
 });
 

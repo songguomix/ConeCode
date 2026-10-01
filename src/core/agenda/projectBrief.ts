@@ -23,13 +23,30 @@ export function parseProjectBrief(result: any): ProjectBrief {
   const text = typeof message?.content === 'string' ? message.content
     : Array.isArray(result?.content) ? result.content.map((b: any) => b?.text || '').join('')
     : (result?.candidates?.[0]?.content?.parts || []).map((p: any) => p?.text || '').join('');
-  const json = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-  const data = JSON.parse(json);
-  if (typeof data?.title !== 'string' || !data.title.trim() ||
-      typeof data?.prompt !== 'string' || !data.prompt.trim()) throw new Error('Invalid project brief');
-  return { title: data.title.trim().slice(0, 80), prompt: data.prompt.trim() };
+  const raw = text.trim();
+  const json = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  try {
+    const data = JSON.parse(json);
+    if (typeof data?.title === 'string' && data.title.trim() &&
+        typeof data?.prompt === 'string' && data.prompt.trim()) {
+      return { title: data.title.trim().slice(0, 80), prompt: data.prompt.trim() };
+    }
+  } catch {
+    // Fall through to the raw-text fallback below: output is always a prompt.
+  }
+  // Tolerant fallback — the model sometimes returns plain Markdown instead of
+  // JSON. Never fail: derive a title from the first line and keep the whole
+  // text as the editable prompt so step 2 ("review the prompt") always has
+  // something to show.
+  const firstLine = raw.split('\n').map((l: string) => l.trim()).find((l: string) => l.length > 0) || 'New Project';
+  const title = firstLine.replace(/^#+\s*/, '').replace(/^["'「『]+|["'」』]+$/g, '').slice(0, 80) || 'New Project';
+  if (!raw) throw new Error('Invalid project brief');
+  return { title, prompt: raw };
 }
 
-export function projectExecutionPrompt(prompt: string, directory: string): string {
-  return `${prompt.trim()}\n\n---\nProject directory (already created): ${directory}\nA starter README.md is already in the directory. Build this project here. Keep project files inside this directory, follow the current approval settings, implement the agreed requirements, and run the relevant checks.\nAlways keep README.md complete and accurate: what the project is, how to install/run/test it, and current status or limitations. Replace every placeholder section with real content before reporting done.\nReport actual results and any remaining blockers.`;
+export function projectExecutionPrompt(prompt: string, directory: string, isNewDir = true): string {
+  if (isNewDir) {
+    return `${prompt.trim()}\n\n---\nProject directory (already created): ${directory}\nA starter README.md is already in the directory. Build this project here. Keep project files inside this directory, follow the current approval settings, implement the agreed requirements, and run the relevant checks.\nAlways keep README.md complete and accurate: what the project is, how to install/run/test it, and current status or limitations. Replace every placeholder section with real content before reporting done.\nReport actual results and any remaining blockers.`;
+  }
+  return `${prompt.trim()}\n\n---\nProject directory (already open, reuse it): ${directory}\nBuild this project inside this existing directory. Preserve existing user files unless the requirements explicitly ask to change them, follow the current approval settings, implement the agreed requirements, and run the relevant checks.\nAlways keep README.md complete and accurate: what the project is, how to install/run/test it, and current status or limitations. Replace every placeholder section with real content before reporting done.\nReport actual results and any remaining blockers.`;
 }

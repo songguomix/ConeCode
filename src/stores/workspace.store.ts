@@ -96,8 +96,8 @@ interface WorkspaceStore extends ProjectConfig {
   addRootFromDialog: () => Promise<AddRootResult>;
   removeRoot: (folderPath: string) => void;
   ensureFileList: () => Promise<string[]>;
-  saveSnapshot: () => { rootPath: string | null; files: FileItem[]; selectedFile: string | null; fileContent: string | null; selectedFileIsImage: boolean; contextFiles: ContextFile[] } & ProjectConfig;
-  restoreSnapshot: (snapshot: { rootPath: string | null; files: FileItem[]; selectedFile: string | null; fileContent: string | null; selectedFileIsImage?: boolean; contextFiles: ContextFile[] } & Partial<ProjectConfig>) => void;
+  saveSnapshot: () => { rootPath: string | null; files: FileItem[]; extraRoots: ExtraRoot[]; selectedFile: string | null; fileContent: string | null; selectedFileIsImage: boolean; contextFiles: ContextFile[] } & ProjectConfig;
+  restoreSnapshot: (snapshot: { rootPath: string | null; files: FileItem[]; extraRoots?: ExtraRoot[]; selectedFile: string | null; fileContent: string | null; selectedFileIsImage?: boolean; contextFiles: ContextFile[] } & Partial<ProjectConfig>) => void;
 }
 
 async function loadDir(dirPath: string): Promise<FileItem[]> {

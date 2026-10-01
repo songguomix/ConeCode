@@ -69,9 +69,9 @@ export default function ProjectIdeas() {
         </button>
       </div>
 
-      <div className="grid grid-cols-3 gap-2.5">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
         {loadingIdeas && ideas.length === 0 && [0, 1, 2, 3, 4, 5].map((i) => (
-          <div key={i} className="rounded-xl border border-[var(--border)] bg-[var(--bg-2)] p-3 min-h-[112px] animate-pulse">
+          <div key={i} className="rounded-xl border border-[var(--border)] bg-[var(--bg-2)] p-3 min-h-[112px] animate-pulse min-w-0">
             <div className="h-3 w-2/3 rounded bg-[var(--bg-3)]" />
             <div className="mt-2.5 h-2.5 w-full rounded bg-[var(--bg-3)]" />
             <div className="mt-1.5 h-2.5 w-4/5 rounded bg-[var(--bg-3)]" />
@@ -96,13 +96,13 @@ function IdeaCard({
     <button
       onClick={onPick}
       disabled={disabled}
-      className="group text-left rounded-xl border border-[var(--border)] bg-[var(--bg-2)] p-3 hover:border-[var(--accent)] hover:bg-[var(--bg-3)]/40 transition-all disabled:opacity-40 flex flex-col gap-1.5 min-h-[112px]"
+      className="group text-left rounded-xl border border-[var(--border)] bg-[var(--bg-2)] p-3 hover:border-[var(--accent)] hover:bg-[var(--bg-3)]/40 transition-all disabled:opacity-40 flex flex-col gap-1.5 min-h-[112px] min-w-0 overflow-hidden"
     >
-      <div className="flex items-start gap-2">
-        <span className="text-sm font-medium text-[var(--text-primary)] leading-snug flex-1">{idea.title}</span>
+      <div className="flex items-start gap-2 min-w-0">
+        <span className="text-sm font-medium text-[var(--text-primary)] leading-snug flex-1 min-w-0 break-words">{idea.title}</span>
         <FiPlay size={12} className="shrink-0 mt-1 text-[var(--text-muted)] opacity-0 group-hover:opacity-100 group-hover:text-[var(--accent)] transition-all" />
       </div>
-      <p className="text-[11px] text-[var(--text-muted)] leading-relaxed line-clamp-3">{idea.description}</p>
+      <p className="text-[11px] text-[var(--text-muted)] leading-relaxed line-clamp-3 break-words">{idea.description}</p>
       <div className="mt-auto flex items-center gap-1.5 flex-wrap">
         {idea.stack && (
           <span className="text-[10px] font-mono text-[var(--text-secondary)] truncate max-w-full">{idea.stack}</span>

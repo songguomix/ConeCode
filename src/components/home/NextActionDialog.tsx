@@ -96,25 +96,25 @@ export default function NextActionDialog({
 
   return (
     <section
-      className="mb-6 rounded-2xl border border-[var(--accent)]/40 bg-[var(--accent-soft)] p-4"
+      className="mb-6 rounded-2xl border border-[var(--accent)]/40 bg-[var(--accent-soft)] p-4 min-w-0 overflow-hidden"
       aria-label={t('recLabel')}
     >
-      <div className="flex items-center gap-2 mb-1">
+      <div className="flex items-center gap-2 mb-1 min-w-0">
         <FiArrowRight size={14} className="text-[var(--accent)] shrink-0" />
         <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--accent)]">
           {t('recLabel')}
         </span>
       </div>
-      <div className="mb-3 flex items-baseline gap-2 flex-wrap">
-        <span className="text-sm font-medium text-[var(--text-primary)]">
+      <div className="mb-3 flex items-baseline gap-2 flex-wrap min-w-0">
+        <span className="text-sm font-medium text-[var(--text-primary)] break-words">
           {t(recommendation.key)}
         </span>
         {recommendation.detail && (
-          <span className="text-xs text-[var(--text-secondary)] truncate">{recommendation.detail}</span>
+          <span className="text-xs text-[var(--text-secondary)] truncate min-w-0 flex-1">{recommendation.detail}</span>
         )}
       </div>
 
-      <div className="rounded-xl bg-[var(--bg-2)] border border-[var(--border)] p-3 focus-within:border-[var(--accent)]/60 focus-within:ring-1 focus-within:ring-[var(--accent)]/40">
+      <div className="rounded-xl bg-[var(--bg-2)] border border-[var(--border)] p-3 focus-within:border-[var(--accent)]/60 focus-within:ring-1 focus-within:ring-[var(--accent)]/40 min-w-0">
         <textarea
           aria-label={t('recDialogInputAria')}
           value={draft}
@@ -126,8 +126,8 @@ export default function NextActionDialog({
           placeholder={placeholder}
           className="block w-full resize-y min-h-[72px] max-h-48 bg-transparent text-sm leading-relaxed text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)]"
         />
-        <div className="mt-2 flex items-center gap-2">
-          <span className="flex-1 text-[11px] text-[var(--text-muted)]">
+        <div className="mt-2 flex items-center gap-2 flex-wrap">
+          <span className="flex-1 min-w-[120px] text-[11px] text-[var(--text-muted)]">
             {model ? t('recDialogHint') : t('selectModelHint')}
           </span>
           {recommendation.kind === 'start' && !hasFolder && !draft.trim() ? (
