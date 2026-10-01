@@ -68,6 +68,11 @@ interface WorkspaceStore extends ProjectConfig {
   selectedFile: string | null;
   fileContent: string | null;
   selectedFileIsImage: boolean;
+  /** VS Code-style open editors. selectedFile is always the active tab. */
+  openTabs: string[];
+  /** Unsaved-edit markers per tab (not persisted in snapshots). */
+  dirtyTabs: Record<string, boolean>;
+  setTabDirty: (filePath: string, dirty: boolean) => void;
   contextFiles: ContextFile[];
   // Flat, relative file list of the workspace, lazily built for @-mention
   // autocomplete. Null until first requested / rebuilt after a refresh.
@@ -80,11 +85,22 @@ interface WorkspaceStore extends ProjectConfig {
   openFolderPath: (folderPath: string) => Promise<boolean>;
   readDir: (dirPath: string) => Promise<FileItem[]>;
   toggleExpand: (dirPath: string) => void;
+  collapseAll: () => void;
   selectFile: (filePath: string) => Promise<void>;
   closeFile: () => void;
+  /** Close one editor tab; the active tab falls back to a neighbour. */
+  closeTab: (filePath: string) => Promise<void>;
+  closeOtherTabs: (filePath: string) => Promise<void>;
+  closeAllTabs: () => void;
+  /** IDE file operations — each refreshes only the affected tree branch. */
+  createFile: (parentDir: string, name: string) => Promise<string | null>;
+  createFolder: (parentDir: string, name: string) => Promise<string | null>;
+  renamePath: (oldPath: string, newName: string) => Promise<string | null>;
+  deletePath: (targetPath: string, isDirectory: boolean) => Promise<boolean>;
   resetWorkspace: () => void;
   saveFile: (content: string) => Promise<void>;
   refreshFiles: () => Promise<void>;
+  refreshDir: (dirPath: string) => Promise<void>;
   addContextFile: (filePath: string) => Promise<void>;
   addPastedImage: (dataUrl: string, name?: string) => void;
   removeContextFile: (filePath: string) => void;
@@ -96,8 +112,8 @@ interface WorkspaceStore extends ProjectConfig {
   addRootFromDialog: () => Promise<AddRootResult>;
   removeRoot: (folderPath: string) => void;
   ensureFileList: () => Promise<string[]>;
-  saveSnapshot: () => { rootPath: string | null; files: FileItem[]; extraRoots: ExtraRoot[]; selectedFile: string | null; fileContent: string | null; selectedFileIsImage: boolean; contextFiles: ContextFile[] } & ProjectConfig;
-  restoreSnapshot: (snapshot: { rootPath: string | null; files: FileItem[]; extraRoots?: ExtraRoot[]; selectedFile: string | null; fileContent: string | null; selectedFileIsImage?: boolean; contextFiles: ContextFile[] } & Partial<ProjectConfig>) => void;
+  saveSnapshot: () => { rootPath: string | null; files: FileItem[]; extraRoots: ExtraRoot[]; selectedFile: string | null; openTabs: string[]; fileContent: string | null; selectedFileIsImage: boolean; contextFiles: ContextFile[] } & ProjectConfig;
+  restoreSnapshot: (snapshot: { rootPath: string | null; files: FileItem[]; extraRoots?: ExtraRoot[]; selectedFile: string | null; openTabs?: string[]; fileContent: string | null; selectedFileIsImage?: boolean; contextFiles: ContextFile[] } & Partial<ProjectConfig>) => void;
 }
 
 async function loadDir(dirPath: string): Promise<FileItem[]> {
@@ -107,6 +123,36 @@ async function loadDir(dirPath: string): Promise<FileItem[]> {
     expanded: false,
     children: item.isDirectory ? [] : undefined,
   }));
+}
+
+/** File name validation shared by create/rename (VS Code rejects these too). */
+export function isValidFileName(name: string): boolean {
+  const trimmed = name.trim();
+  if (!trimmed || trimmed === '.' || trimmed === '..') return false;
+  if (trimmed.length > 255) return false;
+  return !/[<>:"|?*\0]/.test(trimmed) && !trimmed.endsWith('.');
+}
+
+function setExpandedRecursive(items: FileItem[], expanded: boolean): FileItem[] {
+  return items.map((item) => ({
+    ...item,
+    expanded: item.isDirectory ? expanded : undefined,
+    children: item.children ? setExpandedRecursive(item.children, expanded) : item.children,
+  }));
+}
+
+/** Remove a path (and, for dirs, everything under it) from a tree. */
+export function removePathFromTree(items: FileItem[], targetPath: string): FileItem[] {
+  const out: FileItem[] = [];
+  for (const item of items) {
+    if (item.path === targetPath) continue;
+    if (item.children?.length) {
+      out.push({ ...item, children: removePathFromTree(item.children, targetPath) });
+    } else {
+      out.push(item);
+    }
+  }
+  return out;
 }
 
 // First line of a custom-command markdown file, used as its palette description.
@@ -162,6 +208,8 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   selectedFile: null,
   fileContent: null,
   selectedFileIsImage: false,
+  openTabs: [],
+  dirtyTabs: {},
   contextFiles: [],
   agentsMd: null,
   agentsMdPath: null,
@@ -185,7 +233,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     const stat = await window.electronAPI.fs.stat(folderPath);
     if (!stat?.isDirectory) return false;
     const files = await loadDir(folderPath);
-    set({ rootPath: folderPath, files, extraRoots: [], selectedFile: null, fileContent: null, selectedFileIsImage: false, fileList: null });
+    set({ rootPath: folderPath, files, extraRoots: [], selectedFile: null, openTabs: [], dirtyTabs: {}, fileContent: null, selectedFileIsImage: false, fileList: null });
     // Load AGENTS.md + custom commands in the background; don't block the open.
     const cfg = await loadProjectConfig(folderPath);
     set(cfg);
@@ -234,24 +282,183 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     set({ files: await updateFiles(files) });
   },
 
+  collapseAll: () => {
+    set((s) => ({
+      files: setExpandedRecursive(s.files, false),
+      extraRoots: s.extraRoots.map((r) => ({ ...r, files: setExpandedRecursive(r.files, false) })),
+    }));
+  },
+
+  setTabDirty: (filePath, dirty) => {
+    set((s) => {
+      if (!!s.dirtyTabs[filePath] === dirty) return {} as any;
+      const dirtyTabs = { ...s.dirtyTabs };
+      if (dirty) dirtyTabs[filePath] = true;
+      else delete dirtyTabs[filePath];
+      return { dirtyTabs };
+    });
+  },
+
   selectFile: async (filePath: string) => {
     // Images: load as a base64 data URL so the editor can render them instead
     // of dumping raw bytes as garbled text into the textarea.
     if (isImageFile(filePath)) {
       const dataUrl = await window.electronAPI.fs.readFileBase64(filePath);
-      set({ selectedFile: filePath, fileContent: dataUrl, selectedFileIsImage: true });
+      set((s) => ({
+        selectedFile: filePath,
+        fileContent: dataUrl,
+        selectedFileIsImage: true,
+        openTabs: s.openTabs.includes(filePath) ? s.openTabs : [...s.openTabs, filePath],
+      }));
       return;
     }
     const content = await window.electronAPI.fs.readFile(filePath);
-    set({ selectedFile: filePath, fileContent: content, selectedFileIsImage: false });
+    set((s) => ({
+      selectedFile: filePath,
+      fileContent: content,
+      selectedFileIsImage: false,
+      openTabs: s.openTabs.includes(filePath) ? s.openTabs : [...s.openTabs, filePath],
+    }));
   },
 
   closeFile: () => {
+    const { selectedFile } = get();
+    if (selectedFile) {
+      void get().closeTab(selectedFile);
+      return;
+    }
     set({ selectedFile: null, fileContent: null, selectedFileIsImage: false });
   },
 
+  closeTab: async (filePath: string) => {
+    const { openTabs, selectedFile } = get();
+    if (!openTabs.includes(filePath)) {
+      if (selectedFile === filePath) {
+        set({ selectedFile: null, fileContent: null, selectedFileIsImage: false });
+      }
+      return;
+    }
+    const remaining = openTabs.filter((p) => p !== filePath);
+    if (selectedFile !== filePath) {
+      set((s) => {
+        const dirtyTabs = { ...s.dirtyTabs };
+        delete dirtyTabs[filePath];
+        return { openTabs: remaining, dirtyTabs };
+      });
+      return;
+    }
+    // The active tab is closing — fall back to a neighbour (right, else left).
+    const idx = openTabs.indexOf(filePath);
+    const next = remaining[Math.min(idx, remaining.length - 1)] ?? null;
+    if (!next) {
+      set((s) => {
+        const dirtyTabs = { ...s.dirtyTabs };
+        delete dirtyTabs[filePath];
+        return { openTabs: remaining, dirtyTabs, selectedFile: null, fileContent: null, selectedFileIsImage: false };
+      });
+      return;
+    }
+    set((s) => {
+      const dirtyTabs = { ...s.dirtyTabs };
+      delete dirtyTabs[filePath];
+      return { openTabs: remaining, dirtyTabs };
+    });
+    await get().selectFile(next);
+  },
+
+  closeOtherTabs: async (filePath: string) => {
+    const { openTabs } = get();
+    if (!openTabs.includes(filePath)) return;
+    set((s) => {
+      const dirtyTabs: Record<string, boolean> = {};
+      if (s.dirtyTabs[filePath]) dirtyTabs[filePath] = true;
+      return { openTabs: [filePath], dirtyTabs };
+    });
+    await get().selectFile(filePath);
+  },
+
+  closeAllTabs: () => {
+    set({ openTabs: [], dirtyTabs: {}, selectedFile: null, fileContent: null, selectedFileIsImage: false });
+  },
+
+  createFile: async (parentDir: string, name: string) => {
+    const clean = name.trim().replace(/[/\\]+/g, '');
+    if (!isValidFileName(clean)) return null;
+    const full = `${parentDir}/${clean}`;
+    const ok = await window.electronAPI.fs.writeFile(full, '');
+    if (!ok) return null;
+    await get().refreshDir(parentDir);
+    await get().selectFile(full);
+    return full;
+  },
+
+  createFolder: async (parentDir: string, name: string) => {
+    const clean = name.trim().replace(/[/\\]+/g, '');
+    if (!isValidFileName(clean)) return null;
+    const full = `${parentDir}/${clean}`;
+    const ok = await window.electronAPI.fs.createDir(full);
+    if (!ok) return null;
+    await get().refreshDir(parentDir);
+    return full;
+  },
+
+  renamePath: async (oldPath: string, newName: string) => {
+    const clean = newName.trim().replace(/[/\\]+/g, '');
+    if (!isValidFileName(clean)) return null;
+    const dir = oldPath.includes('/') ? oldPath.slice(0, oldPath.lastIndexOf('/')) : '';
+    const newPath = dir ? `${dir}/${clean}` : clean;
+    if (newPath === oldPath) return oldPath;
+    const ok = await window.electronAPI.fs.rename(oldPath, newPath);
+    if (!ok) return null;
+    // Retarget any open tabs at or under the renamed path.
+    const { openTabs, selectedFile } = get();
+    const retarget = (p: string) => (p === oldPath || p.startsWith(oldPath + '/') ? newPath + p.slice(oldPath.length) : p);
+    const tabs = openTabs.map(retarget);
+    set({ openTabs: tabs, fileList: null });
+    if (selectedFile && (selectedFile === oldPath || selectedFile.startsWith(oldPath + '/'))) {
+      await get().selectFile(retarget(selectedFile));
+    }
+    await get().refreshFiles();
+    return newPath;
+  },
+
+  deletePath: async (targetPath: string, isDirectory: boolean) => {
+    const ok = isDirectory
+      ? await window.electronAPI.fs.deleteDir(targetPath)
+      : await window.electronAPI.fs.deleteFile(targetPath);
+    if (!ok) return false;
+    // Close any tabs at or under the deleted path.
+    const { openTabs, selectedFile } = get();
+    const doomed = openTabs.filter((p) => p === targetPath || p.startsWith(targetPath + '/'));
+    const remaining = openTabs.filter((p) => !(p === targetPath || p.startsWith(targetPath + '/')));
+    set((s) => {
+      const dirtyTabs = { ...s.dirtyTabs };
+      for (const p of doomed) delete dirtyTabs[p];
+      return { dirtyTabs };
+    });
+    try {
+      const { useAiHighlightsStore } = await import('./aiHighlights.store');
+      for (const p of doomed) useAiHighlightsStore.getState().clearFile(p);
+    } catch {}
+    if (selectedFile && (selectedFile === targetPath || selectedFile.startsWith(targetPath + '/'))) {
+      const idx = Math.max(0, openTabs.indexOf(selectedFile) - doomed.length);
+      const next = remaining[Math.min(idx, remaining.length - 1)] ?? null;
+      set({ openTabs: remaining });
+      if (next) await get().selectFile(next);
+      else set({ selectedFile: null, fileContent: null, selectedFileIsImage: false });
+    } else {
+      set({ openTabs: remaining });
+    }
+    set((s) => ({
+      files: removePathFromTree(s.files, targetPath),
+      extraRoots: s.extraRoots.map((r) => ({ ...r, files: removePathFromTree(r.files, targetPath) })),
+      fileList: null,
+    }));
+    return true;
+  },
+
   resetWorkspace: () => {
-    set({ rootPath: null, files: [], extraRoots: [], selectedFile: null, fileContent: null, selectedFileIsImage: false, contextFiles: [], agentsMd: null, agentsMdPath: null, memoryFiles: [], customCommands: [], fileList: null, mcpTools: [] });
+    set({ rootPath: null, files: [], extraRoots: [], selectedFile: null, openTabs: [], dirtyTabs: {}, fileContent: null, selectedFileIsImage: false, contextFiles: [], agentsMd: null, agentsMdPath: null, memoryFiles: [], customCommands: [], fileList: null, mcpTools: [] });
   },
 
   // Re-read AGENTS.md and custom commands from disk — call after the agent
@@ -300,12 +507,21 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     const path = normalizeRoot(folderPath);
     // Closing a folder must not leave a file from it open in the editor.
     const state = get();
+    const remaining = state.openTabs.filter((p) => rootOf(p, [path]) === null);
     const closesOpenFile = state.selectedFile ? rootOf(state.selectedFile, [path]) !== null : false;
+    const dirtyTabs = Object.fromEntries(
+      Object.entries(state.dirtyTabs).filter(([p]) => rootOf(p, [path]) === null),
+    );
     set({
       extraRoots: state.extraRoots.filter((r) => r.path !== path),
       fileList: null,
+      openTabs: remaining,
+      dirtyTabs,
       ...(closesOpenFile ? { selectedFile: null, fileContent: null, selectedFileIsImage: false } : {}),
     });
+    if (closesOpenFile && remaining.length) {
+      void get().selectFile(remaining[remaining.length - 1]);
+    }
   },
 
   // Lazily build (and cache) a flat list of workspace-relative file paths for
@@ -330,12 +546,12 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   },
 
   saveSnapshot: () => {
-    const { rootPath, files, extraRoots, selectedFile, fileContent, selectedFileIsImage, contextFiles, agentsMd, agentsMdPath, memoryFiles, customCommands } = get();
-    return { rootPath, files, extraRoots, selectedFile, fileContent, selectedFileIsImage, contextFiles, agentsMd, agentsMdPath, memoryFiles, customCommands };
+    const { rootPath, files, extraRoots, selectedFile, openTabs, fileContent, selectedFileIsImage, contextFiles, agentsMd, agentsMdPath, memoryFiles, customCommands } = get();
+    return { rootPath, files, extraRoots, selectedFile, openTabs, fileContent, selectedFileIsImage, contextFiles, agentsMd, agentsMdPath, memoryFiles, customCommands };
   },
 
   restoreSnapshot: (snapshot) => {
-    set({ fileList: null, extraRoots: [], agentsMd: null, agentsMdPath: null, memoryFiles: [], customCommands: [], ...snapshot });
+    set({ fileList: null, extraRoots: [], openTabs: [], agentsMd: null, agentsMdPath: null, memoryFiles: [], customCommands: [], ...snapshot });
   },
 
   addContextFile: async (filePath: string) => {
@@ -382,9 +598,68 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   },
 
   refreshFiles: async () => {
-    const { rootPath } = get();
+    const { rootPath, extraRoots } = get();
     if (!rootPath) return;
     const files = await loadDir(rootPath);
-    set({ files, fileList: null });
+    // Preserve expansion across a full refresh so create/rename/delete don't
+    // collapse the tree the user is looking at.
+    const prev = new Map(get().files.flatMap(function walk(items: FileItem[]): [string, boolean][] {
+      return items.flatMap((i) => [[i.path, !!i.expanded], ...(i.children ? walk(i.children) : [])]);
+    }));
+    const restore = (items: FileItem[]): FileItem[] => items.map((i) => ({
+      ...i,
+      expanded: prev.get(i.path) ?? false,
+      children: i.children ? restore(i.children) : i.children,
+    }));
+    void extraRoots;
+    set({ files: restore(files), fileList: null });
+  },
+
+  refreshDir: async (dirPath: string) => {
+    const { rootPath, extraRoots, files } = get();
+    if (!rootPath) return;
+    // The tree only stores children for expanded dirs; a create inside a
+    // collapsed dir just needs an expansion to reveal it.
+    const owner = extraRoots.find((r) => dirPath === r.path || dirPath.startsWith(r.path + '/'));
+    const fresh = await loadDir(dirPath).catch(() => null);
+    if (!fresh) return;
+    // Merge: keep the expanded state of subdirectories that still exist.
+    const prevExpanded = new Map<string, FileItem>();
+    const collect = (items: FileItem[]) => {
+      for (const i of items) {
+        if (i.isDirectory) {
+          prevExpanded.set(i.path, i);
+          if (i.children) collect(i.children);
+        }
+      }
+    };
+    collect(owner ? owner.files : files);
+    const merged = fresh.map((item) => {
+      const prev = prevExpanded.get(item.path);
+      if (prev && item.isDirectory) {
+        return { ...item, expanded: !!prev.expanded, children: prev.children ?? item.children };
+      }
+      return item;
+    });
+    const graft = (items: FileItem[]): FileItem[] => items.map((item) => {
+      if (item.path === dirPath && item.isDirectory) {
+        return { ...item, expanded: true, children: merged };
+      }
+      if (item.children) return { ...item, children: graft(item.children) };
+      return item;
+    });
+    if (owner) {
+      if (dirPath === owner.path) {
+        set({ extraRoots: extraRoots.map((r) => (r.path === owner.path ? { ...r, files: merged.map((m) => ({ ...m, expanded: prevExpanded.get(m.path)?.expanded ?? false })) } : r)), fileList: null });
+      } else {
+        set({ extraRoots: extraRoots.map((r) => (r.path === owner.path ? { ...r, files: graft(r.files) } : r)), fileList: null });
+      }
+      return;
+    }
+    if (dirPath === rootPath) {
+      set({ files: merged.map((m) => ({ ...m, expanded: prevExpanded.get(m.path)?.expanded ?? m.expanded })), fileList: null });
+      return;
+    }
+    set({ files: graft(files), fileList: null });
   },
 }));

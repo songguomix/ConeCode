@@ -15,3 +15,4 @@ export { useSkillsStore } from './skills.store';
 export { usePreviewStore } from './preview.store';
 export { useComputerStore } from './computer.store';
 export { useGoalStore } from './goal.store';
+export { useAiHighlightsStore } from './aiHighlights.store';

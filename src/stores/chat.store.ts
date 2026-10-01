@@ -2172,6 +2172,7 @@ interface WorkspaceSnapshot {
   files: any[];
   extraRoots?: { path: string; files: any[] }[];
   selectedFile: string | null;
+  openTabs?: string[];
   fileContent: string | null;
   contextFiles: { path: string; content: string; isImage?: boolean; dataUrl?: string }[];
 }
