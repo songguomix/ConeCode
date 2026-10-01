@@ -93,7 +93,7 @@ body {
 
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--bg-4); border-radius: 3px; }
+::-webkit-scrollbar-thumb { background: var(--bg-4); border-radius: 999px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
 input, textarea, select, button { font-family: inherit; }
@@ -101,8 +101,179 @@ input, textarea, select, button { font-family: inherit; }
 @layer components {
   .glass {
     background: var(--glass);
-    backdrop-filter: blur(24px) saturate(1.4);
-    -webkit-backdrop-filter: blur(24px) saturate(1.4);
+    /* 16px is visually close to 24px on chat chrome but far cheaper to blur. */
+    backdrop-filter: blur(16px) saturate(1.3);
+    -webkit-backdrop-filter: blur(16px) saturate(1.3);
     border: 1px solid var(--glass-border);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Motion system — one scale, GPU-friendly properties only.
+   Prefer transform / opacity so hover and menus stay on the compositor.
+   Easing favors a soft "material" feel: fast start, gentle settle (out-cubic
+   / spring-like), no linear-looking pops.
+--------------------------------------------------------------------------- */
+:root {
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  /* Slight overshoot for panels — feels alive without cartoon bounce. */
+  --ease-spring: cubic-bezier(0.34, 1.2, 0.64, 1);
+  --ease-emphasized: cubic-bezier(0.2, 0, 0, 1);
+  --dur-fast: 120ms;
+  --dur-base: 180ms;
+  --dur-slow: 280ms;
+  --dur-enter: 360ms;
+}
+
+@keyframes anim-fade-up {
+  from { opacity: 0; transform: translate3d(0, 8px, 0); }
+  to   { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
+@keyframes anim-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* Modal: soft spring scale — starts slightly small, settles with tiny overshoot. */
+@keyframes anim-modal-in {
+  0%   { opacity: 0; transform: translate3d(0, 12px, 0) scale(0.96); }
+  60%  { opacity: 1; transform: translate3d(0, -1px, 0) scale(1.005); }
+  100% { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+}
+
+/* Menu: lift + scale from its own origin (top or bottom). */
+@keyframes anim-menu-in {
+  from { opacity: 0; transform: translate3d(0, var(--menu-shift, -4px), 0) scale(0.97); }
+  to   { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+}
+
+/* New chat message: gentle rise + fade (runs once per mount). */
+@keyframes anim-message-in {
+  from { opacity: 0; transform: translate3d(0, 10px, 0); }
+  to   { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
+/* Skeleton: horizontal shimmer — calmer than full-block pulse. */
+@keyframes anim-shimmer {
+  from { background-position: 200% 0; }
+  to   { background-position: -200% 0; }
+}
+
+@keyframes anim-caret {
+  0%, 45% { opacity: 1; }
+  55%, 100% { opacity: 0; }
+}
+
+@keyframes anim-check-pop {
+  0%   { transform: scale(0.85); }
+  70%  { transform: scale(1.08); }
+  100% { transform: scale(1); }
+}
+
+/* Dialog / sheet panel: spring entrance. */
+.anim-modal {
+  animation: anim-modal-in var(--dur-enter) var(--ease-spring) both;
+  will-change: opacity, transform;
+}
+
+/* Dimmed overlay behind a modal — soft fade only. */
+.anim-scrim {
+  animation: anim-fade-in var(--dur-base) var(--ease-in-out) both;
+}
+
+/* Dropdown / palette menus — origin-aware. Menus opening upward shift down. */
+.anim-menu {
+  animation: anim-menu-in var(--dur-base) var(--ease-out) both;
+  transform-origin: var(--menu-origin, top center);
+  /* Default: enter from above. Upward-opening menus override --menu-shift: 6px. */
+  --menu-shift: -4px;
+  will-change: opacity, transform;
+}
+
+/* Chat message mount (new bubble / conversation open). */
+.anim-message {
+  animation: anim-message-in var(--dur-enter) var(--ease-emphasized) both;
+}
+
+/* Streaming caret — opacity-only blink. */
+.anim-caret {
+  animation: anim-caret 1s steps(1, end) infinite;
+}
+
+/* Skeleton cards: muted diagonal shimmer instead of pulsing opacity. */
+.anim-shimmer {
+  background-image: linear-gradient(
+    100deg,
+    transparent 30%,
+    rgba(255, 255, 255, 0.35) 50%,
+    transparent 70%
+  );
+  background-size: 200% 100%;
+  animation: anim-shimmer 1.6s var(--ease-in-out) infinite;
+}
+.dark .anim-shimmer {
+  background-image: linear-gradient(
+    100deg,
+    transparent 30%,
+    rgba(255, 255, 255, 0.06) 50%,
+    transparent 70%
+  );
+}
+
+/* Success check pop — tiny scale reward. */
+.anim-pop {
+  animation: anim-check-pop var(--dur-slow) var(--ease-spring) both;
+}
+
+/* Shared hover/focus helpers that stay on transform/opacity. */
+.anim-hover {
+  transition:
+    color var(--dur-fast) var(--ease-in-out),
+    background-color var(--dur-fast) var(--ease-in-out),
+    border-color var(--dur-fast) var(--ease-in-out),
+    opacity var(--dur-fast) var(--ease-in-out),
+    transform var(--dur-base) var(--ease-out),
+    box-shadow var(--dur-base) var(--ease-out);
+}
+
+.anim-hover:hover {
+  transform: translate3d(0, -1px, 0);
+  box-shadow: 0 4px 14px -6px rgb(0 0 0 / 0.18);
+}
+.anim-hover:active {
+  transform: translate3d(0, 0, 0) scale(0.985);
+  transition-duration: 40ms;
+  box-shadow: none;
+}
+
+/* Primary circular send button: firmer press. */
+.anim-press {
+  transition: transform var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-in-out), opacity var(--dur-fast) var(--ease-in-out);
+}
+.anim-press:active:not(:disabled) {
+  transform: scale(0.92);
+  transition-duration: 50ms;
+}
+
+/* Respect OS "reduce motion": kill non-essential loops and entrances. */
+@media (prefers-reduced-motion: reduce) {
+  .anim-modal,
+  .anim-scrim,
+  .anim-menu,
+  .anim-message,
+  .anim-caret,
+  .anim-shimmer,
+  .anim-pop,
+  .animate-pulse,
+  .animate-spin,
+  .animate-bounce {
+    animation: none !important;
+  }
+  .anim-hover, .anim-press { transition: none; transform: none !important; box-shadow: none !important; }
+  .anim-modal, .anim-menu, .anim-scrim, .anim-message {
+    opacity: 1 !important;
+    transform: none !important;
   }
 }

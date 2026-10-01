@@ -172,8 +172,6 @@ export default function AgentHome() {
         </div>
       </div>
 
-      <ProjectBriefComposer />
-
       {/* ---- The call: one recommended next action, as a real dialog ---- */}
       <NextActionDialog
         recommendation={recommendation}
@@ -291,17 +289,24 @@ export default function AgentHome() {
         </section>
       )}
 
-      {/* ---- Start something new: pick one, it builds itself ---- */}
-      <section id="conecode-new-project" ref={ideasSectionRef} className="min-w-0">
-        <ProjectIdeas />
-        <div className="mt-2.5 grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-          <QuickAction icon={<FiPlus size={15} />} label={t('homeNewProject')} desc={t('homeNewProjectDesc')}
-            onClick={() => {
-              document.getElementById('conecode-project-idea')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-              document.getElementById('conecode-project-idea')?.focus({ preventScroll: true });
-            }} />
-          <QuickAction icon={<FiFolder size={15} />} label={t('openFolder')} desc={t('homeOpenFolderDesc')} onClick={openFolder} />
+      {/* ---- Start something new: ONE entry (idea brief + optional inspiration) ---- */}
+      <section id="conecode-new-project" ref={ideasSectionRef} className="space-y-3">
+        <div className="flex items-center gap-2">
+          <h2 className="text-sm font-semibold text-[var(--text-primary)]">{t('homeNewProject')}</h2>
+          <span className="text-[11px] text-[var(--text-muted)]">{t('homeNewProjectDesc')}</span>
+          <button onClick={openFolder} className="ml-auto inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-[var(--bg-3)] text-[var(--text-secondary)] border border-[var(--border)] hover:border-[var(--accent)] hover:text-[var(--accent)] transition-colors">
+            <FiFolder size={11} /> {t('openFolder')}
+          </button>
         </div>
+        <ProjectBriefComposer />
+        <details className="rounded-xl border border-[var(--border)] bg-[var(--bg-2)] px-3 py-2">
+          <summary className="cursor-pointer text-xs font-medium text-[var(--text-secondary)] select-none">
+            {t('autopilotMore')}
+          </summary>
+          <div className="mt-2">
+            <ProjectIdeas />
+          </div>
+        </details>
       </section>
 
       {!model && (
@@ -353,30 +358,9 @@ function TaskCard({ task, onStart, t }: { task: SuggestedTask; onStart: () => vo
   );
 }
 
-function QuickAction({
-  icon, label, desc, onClick, disabled, accent,
-}: {
-  icon: JSX.Element; label: string; desc: string; onClick: () => void; disabled?: boolean; accent?: boolean;
-}) {
-  return (
-    <button onClick={onClick} disabled={disabled}
-      className={`text-left rounded-xl border p-3 transition-all disabled:opacity-40 min-w-0 overflow-hidden ${
-        accent
-          ? 'border-[var(--accent)]/40 bg-[var(--accent-soft)] hover:border-[var(--accent)]'
-          : 'border-[var(--border)] bg-[var(--bg-2)] hover:border-[var(--accent)]/50'
-      }`}>
-      <div className="flex items-center gap-2 min-w-0">
-        <span className={`shrink-0 ${accent ? 'text-[var(--accent)]' : 'text-[var(--text-secondary)]'}`}>{icon}</span>
-        <span className="text-sm font-medium text-[var(--text-primary)] truncate">{label}</span>
-      </div>
-      <p className="mt-1 text-xs text-[var(--text-muted)] break-words">{desc}</p>
-    </button>
-  );
-}
-
 function SkeletonCard() {
   return (
-    <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-2)] p-3 animate-pulse">
+    <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-2)] p-3 anim-shimmer">
       <div className="flex items-center gap-2">
         <div className="w-6 h-6 rounded-lg bg-[var(--bg-3)]" />
         <div className="h-3 rounded bg-[var(--bg-3)] flex-1" />

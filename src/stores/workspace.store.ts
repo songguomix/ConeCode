@@ -603,9 +603,9 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     const files = await loadDir(rootPath);
     // Preserve expansion across a full refresh so create/rename/delete don't
     // collapse the tree the user is looking at.
-    const prev = new Map(get().files.flatMap(function walk(items: FileItem[]): [string, boolean][] {
-      return items.flatMap((i) => [[i.path, !!i.expanded], ...(i.children ? walk(i.children) : [])]);
-    }));
+    const collect = (items: FileItem[]): [string, boolean][] =>
+      items.flatMap((i) => [[i.path, !!i.expanded] as [string, boolean], ...(i.children ? collect(i.children) : [])]);
+    const prev = new Map<string, boolean>(collect(get().files));
     const restore = (items: FileItem[]): FileItem[] => items.map((i) => ({
       ...i,
       expanded: prev.get(i.path) ?? false,

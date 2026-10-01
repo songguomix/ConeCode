@@ -55,18 +55,22 @@ function remoteStatus() {
   // The password rides in the QR/URL (so scanning auto-connects); it's URL-encoded.
   const pw = remoteServer.getPassword();
   const pwq = pw ? `&p=${encodeURIComponent(pw)}` : '';
+  // Pairing URL carries this install's TLS fingerprint so the phone can pin it.
+  const fp = remoteServer.fingerprint;
+  const fpq = fp ? `&fp=${fp}` : '';
   const lanUrls = running && port && token
-    ? lanAddresses().map((ip) => `https://${ip}:${port}/?t=${token}${pwq}`)
+    ? lanAddresses().map((ip) => `https://${ip}:${port}/?t=${token}${pwq}${fpq}`)
     : [];
   return {
     running,
     port,
     token,
     lanUrls,
-    tunnelUrl: running && remoteTunnelUrl ? remoteTunnelUrl + pwq : null,
+    tunnelUrl: running && remoteTunnelUrl ? remoteTunnelUrl + pwq + fpq : null,
     clients: remoteServer.clientCount(),
     devices: remoteServer.clientList(),
     hasPassword: remoteServer.hasPassword(),
+    fingerprint: remoteServer.fingerprint,
   };
 }
 
@@ -232,6 +236,46 @@ async function netDownload(url: string, dest: string): Promise<string> {
     return `Downloaded ${buf.length} bytes from ${url} to ${resolved}`;
   } catch (e: any) {
     return `Error downloading ${url}: ${e?.message || String(e)}`;
+  }
+}
+
+
+// Download the official cloudflared for THIS platform/arch into <userData>/bin
+// so tunnels work without a pre-bundled binary. Mac gets the darwin build,
+// Windows the .exe, Linux the tgz. Returns the binary path or an error.
+async function installCloudflared(): Promise<{ ok: boolean; path?: string; error?: string }> {
+  try {
+    const arch = process.arch === 'arm64' ? 'arm64' : 'amd64';
+    const isWin = process.platform === 'win32';
+    const isMac = process.platform === 'darwin';
+    const osName = isMac ? 'darwin' : isWin ? 'windows' : 'linux';
+    // Official Cloudflare release asset names (mac=*.tgz, win=*.exe, linux=*.tgz).
+    const asset = isWin
+      ? `cloudflared-windows-${arch}.exe`
+      : `cloudflared-${osName}-${arch}.tgz`;
+    const url = `https://github.com/cloudflare/cloudflared/releases/latest/download/${asset}`;
+    const binDir = path.join(app.getPath('userData'), 'bin');
+    fs.mkdirSync(binDir, { recursive: true });
+    const bin = path.join(binDir, isWin ? 'cloudflared.exe' : 'cloudflared');
+    const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (ConeCode)' } });
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status} downloading cloudflared` };
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (isWin) {
+      fs.writeFileSync(bin, buf);
+    } else {
+      const archive = path.join(binDir, 'cloudflared-download.tgz');
+      fs.writeFileSync(archive, buf);
+      const q = (s: string) => JSON.stringify(s);
+      execSync(`tar -xzf ${q(archive)} -C ${q(binDir)}`, { env: getShellEnv() });
+      try { fs.unlinkSync(archive); } catch {}
+      // tgz contains a `cloudflared` file at the root.
+      const extracted = path.join(binDir, 'cloudflared');
+      if (!fs.existsSync(extracted)) return { ok: false, error: 'extraction did not produce cloudflared' };
+    }
+    try { fs.chmodSync(bin, 0o755); } catch {}
+    return { ok: true, path: bin };
+  } catch (e: any) {
+    return { ok: false, error: e?.message || String(e) };
   }
 }
 
@@ -1243,6 +1287,13 @@ function registerIPC() {
       remoteServer.on('clients', (n) => mainWindow?.webContents.send('remote:clients', n));
     }
     if (opts?.tunnel && !remoteTunnelUrl) {
+      // Platform-adaptive: fetch the matching cloudflared (mac/win) on demand
+      // when nothing is bundled or already installed.
+      const cfg = opts.tunnelConfig || {};
+      if ((cfg.method || 'cloudflared') === 'cloudflared') {
+        // No-op when already present; downloads the matching darwin/windows binary once.
+        await installCloudflared().catch(() => {});
+      }
       const r = await startTunnel(port, getShellEnv(), opts.tunnelConfig || {});
       if (r.url) remoteTunnelUrl = `${r.url}/?t=${token}`;
       else return { ...remoteStatus(), tunnelError: r.error || 'failed', tunnelDetail: r.detail };
@@ -1273,6 +1324,7 @@ function registerIPC() {
 
   // One-click ngrok install (downloads the official agent into userData/bin).
   ipcMain.handle('remote:installNgrok', () => installNgrok());
+  ipcMain.handle('remote:installCloudflared', () => installCloudflared());
 
   // Forcibly disconnect a connected phone.
   ipcMain.handle('remote:kick', (_, id: string) => {

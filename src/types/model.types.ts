@@ -20,7 +20,7 @@ export interface AIModel {
   autoMaxOutputTokens?: number;
 }
 
-export type ReasoningEffort = 'low' | 'medium' | 'high';
+export type ReasoningEffort = 'auto' | 'low' | 'medium' | 'high';
 
 export interface ModelCapabilities {
   text: boolean;

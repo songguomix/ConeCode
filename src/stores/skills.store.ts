@@ -1,4 +1,6 @@
 import { create } from 'zustand';
+import { useInstallGateStore } from './installGate.store';
+import { useChatStore } from './chat.store';
 import { BUILTIN_SKILLS, type CatalogSkill } from '../core/skills/builtin';
 import {
   formatSkillsPrompt,
@@ -107,6 +109,12 @@ export const useSkillsStore = create<SkillsStore>((set, get) => ({
 
   install: async (skill, scope) => {
     set({ busy: skill.id, error: null });
+    const holdId = `skill-install:${skill.id}:${Date.now()}`;
+    useInstallGateStore.getState().begin(holdId, skill.name || skill.id, 'skill');
+    const finishInstall = () => {
+      useInstallGateStore.getState().end(holdId);
+      void useChatStore.getState().continueAfterInstall?.();
+    };
     try {
       const rootPath = useWorkspaceStore.getState().rootPath || undefined;
       if (scope === 'project' && !rootPath) {
@@ -131,6 +139,8 @@ export const useSkillsStore = create<SkillsStore>((set, get) => ({
     } catch (e: any) {
       set({ busy: null, error: e?.message || String(e) });
       return false;
+    } finally {
+      finishInstall();
     }
   },
 
@@ -142,6 +152,8 @@ export const useSkillsStore = create<SkillsStore>((set, get) => ({
     }
     const id = replaceId || skillId(draft.name);
     set({ busy: id, error: null });
+    const holdId = `skill-save:${id}:${Date.now()}`;
+    useInstallGateStore.getState().begin(holdId, draft.name || id, 'skill');
     try {
       const rootPath = useWorkspaceStore.getState().rootPath || undefined;
       if (scope === 'project' && !rootPath) {
@@ -176,6 +188,9 @@ export const useSkillsStore = create<SkillsStore>((set, get) => ({
     } catch (e: any) {
       set({ busy: null, error: e?.message || String(e) });
       return false;
+    } finally {
+      useInstallGateStore.getState().end(holdId);
+      void useChatStore.getState().continueAfterInstall?.();
     }
   },
 

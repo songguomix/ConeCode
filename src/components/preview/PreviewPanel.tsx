@@ -2,11 +2,12 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode }
 import {
   FiArrowLeft, FiArrowRight, FiRotateCw, FiX, FiExternalLink, FiMonitor, FiTablet,
   FiSmartphone, FiPlay, FiSquare, FiRefreshCw, FiTerminal, FiAlertCircle, FiFolder,
-  FiTrash2, FiPlus, FiCrosshair, FiGlobe, FiCode,
+  FiTrash2, FiPlus, FiCrosshair, FiGlobe, FiCode, FiMapPin,
 } from 'react-icons/fi';
 import { useWorkspaceStore, useLanguageStore, usePreviewStore, useUIStore } from '../../stores';
 import { DEVICE_SIZES, type DevicePreset, type BrowserTab } from '../../stores/preview.store';
 import { pickerScript, pickerStopScript, parsePick, pickToPrompt } from '../../core/preview/picker';
+import { formatPinPrompt, nextPinLabel, pinFromPointer, type AnnotatePin } from '../../core/preview/annotate';
 import { setAgentWebview } from '../../core/preview/agentpage';
 import WorkbenchTabs from '../layout/WorkbenchTabs';
 
@@ -320,6 +321,23 @@ export default function PreviewPanel() {
     : state === 'starting' ? 'bg-[var(--warning)] animate-pulse'
     : state === 'error' ? 'bg-[var(--error)]'
     : 'bg-[var(--text-muted)]';
+
+  // Click-to-annotate: pin a coordinate on the preview and hand it to the chat
+  // composer (auto-filled) for a precise second pass.
+  const [annotateOn, setAnnotateOn] = useState(false);
+  const [pins, setPins] = useState<AnnotatePin[]>([]);
+  const setChatInput = useUIStore((s) => s.setInputContent);
+
+  const onAnnotateClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!annotateOn) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const pin = pinFromPointer(e, rect, nextPinLabel(pins.length));
+    if (!pin) return;
+    const full: AnnotatePin = { ...pin, id: `pin-${Date.now()}` };
+    const next = [...pins, full];
+    setPins(next);
+    setChatInput(formatPinPrompt(full));
+  };
   const statusLabel = state === 'running' ? t('previewRunning')
     : state === 'starting' ? t('previewStarting')
     : state === 'error' ? t('previewFailed')
@@ -416,6 +434,22 @@ export default function PreviewPanel() {
         >
           <FiCrosshair size={14} />
         </IconButton>
+        <IconButton
+          title={t('previewAnnotate')}
+          onClick={() => setAnnotateOn((v) => !v)}
+          active={annotateOn}
+          disabled={!activeTab?.url}
+        >
+          <FiMapPin size={14} />
+        </IconButton>
+        {pins.length > 0 && (
+          <IconButton
+            title={t('previewAnnotateClear')}
+            onClick={() => setPins([])}
+          >
+            <FiTrash2 size={13} />
+          </IconButton>
+        )}
 
         {narrow ? (
           <IconButton
@@ -467,7 +501,13 @@ export default function PreviewPanel() {
       </div>
 
       {/* Pages — every tab stays mounted; only the active one is visible */}
-      <div ref={viewportRef} className="flex-1 min-h-0 relative bg-[var(--bg-1)] border-t border-[var(--border)]">
+      <div
+        ref={viewportRef}
+        onClick={onAnnotateClick}
+        className={`flex-1 min-h-0 relative bg-[var(--bg-1)] border-t border-[var(--border)] ${
+          annotateOn ? 'cursor-crosshair' : ''
+        }`}
+      >
         {tabs.map((tab) => {
           const isActive = tab.id === activeTabId;
           return (
@@ -486,7 +526,7 @@ export default function PreviewPanel() {
                     transform: frame.scale < 1 ? `scale(${frame.scale})` : undefined,
                   }}
                   className={`bg-white overflow-hidden shrink-0 ${
-                    device === 'desktop' ? '' : 'rounded-[20px] border border-[var(--border)] shadow-2xl'
+                    device === 'desktop' ? '' : 'rounded-[28px] border border-[var(--border)] shadow-2xl'
                   }`}
                 >
                   <webview
@@ -539,6 +579,33 @@ export default function PreviewPanel() {
         {picking && (
           <div className="absolute top-3 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-full bg-[var(--bg-2)] border border-[var(--accent)] shadow-lg text-[12px] text-[var(--text-secondary)] pointer-events-none">
             {t('previewPickHint')}
+          </div>
+        )}
+
+        {/* Coordinate pins for precise follow-up edits. */}
+        {pins.map((pin) => (
+          <button
+            key={pin.id}
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setChatInput(formatPinPrompt(pin));
+            }}
+            title={formatPinPrompt(pin)}
+            className="absolute z-20 -translate-x-1/2 -translate-y-full anim-pop"
+            style={{ left: `${pin.x * 100}%`, top: `${pin.y * 100}%` }}
+          >
+            <span className="flex flex-col items-center">
+              <span className="w-6 h-6 rounded-full bg-[var(--accent)] text-white text-[10px] font-bold shadow-lg border-2 border-white flex items-center justify-center">
+                {pin.label.replace('点', '')}
+              </span>
+              <span className="w-0 h-0 border-l-[5px] border-r-[5px] border-t-[7px] border-l-transparent border-r-transparent border-t-[var(--accent)]" />
+            </span>
+          </button>
+        ))}
+        {annotateOn && (
+          <div className="absolute top-3 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-full bg-[var(--accent)] text-white shadow-lg text-[12px] pointer-events-none anim-menu">
+            {t('previewAnnotateHint')}
           </div>
         )}
       </div>

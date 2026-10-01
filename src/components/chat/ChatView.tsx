@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState, useMemo, Fragment } from 'react';
+import { useRef, useEffect, useState, useMemo, useCallback, Fragment } from 'react';
 import { FiMap, FiPlay, FiEdit3, FiChevronDown, FiChevronRight } from 'react-icons/fi';
 import { useChatStore, useLanguageStore, useCodeChangesStore, useWorkspaceStore, useModelStore, useSettingsStore } from '../../stores';
 import { orderForDisplay } from '../../stores/chat.store';
@@ -10,6 +10,7 @@ import CommandApprovalModal from './CommandApprovalModal';
 import TodoList from './TodoList';
 import DiffStatPill from './DiffStatPill';
 import GoalProgressRow from './GoalProgressRow';
+import { useInstallGateStore, activeInstallLabel, isHolding } from '../../stores/installGate.store';
 import AgentHome from '../home/AgentHome';
 import { commandsForConversation } from './approvalPresentation';
 
@@ -39,6 +40,8 @@ export default function ChatView() {
   // right where they were, folded behind the summary and one click away.
   const [showCompacted, setShowCompacted] = useState(false);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const onEditMessage = useCallback((id: string) => setEditingMessageId(id), []);
+  const onCancelEditMessage = useCallback(() => setEditingMessageId(null), []);
   const isEditing = rawMessages.some((m) => m.id === editingMessageId);
   useEffect(() => { setEditingMessageId(null); }, [activeConversationId]);
   const messages = useMemo(() => orderForDisplay(rawMessages), [rawMessages]);
@@ -169,8 +172,18 @@ export default function ChatView() {
     await sendMessage(t('planApproved'), providerId, modelId);
   };
 
+  const installJobs = useInstallGateStore((s) => s.jobs);
+  const installHolding = isHolding(installJobs);
+  const installLabel = activeInstallLabel(installJobs);
+
   return (
     <div className="flex-1 flex flex-col min-h-0 bg-[var(--bg-0)]">
+      {installHolding && (
+        <div className="px-4 py-1.5 text-[11px] flex items-center gap-2 bg-[var(--accent-soft)] text-[var(--accent)] border-b border-[var(--border)]">
+          <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)] animate-pulse shrink-0" />
+          <span className="truncate">{t('installHolding')}{installLabel ? ` · ${installLabel}` : ''}</span>
+        </div>
+      )}
       <div ref={containerRef} className="flex-1 overflow-y-auto py-6">
         <div className="max-w-[900px] mx-auto w-full px-4">
         {/* Nothing said yet — instead of an empty prompt, show the agent's own
@@ -201,8 +214,8 @@ export default function ChatView() {
                 isContinuation={i > 0 && isAiSide(messages[i - 1]) === isAiSide(msg)}
                 dimmed={compactedIds.has(msg.id)}
                 editing={editingMessageId === msg.id}
-                onEdit={() => setEditingMessageId(msg.id)}
-                onCancelEdit={() => setEditingMessageId(null)}
+                onEdit={onEditMessage}
+                onCancelEdit={onCancelEditMessage}
               />
               <MessageChanges messageId={msg.id} onReviewCommand={setReviewCommandId} />
             </Fragment>
@@ -214,7 +227,7 @@ export default function ChatView() {
             <div className="min-w-0">
               {streamingContent
                 ? <MessageContent content={streamingContent} streaming />
-                : <span className="text-[15px] text-[var(--text-muted)] animate-pulse">
+                : <span className="text-[15px] text-[var(--text-muted)] anim-caret">
                     {streamingToolName
                       ? `${t('callingTool')} ${streamingToolName}...`
                       : streamingStatus === 'thinking' ? t('thinking') + '...' : '...'}

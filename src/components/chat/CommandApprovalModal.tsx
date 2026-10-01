@@ -62,7 +62,7 @@ export default function CommandApprovalModal({ change, onClose }: CommandApprova
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 backdrop-blur-sm p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 backdrop-blur-sm p-4 anim-scrim"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget && !busy) onClose();
       }}
@@ -73,7 +73,7 @@ export default function CommandApprovalModal({ change, onClose }: CommandApprova
         aria-modal="true"
         aria-labelledby="command-approval-title"
         tabIndex={-1}
-        className="w-full max-w-2xl rounded-2xl border border-[var(--border)] bg-[var(--bg-1)] shadow-2xl overflow-hidden outline-none"
+        className="w-full max-w-2xl rounded-2xl border border-[var(--border)] bg-[var(--bg-1)] shadow-2xl overflow-hidden outline-none anim-modal"
       >
         <div className="flex items-center gap-2.5 px-4 py-3 border-b border-[var(--border)]">
           <div className="w-8 h-8 rounded-lg bg-yellow-500/15 text-yellow-500 flex items-center justify-center shrink-0">

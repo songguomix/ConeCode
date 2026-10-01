@@ -65,7 +65,12 @@ export default function ContextMeter() {
     return total;
   }, [autoIncludeFileContext, selectedFile, fileContent, selectedFileIsImage, contextFiles, maxContextFileSize]);
 
-  const liveTokens = estimateTokens(streamingContent) + estimateTokens(streamingReasoningContent);
+  const liveTokens = useMemo(
+    () => estimateTokens(streamingContent) + estimateTokens(streamingReasoningContent),
+    // estimateTokens is O(n) over the accumulated stream — memo so sibling
+    // re-renders (open flag, theme) don't re-scan multi-KB text.
+    [streamingContent, streamingReasoningContent],
+  );
 
   const convoTokens = messageTokens + liveTokens;
   const used = convoTokens + fileTokens + SYSTEM_PROMPT_TOKENS;
@@ -105,7 +110,7 @@ export default function ContextMeter() {
       </button>
 
       {open && (
-        <div className="absolute bottom-full right-0 mb-2 w-60 p-3 bg-[var(--bg-1)] border border-[var(--border)] rounded-xl shadow-2xl z-50 text-xs">
+        <div className="absolute bottom-full right-0 mb-2 w-60 p-3 bg-[var(--bg-1)] border border-[var(--border)] rounded-xl shadow-2xl z-50 text-xs anim-menu" style={{ ['--menu-origin' as any]: 'bottom right', ['--menu-shift' as any]: '6px' }}>
           <div className="flex items-center justify-between mb-2">
             <span className="font-semibold text-sm text-[var(--text-primary)]">{t('contextUsage')}</span>
             {window > 0 && (

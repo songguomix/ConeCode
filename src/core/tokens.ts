@@ -8,11 +8,14 @@ export function estimateTokens(text: string | null | undefined): number {
   if (!text) return 0;
   let ascii = 0;
   let dense = 0;
-  for (let i = 0; i < text.length; i++) {
+  // Tight loop over the whole string — keep it allocation-free. Called from
+  // ContextMeter on streaming buffers, so O(n) per unique content is the budget.
+  const len = text.length;
+  for (let i = 0; i < len; i++) {
     if (text.charCodeAt(i) < 128) ascii++;
     else dense++;
   }
-  return Math.ceil(ascii / 4 + dense);
+  return (ascii >> 2) + dense + (ascii & 3 ? 1 : 0);
 }
 
 /**

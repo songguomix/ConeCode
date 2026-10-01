@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
-import { FiSquare, FiPaperclip, FiX, FiFile, FiArrowUp, FiMap } from 'react-icons/fi';
+import { FiSquare, FiPaperclip, FiX, FiFile, FiArrowUp, FiPlus, FiTarget, FiList, FiLayers, FiZap } from 'react-icons/fi';
+import { AGENT_MODES, type AgentMode } from '../../core/agents/modePrompts';
 import { useMemoryStore, useChatStore, useModelStore, useLanguageStore, useWorkspaceStore, useSettingsStore, useUIStore, useGoalStore } from '../../stores';
+import { useInstallGateStore, isHolding } from '../../stores/installGate.store';
 import {
   BUILTIN_COMMANDS, parseSlashInput, matchCommands, findCommand, expandTemplate,
   type SlashCommand,
@@ -28,7 +30,11 @@ export default function ChatInput() {
   const pushNotice = useChatStore((s) => s.pushNotice);
   const createConversation = useChatStore((s) => s.createConversation);
   const planMode = useChatStore((s) => s.planMode);
+  const installHolding = useInstallGateStore((s) => isHolding(s.jobs));
   const togglePlanMode = useChatStore((s) => s.togglePlanMode);
+  const [plusOpen, setPlusOpen] = useState(false);
+  const agentMode = useChatStore((s) => s.agentMode);
+  const setAgentMode = useChatStore((s) => s.setAgentMode);
   const selectedModel = useModelStore((s) => s.getSelectedModel());
   const { t } = useLanguageStore();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -144,6 +150,16 @@ export default function ChatInput() {
       case 'plan':
         togglePlanMode();
         break;
+      case 'mode': {
+        const wanted = args.trim().toLowerCase() as AgentMode;
+        if (!wanted || !AGENT_MODES.includes(wanted)) {
+          setInput('/mode ');
+          requestAnimationFrame(() => textareaRef.current?.focus());
+          break;
+        }
+        setAgentMode(wanted);
+        break;
+      }
       case 'goal': {
         const goalText = args.trim();
         if (!goalText) {
@@ -238,7 +254,7 @@ export default function ChatInput() {
   };
 
   const handleSend = async () => {
-    if (isStreaming || isSavingEdit) return;
+    if (isStreaming || isSavingEdit || installHolding) return;
     const text = input;
     if (!text.trim()) return;
 
@@ -402,7 +418,7 @@ export default function ChatInput() {
       <div className="relative max-w-[900px] mx-auto w-full px-4 pt-2 pb-1">
         {/* Slash-command palette */}
         {showSlash && (
-          <div className="absolute bottom-full left-6 right-6 mb-1 max-h-64 overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--bg-2)] shadow-lg z-50 py-1">
+          <div className="absolute bottom-full left-6 right-6 mb-1 max-h-64 overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--bg-2)] shadow-lg z-50 py-1 anim-menu" style={{ ['--menu-origin' as any]: 'bottom left', ['--menu-shift' as any]: '6px' }}>
             <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-[var(--text-muted)] font-medium">{t('commandsTitle')}</div>
             {slashMatches.map((c, i) => (
               <button
@@ -421,7 +437,7 @@ export default function ChatInput() {
 
         {/* @-mention file palette */}
         {showMention && (
-          <div className="absolute bottom-full left-6 right-6 mb-1 max-h-64 overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--bg-2)] shadow-lg z-50 py-1">
+          <div className="absolute bottom-full left-6 right-6 mb-1 max-h-64 overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--bg-2)] shadow-lg z-50 py-1 anim-menu" style={{ ['--menu-origin' as any]: 'bottom left', ['--menu-shift' as any]: '6px' }}>
             <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-[var(--text-muted)] font-medium">{t('mentionFiles')}</div>
             {mentionMatches.map((f, i) => (
               <button
@@ -438,28 +454,64 @@ export default function ChatInput() {
         )}
 
         {/* Composer box */}
-        <div className="rounded-[20px] border border-[var(--border)] bg-[var(--bg-2)] pl-4 pr-2 py-2 focus-within:border-[var(--accent)]/50 transition-colors shadow-sm">
+        <div className="rounded-[28px] border border-[var(--border)] bg-[var(--bg-2)] pl-4 pr-2 py-2 focus-within:border-[var(--accent)]/50 transition-colors shadow-sm">
           <div className="flex items-end gap-3">
-            <button
-              onClick={handleAttach}
-              className="w-9 h-9 rounded-xl flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-3)] transition-colors shrink-0 mb-0.5"
-              title={t('attachFiles')}
-            >
-              <FiPaperclip size={18} />
-            </button>
-
-            <button
-              onClick={togglePlanMode}
-              title={t('planModeHint')}
-              className={`h-9 rounded-xl flex items-center justify-center gap-1.5 transition-colors shrink-0 mb-0.5 ${
-                planMode
-                  ? 'px-2.5 text-[var(--accent)] bg-[var(--accent-soft)]'
-                  : 'w-9 text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-3)]'
-              }`}
-            >
-              <FiMap size={16} />
-              {planMode && <span className="text-xs font-medium">{t('planMode')}</span>}
-            </button>
+            {/* + menu: upload + agent modes (no standalone plan/attach clutter). */}
+            <div className="relative shrink-0 mb-0.5">
+              <button
+                onClick={() => setPlusOpen((v) => !v)}
+                title={t('modeMenu')}
+                className={`w-9 h-9 rounded-xl flex items-center justify-center transition-colors ${
+                  plusOpen || agentMode !== 'standard'
+                    ? 'text-[var(--accent)] bg-[var(--accent-soft)]'
+                    : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-3)]'
+                }`}
+              >
+                <FiPlus size={18} />
+              </button>
+              {plusOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setPlusOpen(false)} />
+                  <div
+                    className="absolute bottom-full left-0 mb-2 w-60 rounded-2xl border border-[var(--border)] bg-[var(--bg-2)] shadow-xl z-50 py-1.5 anim-menu"
+                    style={{ ['--menu-origin' as any]: 'bottom left', ['--menu-shift' as any]: '6px' }}
+                  >
+                    <button
+                      onClick={() => { void handleAttach(); setPlusOpen(false); }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2.5 text-[13px] text-[var(--text-secondary)] hover:bg-[var(--bg-3)] transition-colors"
+                    >
+                      <FiPaperclip size={14} />
+                      <span className="flex-1 text-left">{t('attachFiles')}</span>
+                    </button>
+                    <div className="my-1 border-t border-[var(--border)]" />
+                    <div className="px-3 pb-1 text-[10px] uppercase tracking-wider text-[var(--text-muted)]">
+                      {t('modeMenu')}
+                    </div>
+                    {([
+                      // Standard is the default working mode.
+                      { key: 'std', label: t('agentModeStandard'), icon: <FiLayers size={14} />, mode: 'standard' as AgentMode },
+                      { key: 'task', label: t('modeTask'), icon: <FiTarget size={14} />, mode: 'goal' as AgentMode },
+                      { key: 'orch', label: t('modeOrchestrate'), icon: <FiList size={14} />, mode: 'orchestrate' as AgentMode },
+                      { key: 'rsi', label: t('modeRsi'), icon: <FiZap size={14} />, mode: 'rsi' as AgentMode },
+                    ] as const).map((item) => (
+                      <button
+                        key={item.key}
+                        onClick={() => { setAgentMode(item.mode); setPlusOpen(false); }}
+                        className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-[13px] transition-colors ${
+                          agentMode === item.mode
+                            ? 'text-[var(--accent)] bg-[var(--accent-soft)]'
+                            : 'text-[var(--text-secondary)] hover:bg-[var(--bg-3)]'
+                        }`}
+                      >
+                        {item.icon}
+                        <span className="flex-1 text-left">{item.label}</span>
+                        {agentMode === item.mode && <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)]" />}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
 
             <textarea
               ref={textareaRef}
@@ -471,21 +523,25 @@ export default function ChatInput() {
               onPaste={handlePaste}
               onCompositionStart={handleCompositionStart}
               onCompositionEnd={handleCompositionEnd}
-              placeholder={planMode ? `${t('planMode')} · ${t('typeMessage')}` : t('typeMessage')}
+              placeholder={
+                agentMode !== 'standard'
+                  ? `${t(agentMode === 'goal' ? 'modeTask' : agentMode === 'orchestrate' ? 'modeOrchestrate' : agentMode === 'rsi' ? 'modeRsi' : 'agentModeStandard')} · ${t('typeMessage')}`
+                  : t('typeMessage')
+              }
               rows={1}
               className="flex-1 bg-transparent border-0 py-2 text-[15px] resize-none outline-none max-h-[200px] overflow-y-auto placeholder:text-[var(--text-muted)]"
             />
 
             {isStreaming ? (
               <button onClick={() => stopGeneration()}
-                className="w-9 h-9 rounded-full bg-[var(--accent)] text-white flex items-center justify-center hover:bg-[var(--accent-hover)] transition-colors shrink-0 mb-0.5">
+                className="w-9 h-9 rounded-full bg-[var(--accent)] text-white flex items-center justify-center hover:bg-[var(--accent-hover)] transition-colors shrink-0 mb-0.5 anim-press">
                 <FiSquare size={14} />
               </button>
             ) : (
               <button onClick={handleSend}
-                disabled={!input.trim() || isSavingEdit}
+                disabled={!input.trim() || isSavingEdit || installHolding}
                 title={sendWithEnter ? t('sendHintEnter') : t('sendHintCmd')}
-                className="w-9 h-9 rounded-full flex items-center justify-center transition-all bg-[var(--accent)] text-white disabled:opacity-30 hover:bg-[var(--accent-hover)] shrink-0 mb-0.5">
+                className="w-9 h-9 rounded-full flex items-center justify-center transition-all bg-[var(--accent)] text-white disabled:opacity-30 hover:bg-[var(--accent-hover)] shrink-0 mb-0.5 anim-press">
                 <FiArrowUp size={18} />
               </button>
             )}

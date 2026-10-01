@@ -38,9 +38,19 @@ export default function Sidebar() {
   const [panelsOpen, setPanelsOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState('');
+  // Collapsed group keys. Default expanded — Codex shows the chats under each
+  // mother folder without requiring a click first.
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => new Set());
   const conversations = useChatStore((s) => s.conversations);
   const activeConversationId = useChatStore((s) => s.activeConversationId);
-  const runningConversationIds = useChatStore((s) => Object.keys(s.streamingRuns));
+  // String keys are referentially stable across runs with the same members, so
+  // token flushes that only rewrite streamingRuns[...].content don't re-render
+  // the sidebar. Object.keys() alone allocated a new array every store tick.
+  const runningKey = useChatStore((s) => Object.keys(s.streamingRuns).join('\0'));
+  const runningConversationIds = useMemo(
+    () => (runningKey ? runningKey.split('\0') : []),
+    [runningKey],
+  );
   const setActiveConversation = useChatStore((s) => s.setActiveConversation);
   const deleteConversation = useChatStore((s) => s.deleteConversation);
   const renameConversation = useChatStore((s) => s.renameConversation);
@@ -75,17 +85,29 @@ export default function Sidebar() {
     [conversations, rootPath],
   );
 
-  // Five panel toggles used to sit in the toolbar as unlabelled 32px icons with
-  // no gap between them. They are one menu now: labelled, and the row has room.
-  const panels: PanelItem[] = [
+  const toggleGroup = (key: string) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  // Primary panels earn toolbar-menu slots; low-frequency tools live under a
+  // second section so the list stays scannable (integration pass: 7 → 4 + more).
+  const primaryPanels: PanelItem[] = [
     { key: 'terminal', icon: <FiTerminal size={15} />, label: t('terminal'), open: terminalOpen, toggle: toggleTerminal },
     { key: 'changed', icon: <FiFileText size={15} />, label: t('changedFiles'), open: changedFilesOpen, toggle: toggleChangedFiles },
     { key: 'review', icon: <FiShield size={15} />, label: t('codeReview'), open: reviewOpen, toggle: toggleReview },
-    { key: 'worktrees', icon: <FiGitBranch size={15} />, label: t('worktrees'), open: worktreesOpen, toggle: toggleWorktrees },
     { key: 'preview', icon: <FiMonitor size={15} />, label: t('preview'), open: previewOpen, toggle: togglePreview, dot: previewState === 'idle' ? null : previewState === 'running' ? 'success' : previewState === 'starting' ? 'warning-pulse' : 'error' },
+  ];
+  const extraPanels: PanelItem[] = [
+    { key: 'worktrees', icon: <FiGitBranch size={15} />, label: t('worktrees'), open: worktreesOpen, toggle: toggleWorktrees },
     { key: 'remote', icon: <FiSmartphone size={15} />, label: t('remoteControl'), open: remoteOpen, toggle: toggleRemote },
     { key: 'computer', icon: <FiCpu size={15} />, label: t('computerControl'), open: computerOpen, toggle: toggleComputer, dot: computerEnabled ? 'error-pulse' : null },
   ];
+  const panels = [...primaryPanels, ...extraPanels];
   // Live state must survive being folded into a menu: a running dev server, and
   // above all the agent holding the real mouse, stay visible on the trigger.
   const triggerDot = mostUrgentDot(panels.map((p) => p.dot));
@@ -134,16 +156,55 @@ export default function Sidebar() {
             <>
               <div className="fixed inset-0 z-40" onClick={() => setPanelsOpen(false)} />
               <div role="menu"
-                className="absolute top-full right-0 mt-1 w-44 bg-[var(--bg-2)] border border-[var(--border)] rounded-xl shadow-xl z-50 overflow-hidden py-1">
-                {panels.map((p) => (
+                className="absolute top-full right-0 mt-1 w-44 bg-[var(--bg-2)] border border-[var(--border)] rounded-xl shadow-xl z-50 overflow-hidden py-1 anim-menu">
+                {primaryPanels.map((p) => (
                   <button key={p.key} role="menuitemcheckbox" aria-checked={p.open}
-                    onClick={() => { p.toggle(); setPanelsOpen(false); }}
+                    onClick={() => p.toggle()}
                     className={`w-full flex items-center gap-2.5 px-3 py-2 text-[13px] transition-colors ${
                       p.open ? 'bg-[var(--accent-soft)] text-[var(--accent)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-3)]'
                     }`}>
                     {p.icon}
                     <span className="flex-1 text-left truncate">{p.label}</span>
                     {p.dot && <StatusDot kind={p.dot} />}
+                    <span
+                      aria-hidden
+                      className={`relative w-8 h-[18px] rounded-full transition-colors shrink-0 ${
+                        p.open ? 'bg-[var(--accent)]' : 'bg-[var(--bg-4)]'
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-[2px] h-[14px] w-[14px] rounded-full bg-white shadow transition-transform ${
+                          p.open ? 'translate-x-[16px]' : 'translate-x-[2px]'
+                        }`}
+                      />
+                    </span>
+                  </button>
+                ))}
+                <div className="my-1 border-t border-[var(--border)]" />
+                <div className="px-3 pb-1 text-[10px] uppercase tracking-wider text-[var(--text-muted)]">
+                  {t('panelsMore')}
+                </div>
+                {extraPanels.map((p) => (
+                  <button key={p.key} role="menuitemcheckbox" aria-checked={p.open}
+                    onClick={() => p.toggle()}
+                    className={`w-full flex items-center gap-2.5 px-3 py-2 text-[13px] transition-colors ${
+                      p.open ? 'bg-[var(--accent-soft)] text-[var(--accent)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-3)]'
+                    }`}>
+                    {p.icon}
+                    <span className="flex-1 text-left truncate">{p.label}</span>
+                    {p.dot && <StatusDot kind={p.dot} />}
+                    <span
+                      aria-hidden
+                      className={`relative w-8 h-[18px] rounded-full transition-colors shrink-0 ${
+                        p.open ? 'bg-[var(--accent)]' : 'bg-[var(--bg-4)]'
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-[2px] h-[14px] w-[14px] rounded-full bg-white shadow transition-transform ${
+                          p.open ? 'translate-x-[16px]' : 'translate-x-[2px]'
+                        }`}
+                      />
+                    </span>
                   </button>
                 ))}
               </div>

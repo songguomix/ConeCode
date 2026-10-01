@@ -5,6 +5,7 @@ import { useSettingsStore } from './settings.store';
 import { useModelStore } from './model.store';
 import { useMemoryStore } from './memory.store';
 import { useSkillsStore } from './skills.store';
+import { useGoalStore } from './goal.store';
 import type { AIModel } from '../types';
 import { estimateTokens } from '../core/tokens';
 
@@ -48,6 +49,12 @@ async function prompt(settings: Partial<Record<string, any>> = {}): Promise<stri
 }
 
 const countOf = (haystack: string, needle: string) => haystack.split(needle).length - 1;
+const lastCacheBreakpointIndex = (messages: any[]) => {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]?.cacheControl?.type === 'ephemeral') return i;
+  }
+  return -1;
+};
 
 beforeEach(() => {
   Object.defineProperty(globalThis, 'navigator', { value: { platform: 'MacIntel' }, configurable: true });
@@ -245,15 +252,25 @@ describe('workspace context', () => {
     const messages = await requestMessages();
     const breakpoints = messages.filter((m: any) => m.cacheControl?.type === 'ephemeral');
 
-    expect(breakpoints).toHaveLength(2);
+    // BP1 core, BP2 tool protocol, BP3 workspace tail.
+    expect(breakpoints).toHaveLength(3);
     expect(breakpoints[0].content).not.toContain('Always run the parser tests.');
-    expect(breakpoints[1].content).toContain('Always run the parser tests.');
+    expect(breakpoints[1].content).not.toContain('Always run the parser tests.');
+    expect(breakpoints[2].content).toContain('Always run the parser tests.');
+  });
+
+  it('keeps sandbox wording out of the global core (hit-rate)', async () => {
+    const messages = await requestMessages({ sandboxMode: 'workspaceWrite' });
+    const core = messages.find((m: any) => m.role === 'system' && m.cacheControl?.type === 'ephemeral');
+    expect(core.content).not.toContain('SANDBOXED');
+    const toolBlock = messages.filter((m: any) => m.role === 'system' && m.cacheControl?.type === 'ephemeral')[1];
+    expect(toolBlock.content).toContain('SANDBOXED');
   });
 
   it('places volatile runtime state after the stable cache breakpoint', async () => {
     useWorkspaceStore.setState({ selectedFile: '/proj/src/a.ts' });
     const messages = await requestMessages();
-    const breakpoint = messages.findIndex((m: any) => m.cacheControl?.type === 'ephemeral');
+    const breakpoint = lastCacheBreakpointIndex(messages);
     const runtime = messages.findIndex((m: any) =>
       typeof m.content === 'string' && m.content.startsWith('Runtime context'),
     );
@@ -262,6 +279,23 @@ describe('workspace context', () => {
     expect(runtime).toBeGreaterThan(breakpoint);
     expect(messages[breakpoint].content).not.toContain('/proj/src/a.ts');
     expect(messages[runtime].content).toContain('Open file: /proj/src/a.ts');
+  });
+
+  it('keeps a paused goal after the workspace cache breakpoint', async () => {
+    useWorkspaceStore.setState({ agentsMd: 'Project rules.', agentsMdPath: '/proj/AGENTS.md', memoryFiles: [] });
+    useGoalStore.setState({
+      goals: {
+        c1: { conversationId: 'c1', text: 'ship the thing', status: 'paused', createdAt: 0, updatedAt: 0 },
+      },
+    });
+    const messages = await requestMessages();
+    const lastBp = lastCacheBreakpointIndex(messages);
+    const goalIdx = messages.findIndex((m: any) =>
+      typeof m.content === 'string' && m.content.startsWith('PAUSED GOAL'),
+    );
+    expect(goalIdx).toBeGreaterThan(lastBp);
+    expect(messages[lastBp].content).not.toContain('ship the thing');
+    useGoalStore.setState({ goals: {} });
   });
 
   it('reports the open folder and file', async () => {

@@ -128,6 +128,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     status: () => ipcRenderer.invoke('remote:status'),
     setPassword: (pw: string | null) => ipcRenderer.invoke('remote:setPassword', pw),
     installNgrok: () => ipcRenderer.invoke('remote:installNgrok'),
+    installCloudflared: () => ipcRenderer.invoke('remote:installCloudflared'),
     kick: (id: string) => ipcRenderer.invoke('remote:kick', id),
     publish: (frame: any) => ipcRenderer.invoke('remote:publish', frame),
     onCommand: (callback: (cmd: any) => void) => {

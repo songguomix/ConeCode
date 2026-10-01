@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { FiX, FiSmartphone, FiCopy, FiCheck, FiGlobe, FiLock } from 'react-icons/fi';
-import { useUIStore, useLanguageStore } from '../../stores';
+import { useUIStore, useLanguageStore, useChatStore } from '../../stores';
+import { useInstallGateStore } from '../../stores/installGate.store';
 import { qrSvg } from '../../core/remote/qr';
 
 interface RemoteState {
@@ -52,12 +53,28 @@ export default function RemotePanel() {
   const [tunnel, setTunnel] = useState<TunnelCfg>(loadTunnel);
   const [ngrokInstalling, setNgrokInstalling] = useState(false);
   const [ngrokMsg, setNgrokMsg] = useState<string | null>(null);
+  const [cfdInstalling, setCfdInstalling] = useState(false);
+  const [cfdMsg, setCfdMsg] = useState<string | null>(null);
+
+  const installCloudflared = async () => {
+    setCfdInstalling(true);
+    setCfdMsg(null);
+    try {
+      const r = await api()?.installCloudflared?.();
+      setCfdMsg(r?.ok ? t('cfdInstalled') : `${t('cfdInstallFailed')}: ${r?.error || ''}`);
+    } catch (e: any) {
+      setCfdMsg(`${t('cfdInstallFailed')}: ${e?.message || ''}`);
+    }
+    setCfdInstalling(false);
+  };
 
   const api = () => (window as any).electronAPI?.remote;
 
   const installNgrok = async () => {
     setNgrokInstalling(true);
     setNgrokMsg(null);
+    const holdId = `ngrok-${Date.now()}`;
+    useChatStore.getState().holdModelForInstall('ngrok', holdId, 'tool');
     try {
       const r = await api()?.installNgrok();
       setNgrokMsg(r?.ok ? t('ngrokInstalled') : `${t('ngrokInstallFailed')}: ${r?.error || ''}`);
@@ -65,6 +82,8 @@ export default function RemotePanel() {
       setNgrokMsg(`${t('ngrokInstallFailed')}: ${e?.message || ''}`);
     } finally {
       setNgrokInstalling(false);
+      useInstallGateStore.getState().end(holdId);
+      void useChatStore.getState().continueAfterInstall?.();
     }
   };
 
@@ -216,6 +235,16 @@ export default function RemotePanel() {
                     <option value="ngrok">ngrok</option>
                     <option value="custom">{t('tunnelCustom')}</option>
                   </select>
+                  {tunnel.method === 'cloudflared' && (
+                    <>
+                      <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">{t('cfdAdaptiveHint')}</p>
+                      <button onClick={installCloudflared} disabled={cfdInstalling}
+                        className="w-full flex items-center justify-center gap-2 py-1.5 rounded-lg bg-[var(--bg-3)] hover:bg-[var(--bg-4)] text-[12px] text-[var(--text-secondary)] transition-colors disabled:opacity-50">
+                        {cfdInstalling ? t('cfdInstalling') : t('cfdInstall')}
+                      </button>
+                      {cfdMsg && <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">{cfdMsg}</p>}
+                    </>
+                  )}
                   {tunnel.method === 'ngrok' && (
                     <>
                       <input

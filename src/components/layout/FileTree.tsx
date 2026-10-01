@@ -290,6 +290,7 @@ function FileNode({ item, depth, ...shared }: {
           key={`rename-${item.path}`}
           initial={item.name}
           disabled={shared.busy}
+          folder={item.isDirectory}
           onSubmit={(name) => shared.onSubmitRename(item.path, name)}
           onCancel={shared.onCancelRename}
           depth={depth}

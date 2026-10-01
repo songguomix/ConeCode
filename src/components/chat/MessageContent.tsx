@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { memo, useMemo, useState, type ReactNode } from 'react';
 import {
   FiFileText, FiFolder, FiEdit3, FiFilePlus, FiFolderPlus, FiTrash2,
   FiMove, FiCopy, FiTerminal, FiExternalLink, FiInfo, FiHelpCircle, FiCheck,
@@ -6,6 +6,10 @@ import {
 } from 'react-icons/fi';
 import { useLanguageStore } from '../../stores';
 import { highlightCode } from '../editor/highlight';
+import {
+  parseInline, parseMarkdownBlocks,
+  type MdBlock, type MdInline, type MdListItem,
+} from '../../core/markdown/markdown';
 
 // ---------------------------------------------------------------------------
 // Segment parsing: split assistant text into prose / code / tool-action blocks.
@@ -155,120 +159,186 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
 
 // ---------------------------------------------------------------------------
 // Lightweight inline + block Markdown rendering (no external deps).
+// Parsing lives in core/markdown so it is unit-tested without React.
 // ---------------------------------------------------------------------------
 
-const INLINE = /(`[^`]+`|\*\*[^*]+\*\*|~~[^~]+~~|\*[^*\n]+\*|_[^_\n]+_|\[[^\]]+\]\([^)\s]+\))/g;
-
-function renderInline(text: string, keyPrefix: string): ReactNode[] {
-  const parts = text.split(INLINE);
-  return parts.map((part, idx) => {
+function renderInlines(tokens: MdInline[], keyPrefix: string): ReactNode[] {
+  return tokens.map((tok, idx) => {
     const key = `${keyPrefix}-${idx}`;
-    if (!part) return null;
-    if (part.startsWith('`') && part.endsWith('`')) {
-      return <code key={key} className="px-1 py-0.5 rounded bg-[var(--bg-3)] font-mono text-[0.85em]">{part.slice(1, -1)}</code>;
+    switch (tok.type) {
+      case 'code':
+        return <code key={key} className="px-1 py-0.5 rounded bg-[var(--bg-3)] font-mono text-[0.85em]">{tok.text}</code>;
+      case 'strong':
+        return <strong key={key}>{tok.text}</strong>;
+      case 'em':
+        return <em key={key}>{tok.text}</em>;
+      case 'del':
+        return <del key={key}>{tok.text}</del>;
+      case 'link':
+        return (
+          <a key={key} href={tok.href}
+            onClick={(e) => { e.preventDefault(); window.electronAPI.app?.open?.(tok.href); }}
+            className="text-[var(--accent)] underline hover:opacity-80 cursor-pointer">
+            {tok.text}
+          </a>
+        );
+      default:
+        return <span key={key}>{tok.text}</span>;
     }
-    if (part.startsWith('**') && part.endsWith('**')) {
-      return <strong key={key}>{part.slice(2, -2)}</strong>;
-    }
-    if (part.startsWith('~~') && part.endsWith('~~')) {
-      return <del key={key}>{part.slice(2, -2)}</del>;
-    }
-    if (part.startsWith('*') && part.endsWith('*')) {
-      return <em key={key}>{part.slice(1, -1)}</em>;
-    }
-    if (part.startsWith('_') && part.endsWith('_')) {
-      return <em key={key}>{part.slice(1, -1)}</em>;
-    }
-    const link = part.match(/^\[([^\]]+)\]\(([^)\s]+)\)$/);
-    if (link) {
-      const url = link[2];
-      if (!/^https?:\/\//i.test(url)) return <span key={key}>{link[1]}</span>;
-      return (
-        <a key={key} href={url}
-          onClick={(e) => { e.preventDefault(); window.electronAPI.app?.open?.(url); }}
-          className="text-[var(--accent)] underline hover:opacity-80 cursor-pointer">
-          {link[1]}
-        </a>
-      );
-    }
-    return <span key={key}>{part}</span>;
   });
 }
 
-function MarkdownText({ text }: { text: string }) {
-  const blocks: ReactNode[] = [];
-  const lines = text.split('\n');
-  let para: string[] = [];
-  let list: { ordered: boolean; items: string[] } | null = null;
+function InlineText({ text, k }: { text: string; k: string }) {
+  return <>{renderInlines(parseInline(text), k)}</>;
+}
+
+function ListBlock({ items, k }: { items: MdListItem[]; k: string }) {
+  // Flatten consecutive same-ordered runs into one <ul>/<ol>; nesting is done
+  // with padding so mixed ordered/unordered nests still line up.
+  const nodes: ReactNode[] = [];
+  let i = 0;
   let key = 0;
-
-  const flushPara = () => {
-    if (!para.length) return;
-    blocks.push(
-      <p key={`p${key++}`} className="leading-relaxed">
-        {para.map((l, i) => (
-          <span key={i}>{i > 0 && <br />}{renderInline(l, `p${key}-${i}`)}</span>
-        ))}
-      </p>
-    );
-    para = [];
-  };
-  const flushList = () => {
-    if (!list) return;
-    const { ordered, items } = list;
-    const cls = 'my-1 pl-5 space-y-0.5 ' + (ordered ? 'list-decimal' : 'list-disc');
-    blocks.push(ordered
-      ? <ol key={`l${key++}`} className={cls}>{items.map((it, i) => <li key={i}>{renderInline(it, `li${key}-${i}`)}</li>)}</ol>
-      : <ul key={`l${key++}`} className={cls}>{items.map((it, i) => <li key={i}>{renderInline(it, `li${key}-${i}`)}</li>)}</ul>);
-    list = null;
-  };
-
-  for (const raw of lines) {
-    const line = raw.trimEnd();
-    const heading = line.match(/^(#{1,3})\s+(.*)$/);
-    const ulItem = line.match(/^\s*[-*]\s+(.*)$/);
-    const olItem = line.match(/^\s*\d+\.\s+(.*)$/);
-    const quote = line.match(/^>\s?(.*)$/);
-    const hr = /^(-{3,}|\*{3,})$/.test(line.trim());
-
-    if (line.trim() === '') { flushPara(); flushList(); continue; }
-
-    if (heading) {
-      flushPara(); flushList();
-      const level = heading[1].length;
-      const txt = heading[2];
-      const sz = level === 1 ? 'text-[16px]' : level === 2 ? 'text-[15px]' : 'text-[14px]';
-      blocks.push(<div key={`h${key++}`} className={`font-semibold mt-2 mb-0.5 ${sz}`}>{renderInline(txt, `h${key}`)}</div>);
-    } else if (hr) {
-      flushPara(); flushList();
-      blocks.push(<hr key={`hr${key++}`} className="my-2 border-[var(--border)]" />);
-    } else if (ulItem || olItem) {
-      flushPara();
-      const ordered = !!olItem;
-      const item = (ulItem ? ulItem[1] : olItem![1]);
-      if (!list || list.ordered !== ordered) { flushList(); list = { ordered, items: [] }; }
-      list.items.push(item);
-    } else if (quote) {
-      flushPara(); flushList();
-      blocks.push(
-        <blockquote key={`q${key++}`} className="border-l-2 border-[var(--accent)] pl-3 my-1 text-[var(--text-secondary)]">
-          {renderInline(quote[1], `q${key}`)}
-        </blockquote>
-      );
-    } else {
-      flushList();
-      para.push(line);
+  while (i < items.length) {
+    const ordered = items[i].ordered;
+    const depth = items[i].depth;
+    const run: MdListItem[] = [];
+    while (i < items.length && items[i].ordered === ordered && items[i].depth === depth) {
+      run.push(items[i]);
+      i++;
     }
+    const cls = `my-0.5 space-y-0.5 ${ordered ? 'list-decimal list-inside' : 'list-disc list-inside'}`;
+    const style = { paddingLeft: `${depth * 1.1 + 0.25}rem` };
+    nodes.push(
+      ordered ? (
+        <ol key={`${k}-o${key++}`} className={cls} style={style} start={run[0].ordinal || 1}>
+          {run.map((it, idx) => (
+            <li key={idx} className="marker:text-[var(--text-muted)]">
+              {it.checked != null && (
+                <span className={`mr-1.5 inline-flex h-3.5 w-3.5 align-[-2px] items-center justify-center rounded border text-[9px] ${
+                  it.checked
+                    ? 'border-[var(--success)] bg-[var(--success)] text-white'
+                    : 'border-[var(--border)] bg-[var(--bg-2)]'
+                }`}>
+                  {it.checked ? '✓' : ''}
+                </span>
+              )}
+              <InlineText text={it.text} k={`${k}-oli-${key}-${idx}`} />
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <ul key={`${k}-u${key++}`} className={cls} style={style}>
+          {run.map((it, idx) => (
+            <li key={idx} className="marker:text-[var(--text-muted)]">
+              {it.checked != null && (
+                <span className={`mr-1.5 inline-flex h-3.5 w-3.5 align-[-2px] items-center justify-center rounded border text-[9px] ${
+                  it.checked
+                    ? 'border-[var(--success)] bg-[var(--success)] text-white'
+                    : 'border-[var(--border)] bg-[var(--bg-2)]'
+                }`}>
+                  {it.checked ? '✓' : ''}
+                </span>
+              )}
+              <InlineText text={it.text} k={`${k}-uli-${key}-${idx}`} />
+            </li>
+          ))}
+        </ul>
+      ),
+    );
   }
-  flushPara();
-  flushList();
+  return <>{nodes}</>;
+}
 
-  return <div className="space-y-1.5">{blocks}</div>;
+function TableBlock({ block, k }: { block: Extract<MdBlock, { type: 'table' }>; k: string }) {
+  const alignCls = (a: string | null) =>
+    a === 'center' ? 'text-center' : a === 'right' ? 'text-right' : 'text-left';
+  const cols = Math.max(block.header.length, ...block.rows.map((r) => r.length), 1);
+  const cell = (text: string | undefined, idx: number, head: boolean) => {
+    const a = block.align[idx] ?? null;
+    const Tag = head ? 'th' : 'td';
+    return (
+      <Tag
+        key={idx}
+        className={`px-2.5 py-1.5 border border-[var(--border)] ${alignCls(a)} ${
+          head ? 'bg-[var(--bg-3)]/60 font-semibold text-[var(--text-primary)]' : 'text-[var(--text-secondary)]'
+        }`}
+      >
+        <InlineText text={text ?? ''} k={`${k}-${head ? 'h' : 'r'}-${idx}`} />
+      </Tag>
+    );
+  };
+  return (
+    <div className="my-3 overflow-x-auto rounded-xl border border-[var(--border)]">
+      <table className="w-full text-[13px] border-collapse">
+        <thead>
+          <tr>{Array.from({ length: cols }, (_, i) => cell(block.header[i], i, true))}</tr>
+        </thead>
+        <tbody>
+          {block.rows.map((row, ri) => (
+            <tr key={ri} className={ri % 2 ? 'bg-[var(--bg-2)]/40' : ''}>
+              {Array.from({ length: cols }, (_, i) => cell(row[i], i, false))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function MarkdownText({ text }: { text: string }) {
+  const blocks = parseMarkdownBlocks(text);
+  return (
+    <div className="space-y-1.5">
+      {blocks.map((block, i) => {
+        const k = `b${i}`;
+        switch (block.type) {
+          case 'heading': {
+            const sz =
+              block.level <= 1 ? 'text-[16px]'
+              : block.level === 2 ? 'text-[15px]'
+              : block.level === 3 ? 'text-[14px]'
+              : 'text-[13px]';
+            return (
+              <div key={k} className={`font-semibold mt-2 mb-0.5 ${sz}`}>
+                <InlineText text={block.text} k={`${k}-h`} />
+              </div>
+            );
+          }
+          case 'hr':
+            return <hr key={k} className="my-2 border-[var(--border)]" />;
+          case 'quote':
+            return (
+              <blockquote key={k} className="border-l-2 border-[var(--accent)] pl-3 my-1 text-[var(--text-secondary)] space-y-0.5">
+                {block.text.split('\n').map((line, li) => (
+                  <div key={li}><InlineText text={line} k={`${k}-q-${li}`} /></div>
+                ))}
+              </blockquote>
+            );
+          case 'list':
+            return <ListBlock key={k} items={block.items} k={k} />;
+          case 'table':
+            return <TableBlock key={k} block={block} k={k} />;
+          default: {
+            const lines = block.text.split('\n');
+            return (
+              <p key={k} className="leading-relaxed">
+                {lines.map((l, li) => (
+                  <span key={li}>{li > 0 && <br />}<InlineText text={l} k={`${k}-p-${li}`} /></span>
+                ))}
+              </p>
+            );
+          }
+        }
+      })}
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
 
-export default function MessageContent({
+export default memo(MessageContent);
+
+function MessageContent({
   content,
   streaming,
   toolCalls,
@@ -290,7 +360,7 @@ export default function MessageContent({
         return <MarkdownText key={i} text={seg.text} />;
       })}
       {toolCalls?.map((call) => <ActionCard key={call.id} action={toCardAction(call)} />)}
-      {streaming && <span className="animate-pulse">▌</span>}
+      {streaming && <span className="anim-caret">▌</span>}
     </div>
   );
 }
