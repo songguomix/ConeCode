@@ -142,6 +142,20 @@ async function applyEffect(change: CodeChange): Promise<{ success: boolean; resu
 
   // Keep the open editor consistent with what just changed on disk.
   if (success && kind !== 'exec' && change.filePath !== '[Command]') {
+    // Green marks for this Q&A turn: every AI-written line is highlighted in
+    // the editor until the user clears it. One assistant message = one turn.
+    if (kind === 'edit' || kind === 'create') {
+      try {
+        const { useAiHighlightsStore } = await import('./aiHighlights.store');
+        useAiHighlightsStore.getState().markAiEdit({
+          filePath: change.filePath,
+          original: kind === 'create' ? '' : change.originalCode,
+          updated: change.newCode,
+          conversationId: change.conversationId,
+          messageId: change.messageId,
+        });
+      } catch {}
+    }
     const ws = useWorkspaceStore.getState();
     if (ws.selectedFile === change.filePath) {
       if (kind === 'delete' || kind === 'rename') {
@@ -401,6 +415,11 @@ export const useCodeChangesStore = create<CodeChangesStore>((set, get) => ({
       const undo = await undoEffect(change);
       if (!undo.success) return { success: false, error: undo.error };
       await resyncWorkspace(change.filePath);
+      // The AI-written lines are gone — drop their green marks too.
+      try {
+        const { useAiHighlightsStore } = await import('./aiHighlights.store');
+        useAiHighlightsStore.getState().clearFile(change.filePath);
+      } catch {}
     }
 
     set((s) => ({
