@@ -6,6 +6,8 @@ import {
   recoverOpenTodos,
   buildResumePrompt,
   buildNewProjectPrompt,
+  buildLocalTasks,
+  dirtyFiles,
   MAX_TASKS,
   recommendNext,
   type WorkspaceScan,
@@ -17,7 +19,7 @@ const makeId = () => `t${n++}`;
 const scan = (over: Partial<WorkspaceScan> = {}): WorkspaceScan => ({
   rootPath: '/proj', scannedAt: 0,
   git: { isRepo: true, branch: 'main', dirty: 2 },
-  statusText: 'M src/a.ts', diffText: '- old\n+ new',
+  statusText: 'M  src/a.ts', diffText: '- old\n+ new',
   todoComments: [{ file: 'src/a.ts', line: 12, text: '// TODO: handle the empty case' }],
   scripts: ['test', 'build'], projectName: 'demo', readmeHead: '# demo',
   hasTests: true, fileCount: 42, languages: ['TypeScript'],
@@ -204,5 +206,52 @@ describe('recommendNext', () => {
 
   it('falls back to starting something new on a clean, healthy project', () => {
     expect(recommendNext(base).kind).toBe('start');
+  });
+});
+
+describe('dirtyFiles', () => {
+  it('parses porcelain paths, renames and quoted names', () => {
+    expect(dirtyFiles('M  src/a.ts\n M "sp ace.ts"\nR  old.ts -> new.ts\n?? untracked/x.js\n')).toEqual(
+      ['src/a.ts', 'sp ace.ts', 'new.ts', 'untracked/x.js'],
+    );
+  });
+
+  it('dedupes and skips garbage lines', () => {
+    expect(dirtyFiles('M  a.ts\nM  a.ts\n\nx\n')).toEqual(['a.ts']);
+  });
+});
+
+describe('buildLocalTasks', () => {
+  const t = (k: string) => k;
+
+  it('turns a dirty tree, TODOs and a test script into startable tasks', () => {
+    const tasks = buildLocalTasks(scan(), t);
+    const ids = tasks.map((x) => x.id);
+    expect(ids).toEqual(['local-review', 'local-todos']);
+    const review = tasks[0];
+    expect(review.files).toEqual(['src/a.ts']);
+    expect(review.prompt).toContain('Do not commit');
+    expect(tasks[1].kind).toBe('chore');
+  });
+
+  it('flags FIXME as a bug and skips the test card when a test script exists', () => {
+    const tasks = buildLocalTasks(
+      scan({ todoComments: [{ file: 'b.ts', line: 1, text: 'FIXME: crash' }] }),
+      t,
+    );
+    expect(tasks.find((x) => x.id === 'local-todos')?.kind).toBe('bug');
+    expect(tasks.some((x) => x.id === 'local-add-tests')).toBe(false);
+  });
+
+  it('proposes the first test only when there are no tests and no test script', () => {
+    expect(buildLocalTasks(scan({ hasTests: false, scripts: ['build'] }), t).map((x) => x.id))
+      .toContain('local-add-tests');
+    expect(buildLocalTasks(scan({ hasTests: false, scripts: ['test'] }), t).map((x) => x.id))
+      .not.toContain('local-add-tests');
+  });
+
+  it('stays empty on a clean, tested project', () => {
+    expect(buildLocalTasks(scan({ git: { isRepo: true, branch: 'main', dirty: 0 }, statusText: '', todoComments: [] }), t))
+      .toEqual([]);
   });
 });

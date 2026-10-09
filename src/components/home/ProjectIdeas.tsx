@@ -52,13 +52,9 @@ export default function ProjectIdeas() {
     <div>
       <div className="flex items-center gap-2 mb-2.5">
         <h2 className="text-sm font-semibold text-[var(--text-primary)]">{t('autopilotTitle')}</h2>
-        <span className="text-[11px] text-[var(--text-muted)]">
-          {/* Name the model, so it is visible that these came from the one the
-              user picked rather than a canned list. */}
-          {loadingIdeas ? t('autopilotThinking')
-            : !usingFallback && model ? `${t('autopilotFrom')} ${model.name}`
-            : t('autopilotSubtitle')}
-        </span>
+        {loadingIdeas && (
+          <span className="text-[11px] text-[var(--text-muted)]">{t('autopilotThinking')}</span>
+        )}
         <button
           onClick={() => loadIdeas(model?.providerId, model?.id, true)}
           disabled={loadingIdeas}
@@ -70,14 +66,15 @@ export default function ProjectIdeas() {
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
-        {loadingIdeas && ideas.length === 0 && [0, 1, 2, 3, 4, 5].map((i) => (
+        {loadingIdeas && ideas.length === 0 && [0, 1, 2].map((i) => (
           <div key={i} className="rounded-xl border border-[var(--border)] bg-[var(--bg-2)] p-3 min-h-[112px] anim-shimmer min-w-0">
             <div className="h-3 w-2/3 rounded bg-[var(--bg-3)]" />
             <div className="mt-2.5 h-2.5 w-full rounded bg-[var(--bg-3)]" />
             <div className="mt-1.5 h-2.5 w-4/5 rounded bg-[var(--bg-3)]" />
           </div>
         ))}
-        {ideas.map((idea) => (
+        {/* One row only: everything visible without scrolling, 换一批 rotates. */}
+        {ideas.slice(0, 3).map((idea) => (
           <IdeaCard key={idea.id} idea={idea} t={t}
             disabled={!model}
             onPick={() => model && run(idea, model.providerId, model.id)} />

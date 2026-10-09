@@ -342,6 +342,30 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
     promptExample: '{"action": "system_info"}',
   },
   {
+    name: 'perf_snapshot',
+    description: 'Check ConeCode itself for performance defects: live renderer heap, process memory, load, plus the monitor auto-read errors. Use when asked about slowness, freezes, or suspected performance problems.',
+    parameters: { type: 'object', properties: {} },
+    promptExample: '{"action": "perf_snapshot"}',
+  },
+  {
+    name: 'run_background',
+    description: 'Start a long job (download, build, test suite, research) in a fresh background conversation and keep working. The result is delivered back into THIS conversation automatically when it finishes. End your turn after delegating unless you have independent work — do not poll or wait.',
+    parameters: {
+      type: 'object',
+      properties: {
+        task: { type: 'string', description: 'Complete instruction for the background run, as you would write it to a colleague.' },
+      },
+      required: ['task'],
+    },
+    promptExample: '{"action": "run_background", "task": "Download the 2GB dataset to /tmp/data and verify its checksum"}',
+  },
+  {
+    name: 'background_status',
+    description: 'List background tasks started from this conversation and their state (running/done).',
+    parameters: { type: 'object', properties: {} },
+    promptExample: '{"action": "background_status"}',
+  },
+  {
     name: 'ask_user',
     description:
       'Ask the user a question and stop until they answer. Use only when genuinely blocked or an irreversible decision needs their judgment.',
@@ -463,7 +487,7 @@ export const MUTATING_TOOLS = new Set(BUILTIN_TOOLS.filter((tl) => tl.mutating).
 
 /** Exact Plan Mode allowlist, shared by schema filtering and the executor gate. */
 export const PLAN_MODE_TOOLS = new Set([
-  'read_file', 'list_dir', 'search', 'glob', 'system_info', 'git_status', 'git_diff',
+  'read_file', 'list_dir', 'search', 'glob', 'system_info', 'perf_snapshot', 'background_status', 'git_status', 'git_diff',
   'web_fetch', 'web_search', 'use_skill', 'spawn_agent', 'ask_user',
 ]);
 

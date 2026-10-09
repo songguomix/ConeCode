@@ -296,6 +296,96 @@ Never trade clarity for speed without a measurement proving the trade was worth 
 ## 6. 交付（五个要素，缺项写"无"）
 思路依据 · 改动清单 · 跑过的命令与结果 · 截图验证了哪几处 · 剩余风险与未验证项。`,
   },
+  {
+    id: 'perf-monitor',
+    name: '性能巡检',
+    description: 'Check ConeCode itself for performance defects and report with evidence, without fixing anything. Use when asked about slowness, freezes, memory growth, or suspected performance problems.',
+    tags: ['diagnostics'],
+    body: `# 性能巡检
+
+只检查、不修。结论只有两种：【有缺陷】（附证据）或【本次未见缺陷】。修不修、怎么修，由用户决定后再说。
+
+## 1. 先采样（第一步必须是它，不许猜）
+调 \`perf_snapshot\` 拿实时快照：渲染堆、进程 RSS、空闲内存、负载/CPU、外加监视器自动读到的报错。看 Verdict 行：
+- **no defect** → 再看"Auto-read renderer errors"有没有报错。有报错 → 按第 2 步确认是否与性能相关；没有 → 直接给【本次未见缺陷】，列出四项数值。
+- **DEFECT LIKELY** → 进第 2 步。
+
+## 2. 定性（一次快照只是线索）
+- 单次超标 ≠ 缺陷：让用户复现（或自己用 exec 跑可疑操作），采样时打开监视器（输入框健康灯 → 启动），连续两拍超标才算确认。
+- 堆内存持续涨、RSS 只增不减 → 疑似泄漏：用 read_file 看最近改动的可疑分配/监听器/定时器。
+- 有 renderer 报错 → 读报错堆栈，判断是偶发还是必现。
+
+## 3. 报告（证据链，不许"应该没问题"）
+- 结论：有缺陷 / 未见缺陷。
+- 证据：超标项 + 具体数值 + 阈值、报错原文（最多 5 条）、复现路径。
+- 有缺陷才加：疑似位置（文件:行）+ 建议的排查方向。**不要直接改代码**，除非用户明确说修。`,
+  },
+  {
+    id: 'todo-scan',
+    name: 'TODO 扫描',
+    description: 'Sweep the project for TODO, FIXME, HACK and XXX markers and report them grouped by file with a fix-order suggestion. Use when asked about tech debt, leftovers, or what still needs doing.',
+    tags: ['diagnostics'],
+    body: `# TODO 扫描
+
+只扫描、不修。把散落在代码里的欠账一次性摆出来。
+
+## 1. 扫（只用只读工具）
+用 \`search\` 在全仓找这几类标记（大小写都要）：TODO、FIXME、HACK、XXX、@deprecated、无人处理的 catch 空块。一次搜一类，别一次全倒出来。
+- 结合 \`glob\` 排除依赖与构建产物（node_modules、dist、release、.git）。
+- 每个命中用 \`read_file\` 看前后 10 行，确认不是误报（比如注释里的示例）。
+
+## 2. 分级
+- **P0 会烂**：FIXME、安全相关、已知必现的 bug 标记。
+- **P1 该做**：功能 TODO、有明确归属的改进。
+- **P2 随缘**：HACK 绕路、风格、"以后再说"。
+排 P0 → P1 → P2，同级按文件集中度排（同一文件 3 个以上优先）。
+
+## 3. 报告
+按文件分组：文件:行 + 标记原文（一行）+ P 级。最后给总数和一句建议先动哪三个。**不要顺手修**，除非用户明确说修。`,
+  },
+  {
+    id: 'commit-msg',
+    name: '提交信息',
+    description: 'Read the working-tree diff and write a conventional commit message (one subject line plus body). Use when asked to draft a commit message or summarize uncommitted changes.',
+    tags: ['workflow'],
+    body: `# 提交信息
+
+只写信息、不提交。输出用户能直接贴进 git commit 的文本。
+
+## 1. 看 diff（只读）
+1. 先 \`git_status\` 看改了哪些文件；再 \`git_diff\` 看具体内容。
+2. diff 为空 → 直接说"工作区干净，无需提交"，不要编。
+3. 二进制/锁文件/自动生成的变更只在 body 里一笔带过，不进 subject。
+
+## 2. 写信息（Conventional Commits）
+- subject：一行，\`type(scope): 干了什么\`，type 只能是 feat/fix/refactor/test/docs/chore/perf，中文写实，不超过 50 字。
+- body：换了哪几处、为什么换（动机一句），每条一行短横开头。
+- 破坏性变更单独一行 \`BREAKING:\` 说明。
+
+## 3. 输出格式
+代码块里只放最终文本，别的一句话放在块外面。**不要执行 git commit**，除非用户明确说提交。`,
+  },
+  {
+    id: 'repo-map',
+    name: '仓库导览',
+    description: 'Map an unfamiliar repository: entry points, module responsibilities, and where a newcomer should start reading. Use when onboarding to a repo or asked what lives where.',
+    tags: ['diagnostics'],
+    body: `# 仓库导览
+
+只读、不改。给新人一张"从哪进去、东西在哪"的地图，不要贴大段代码。
+
+## 1. 找入口（最多看 6 个文件）
+1. \`list_dir\` 看顶层：README、package.json（或等价清单）、src/electron 等大目录先记。
+2. 读 README 的用法/结构段 + 入口文件（main/index/App）确认真正的启动链。
+3. 别递归全仓：每层只看目录名，点到为止。
+
+## 2. 输出地图
+- **一句话**：这个仓库是干什么的。
+- **启动链**：从入口到主界面，3-5 步。
+- **模块表**：目录 → 职责（一行一个），标出"状态放哪""网络在哪发""工具/技能在哪定义"这类关键位置。
+- **新人三步**：先读哪三个文件能最快上手。
+看不懂的目录写"未确认"，不许编职责。`,
+  },
 ];
 
 export function findBuiltin(id: string): CatalogSkill | undefined {

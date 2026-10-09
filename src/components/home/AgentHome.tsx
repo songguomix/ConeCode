@@ -1,13 +1,12 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   FiRefreshCw, FiFolder, FiGitBranch, FiArrowRight, FiZap,
-  FiAlertCircle, FiTool, FiFileText, FiCheckSquare, FiPackage,
+  FiAlertCircle, FiTool, FiFileText, FiCheckSquare, FiPackage, FiPlay,
 } from 'react-icons/fi';
 import {
   useAgendaStore, useChatStore, useLanguageStore, useModelStore, useWorkspaceStore,
 } from '../../stores';
-import { type SuggestedTask, type TaskKind } from '../../core/agenda/agenda';
-import AppIcon from '../common/AppIcon';
+import { type SuggestedTask, type TaskKind, buildLocalTasks } from '../../core/agenda/agenda';
 import ProjectIdeas from './ProjectIdeas';
 import ProjectBriefComposer from './ProjectBriefComposer';
 
@@ -56,20 +55,7 @@ export default function AgentHome() {
   const scanWorkspace = useAgendaStore((s) => s.scanWorkspace);
 
 
-  // The greeting follows the clock rather than being one fixed line.
-  const greetingKey = useMemo(() => {
-    const hour = new Date().getHours();
-    if (hour < 5) return 'homeGreetingNight';
-    if (hour < 12) return 'homeGreetingMorning';
-    if (hour < 18) return 'homeGreetingAfternoon';
-    return 'homeGreetingEvening';
-  }, []);
-
-  /**
-   * The status line is built from what the scan found, so it varies with the
-   * project instead of being a fixed row of slots: a clean repo with tests shows
-   * a different set of facts than a dirty one with none.
-   */
+  // Facts are free, so scan as soon as a folder is open; suggestions cost tokens
   const facts = useMemo(() => {
     if (!scan) return [] as { text: string; warn?: boolean }[];
     const out: { text: string; warn?: boolean }[] = [];
@@ -91,63 +77,83 @@ export default function AgentHome() {
     void scanWorkspace();
   }, [rootPath, scanWorkspace, loadCached]);
 
+  // Deterministic one-click tasks from the free scan — no tokens involved.
+  const localTasks = useMemo(() => (scan ? buildLocalTasks(scan, t) : []), [scan, t]);
+
   const start = async (prompt: string) => {
     if (!model) return;
     await sendMessage(prompt, model.providerId, model.id);
   };
 
   const busy = scanning || suggesting;
+  // Two rows visible without scrolling; the rest unfold on click.
+  const [showAllTasks, setShowAllTasks] = useState(false);
   // Skeletons stand in for tasks being fetched — NOT for the free re-scan of
   // local facts, which must not blank out proposals the user is reading.
   const showSkeletons = suggesting || (scanning && tasks.length === 0);
 
   return (
-    <div className="max-w-[900px] mx-auto w-full pt-8 pb-6 min-w-0">
-      {/* ---- Header: who you are, where you are ---- */}
-      <div className="flex items-start gap-3 mb-8 min-w-0">
-        <AppIcon size={36} className="rounded-xl" />
-        <div className="min-w-0 flex-1">
-          <h1 className="text-lg font-semibold text-[var(--text-primary)] leading-tight">
-            {t(greetingKey)}
-          </h1>
-          <div className="mt-1 flex items-center gap-1.5 flex-wrap text-xs text-[var(--text-muted)]">
-            {rootPath ? (
-              <>
-                <span className="font-medium text-[var(--text-secondary)]">
-                  {scan?.projectName || rootPath.split('/').pop()}
-                </span>
-                {scan?.git.isRepo && scan.git.branch && (
-                  <span className="inline-flex items-center gap-1">
-                    <FiGitBranch size={11} />{scan.git.branch}
-                  </span>
-                )}
-                {/* Whatever the scan actually found, in whatever combination —
-                    nothing here is a fixed slot. */}
-                {facts.map((fact, i) => (
-                  <span key={i} className={fact.warn ? 'text-[var(--warning)]' : undefined}>
-                    · {fact.text}
-                  </span>
-                ))}
-                <button
-                  onClick={() => void scanWorkspace()}
-                  disabled={scanning}
-                  title={t('homeRescan')}
-                  className="ml-1 p-0.5 rounded hover:text-[var(--accent)] transition-colors disabled:opacity-50"
-                >
-                  <FiRefreshCw size={10} className={scanning ? 'animate-spin' : ''} />
-                </button>
-              </>
-            ) : (
-              <span>{t('homeNoFolder')}</span>
-            )}
-          </div>
+    <div className="max-w-[900px] mx-auto w-full pt-5 pb-6 min-w-0">
+      {/* ---- Header: one status line when a folder is open, nothing when not ---- */}
+      {rootPath && (
+        <div className="flex items-center gap-1.5 mb-4 min-w-0 text-xs text-[var(--text-muted)] flex-wrap">
+          <span className="text-sm font-semibold text-[var(--text-primary)] truncate">
+            {scan?.projectName || rootPath.split('/').pop()}
+          </span>
+          {scan?.git.isRepo && scan.git.branch && (
+            <span className="inline-flex items-center gap-1 shrink-0">
+              <FiGitBranch size={11} />{scan.git.branch}
+            </span>
+          )}
+          {/* Whatever the scan actually found, in whatever combination —
+              nothing here is a fixed slot. */}
+          {facts.map((fact, i) => (
+            <span key={i} className={`shrink-0 ${fact.warn ? 'text-[var(--warning)]' : ''}`}>
+              · {fact.text}
+            </span>
+          ))}
+          <button
+            onClick={() => void scanWorkspace()}
+            disabled={scanning}
+            title={t('homeRescan')}
+            className="ml-1 p-0.5 rounded hover:text-[var(--accent)] transition-colors disabled:opacity-50 shrink-0"
+          >
+            <FiRefreshCw size={10} className={scanning ? 'animate-spin' : ''} />
+          </button>
         </div>
-      </div>
+      )}
 
       <ProjectBriefComposer />
 
+      {/* ---- One click to start: local tasks + scripts, no tokens ---- */}
+      {rootPath && (localTasks.length > 0 || (scan && scan.scripts.length > 0) || (scanning && !scan)) && (
+        <section className="mb-5 min-w-0">
+          <h2 className="text-sm font-semibold text-[var(--text-primary)] truncate mb-3">{t('homeQuickTasks')}</h2>
+          {scanning && !scan ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              {[0, 1].map((i) => <SkeletonCard key={i} />)}
+            </div>
+          ) : (
+            <>
+              {localTasks.length > 0 && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 mb-2.5">
+                  {localTasks.map((task) => <TaskCard key={task.id} task={task} onStart={() => start(task.prompt)} t={t} />)}
+                </div>
+              )}
+              {scan && scan.scripts.length > 0 && (
+                <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-2)] divide-y divide-[var(--border)] overflow-hidden">
+                  {scan.scripts.map((s) => (
+                    <ScriptRow key={s} name={s} rootPath={scan.rootPath} t={t} />
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </section>
+      )}
+
       {/* ---- The main event: work the agent found ---- */}
-      <section className="mb-8 min-w-0">
+      <section className="mb-5 min-w-0">
         <div className="flex items-center gap-2 mb-3 min-w-0">
           <h2 className="text-sm font-semibold text-[var(--text-primary)] truncate">{t('homeFindWork')}</h2>
           {generatedAt && !busy && (
@@ -166,7 +172,6 @@ export default function AgentHome() {
         {!rootPath ? (
           <EmptyCard
             icon={<FiFolder size={18} />}
-            title={t('homeOpenFolderTitle')}
             body={t('homeOpenFolderBody')}
             action={{ label: t('openFolder'), onClick: openFolder }}
           />
@@ -175,9 +180,21 @@ export default function AgentHome() {
             {[0, 1, 2, 3].map((i) => <SkeletonCard key={i} />)}
           </div>
         ) : tasks.length ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-            {tasks.map((task) => <TaskCard key={task.id} task={task} onStart={() => start(task.prompt)} t={t} />)}
-          </div>
+          <>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              {(showAllTasks ? tasks : tasks.slice(0, 4)).map((task) => (
+                <TaskCard key={task.id} task={task} onStart={() => start(task.prompt)} t={t} />
+              ))}
+            </div>
+            {tasks.length > 4 && (
+              <button
+                onClick={() => setShowAllTasks((v) => !v)}
+                className="mt-2 text-[12px] text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors"
+              >
+                {showAllTasks ? t('homeShowLess') : `${t('homeShowMore')} (${tasks.length - 4})`}
+              </button>
+            )}
+          </>
         ) : (
           <EmptyCard
             icon={<FiZap size={18} />}
@@ -205,7 +222,7 @@ function TaskCard({ task, onStart, t }: { task: SuggestedTask; onStart: () => vo
   return (
     <button
       onClick={onStart}
-      className="group text-left rounded-xl border border-[var(--border)] bg-[var(--bg-2)] p-3 hover:border-[var(--accent)] hover:bg-[var(--bg-3)]/40 transition-all flex flex-col gap-2 min-w-0 overflow-hidden"
+      className="group text-left rounded-xl border border-[var(--border)] bg-[var(--bg-2)] p-3 hover:border-[var(--accent)] hover:bg-[var(--bg-3)]/40 transition-all flex flex-col gap-1.5 min-h-[112px] min-w-0 overflow-hidden"
     >
       <div className="flex items-start gap-2 min-w-0">
         <span className={`shrink-0 w-6 h-6 rounded-lg flex items-center justify-center ${style.bg} ${style.color}`}>
@@ -242,8 +259,59 @@ function TaskCard({ task, onStart, t }: { task: SuggestedTask; onStart: () => vo
   );
 }
 
-function SkeletonCard() {
+/**
+ * One npm script as one click: runs it in the project root via exec and shows
+ * the tail inline. Finite commands (test/lint/build) belong here; a `dev`
+ * server gets killed by the exec timeout with an explanatory note, by design.
+ */
+function ScriptRow({ name, rootPath, t }: { name: string; rootPath: string; t: (k: string) => string }) {
+  const [run, setRun] = useState<{ state: 'idle' } | { state: 'running' } | { state: 'done'; ok: boolean; output: string }>(
+    { state: 'idle' },
+  );
+
+  const start = async () => {
+    if (run.state === 'running') return;
+    setRun({ state: 'running' });
+    try {
+      const res = await (window as any).electronAPI?.exec?.run?.(`npm run "${name}"`, rootPath);
+      const text = `${res?.stdout || ''}\n${res?.stderr || ''}`.trim().split('\n').slice(-20).join('\n');
+      setRun({ state: 'done', ok: !!res?.success, output: text || `(exit ${res?.exitCode ?? '?'})` });
+    } catch (e: any) {
+      setRun({ state: 'done', ok: false, output: e?.message || String(e) });
+    }
+  };
+
   return (
+    <div className="px-4 py-2.5 min-w-0">
+      <div className="flex items-center gap-2 min-w-0">
+        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+          run.state === 'done' ? (run.ok ? 'bg-[var(--success)]' : 'bg-[var(--error)]') : 'bg-[var(--border)]'
+        }`} />
+        <code className="flex-1 min-w-0 truncate text-xs text-[var(--text-secondary)]">npm run {name}</code>
+        {run.state === 'done' && (
+          <span className={`text-[11px] shrink-0 ${run.ok ? 'text-[var(--success)]' : 'text-[var(--error)]'}`}>
+            {run.ok ? t('homePassed') : t('homeFailed')}
+          </span>
+        )}
+        <button
+          onClick={() => void start()}
+          disabled={run.state === 'running'}
+          className="shrink-0 inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium bg-[var(--bg-3)] text-[var(--text-secondary)] hover:text-[var(--accent)] hover:border-[var(--accent)] border border-transparent transition-colors disabled:opacity-50"
+        >
+          <FiPlay size={10} className={run.state === 'running' ? 'animate-pulse' : ''} />
+          {run.state === 'running' ? t('homeRunning') : t('homeRun')}
+        </button>
+      </div>
+      {run.state === 'done' && run.output && (
+        <pre className="mt-1.5 max-h-40 overflow-auto rounded-lg bg-[var(--bg-1)] p-2 text-[11px] leading-relaxed text-[var(--text-secondary)] whitespace-pre-wrap break-words">
+          {run.output}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+function SkeletonCard() {  return (
     <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-2)] p-3 anim-shimmer">
       <div className="flex items-center gap-2">
         <div className="w-6 h-6 rounded-lg bg-[var(--bg-3)]" />
@@ -259,12 +327,12 @@ function SkeletonCard() {
 function EmptyCard({
   icon, title, body, action,
 }: {
-  icon: JSX.Element; title: string; body: string; action?: { label: string; onClick: () => void };
+  icon: JSX.Element; title?: string; body: string; action?: { label: string; onClick: () => void };
 }) {
   return (
-    <div className="rounded-xl border border-dashed border-[var(--border)] bg-[var(--bg-2)]/50 p-5 flex flex-col items-center text-center gap-2">
+    <div className="rounded-xl border border-dashed border-[var(--border)] bg-[var(--bg-2)]/50 p-4 flex flex-col items-center text-center gap-1.5">
       <span className="text-[var(--text-muted)]">{icon}</span>
-      <div className="text-sm font-medium text-[var(--text-primary)]">{title}</div>
+      {title && <div className="text-sm font-medium text-[var(--text-primary)]">{title}</div>}
       <p className="text-xs text-[var(--text-muted)] max-w-md leading-relaxed">{body}</p>
       {action && (
         <button onClick={action.onClick}

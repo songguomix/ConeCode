@@ -8,8 +8,25 @@ import type { ComputerRequest, DisplayGeometry } from '../core/computer/computer
 export type { PreviewPlan, PreviewStatus, PreviewLog };
 export type { ComputerRequest, DisplayGeometry };
 
-export interface ComputerStatus {
-  platform: string;
+export interface AppProcessMetric {
+  pid: number;
+  type: string;
+  /** Percent CPU usage. */
+  cpu: number;
+  /** Working set in KB. */
+  memory: number;
+}
+
+export interface AppMetricsSnapshot {
+  processes: AppProcessMetric[];
+  mainMemory: { rss: number; heapUsed: number; heapTotal: number };
+  load: number[];
+  freeMemory: number;
+  totalMemory: number;
+  cpus: number;
+}
+
+export interface ComputerStatus {  platform: string;
   enabled: boolean;
   supported: boolean;
   accessibility: boolean;
@@ -219,6 +236,7 @@ export interface ElectronAPI {
     open: (appName: string) => Promise<boolean>;
     openPath: (path: string) => Promise<boolean>;
     getSystemInfo: () => Promise<Record<string, any>>;
+    getAppMetrics: () => Promise<AppMetricsSnapshot>;
   };
   git: {
     info: (cwd?: string) => Promise<{ isRepo: boolean; branch: string | null; dirty: number }>;

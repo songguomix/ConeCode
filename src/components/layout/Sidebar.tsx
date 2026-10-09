@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import { FiPlus, FiSettings, FiTrash2, FiGlobe, FiEdit3, FiMenu, FiTerminal, FiFileText, FiSmartphone, FiMonitor, FiCpu, FiGrid, FiShield, FiGitBranch, FiLoader, FiFolder, FiMessageSquare, FiChevronDown, FiChevronRight } from 'react-icons/fi';
+import { FiPlus, FiSettings, FiTrash2, FiGlobe, FiEdit3, FiMenu, FiTerminal, FiFileText, FiSmartphone, FiMonitor, FiCpu, FiGrid, FiShield, FiGitBranch, FiLoader, FiFolder, FiMessageSquare, FiChevronDown, FiChevronRight, FiClock } from 'react-icons/fi';
 import { useChatStore, useUIStore, useLanguageStore, usePreviewStore, useComputerStore, useModelStore, useCodeChangesStore, useWorkspaceStore, useAiHighlightsStore } from '../../stores';
+import { useBackgroundStore } from '../../stores/background.store';
 import { groupConversationsByFolder } from '../../core/workspace/conversations';
 import { mostUrgentDot, type DotKind } from './panelDot';
 import FileTree from './FileTree';
@@ -27,10 +28,11 @@ function StatusDot({ kind, className = '' }: { kind: DotKind; className?: string
   return <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${style[kind]} ${className}`} />;
 }
 
-const LOCALES: { value: Locale; label: string; flag: string }[] = [
-  { value: 'en', label: 'English', flag: '🇺🇸' },
-  { value: 'zh', label: '中文', flag: '🇨🇳' },
-  { value: 'ja', label: '日本語', flag: '🇯🇵' },
+const LOCALES: { value: Locale; label: string }[] = [
+  { value: 'en', label: 'English' },
+  { value: 'zh', label: '中文（简体）' },
+  { value: 'zhHant', label: '中文（繁體）' },
+  { value: 'ja', label: '日本語' },
 ];
 
 export default function Sidebar() {
@@ -75,6 +77,11 @@ export default function Sidebar() {
   const computerOpen = useUIStore((s) => s.computerOpen);
   const toggleComputer = useUIStore((s) => s.toggleComputer);
   const computerEnabled = useComputerStore((s) => s.enabled);
+  const backgroundOpen = useUIStore((s) => s.backgroundOpen);
+  const toggleBackground = useUIStore((s) => s.toggleBackground);
+  const bgTasks = useBackgroundStore((s) => s.tasks);
+  const bgRunning = Object.values(bgTasks).some((task) => task.status === 'running');
+  const bgUnseen = Object.values(bgTasks).filter((task) => task.unseen).length;
   const { locale, setLocale, t } = useLanguageStore();
   const changes = useCodeChangesStore((s) => s.changes);
   const rootPath = useWorkspaceStore((s) => s.rootPath);
@@ -104,6 +111,7 @@ export default function Sidebar() {
     { key: 'preview', icon: <FiMonitor size={15} />, label: t('preview'), open: previewOpen, toggle: togglePreview, dot: previewState === 'idle' ? null : previewState === 'running' ? 'success' : previewState === 'starting' ? 'warning-pulse' : 'error' },
   ];
   const extraPanels: PanelItem[] = [
+    { key: 'background', icon: <FiClock size={15} />, label: `${t('backgroundTasks')}${bgUnseen > 0 ? ` · ${bgUnseen}` : ''}`, open: backgroundOpen, toggle: toggleBackground, dot: bgUnseen > 0 ? 'warning-pulse' : bgRunning ? 'success' : null },
     { key: 'worktrees', icon: <FiGitBranch size={15} />, label: t('worktrees'), open: worktreesOpen, toggle: toggleWorktrees },
     { key: 'remote', icon: <FiSmartphone size={15} />, label: t('remoteControl'), open: remoteOpen, toggle: toggleRemote },
     { key: 'computer', icon: <FiCpu size={15} />, label: t('computerControl'), open: computerOpen, toggle: toggleComputer, dot: computerEnabled ? 'error-pulse' : null },
@@ -360,8 +368,8 @@ export default function Sidebar() {
                       className={`w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors ${
                         locale === l.value ? 'bg-[var(--accent-soft)] text-[var(--accent)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-3)]'
                       }`}>
-                      <span>{l.flag}</span>
-                      <span>{l.label}</span>
+                      <span className="flex-1 text-left truncate">{l.label}</span>
+                      {locale === l.value && <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)] shrink-0" />}
                     </button>
                   ))}
                 </div>

@@ -33,6 +33,8 @@ export default function ChatView() {
   const planMode = useChatStore((s) => s.planMode);
   const setPlanMode = useChatStore((s) => s.setPlanMode);
   const sendMessage = useChatStore((s) => s.sendMessage);
+  const queued = useChatStore((s) => (activeConversationId ? s.queuedMessages[activeConversationId] || [] : []));
+  const dequeueMessage = useChatStore((s) => s.dequeueMessage);
   const getSelectedModel = useModelStore((s) => s.getSelectedModel);
   const [planDismissedId, setPlanDismissedId] = useState<string | null>(null);
   const [reviewCommandId, setReviewCommandId] = useState<string | null>(null);
@@ -226,6 +228,24 @@ export default function ChatView() {
             </Fragment>
           );
         })}
+
+        {/* opencode-style queue: typed mid-run, sent when this turn ends. */}
+        {queued.map((q) => (
+          <div key={q.id} className="mt-3 ml-auto max-w-[85%] min-w-0">
+            <div className="rounded-2xl border border-dashed border-[var(--accent)]/50 bg-[var(--accent-soft)]/50 px-4 py-2.5">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-[11px] font-medium text-[var(--accent)]">{t('queuedTag')}</span>
+                <button
+                  onClick={() => activeConversationId && dequeueMessage(activeConversationId, q.id)}
+                  className="ml-auto text-[11px] text-[var(--text-muted)] hover:text-[var(--error)] transition-colors"
+                >
+                  {t('dismiss')}
+                </button>
+              </div>
+              <p className="text-[14px] text-[var(--text-primary)] whitespace-pre-wrap break-words">{q.content}</p>
+            </div>
+          </div>
+        ))}
 
         {isStreaming && (
           <div className={`${streamContinues ? 'mt-1.5' : 'mt-6'}`}>

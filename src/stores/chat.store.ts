@@ -33,6 +33,8 @@ import {
   pageSnapshot, pageClick, pageFill, pageEval, pageHistory, waitForPage,
 } from '../core/preview/agentpage';
 import { normalizeWebUrl, isLocalUrl, parseResultRef } from '../core/browser/policy';
+import { toSample, checkBreaches, describeBreach, formatBytes, DEFAULT_THRESHOLDS } from '../core/monitor/perf';
+import { useMonitorStore } from './monitor.store';
 
 /** The headless built-in browser (main process), if this session has one. */
 const browserAPI = () => (window as any).electronAPI?.browser;
@@ -201,6 +203,8 @@ function endRun(convId: string) {
     delete runs[convId];
     return { streamingRuns: runs, isStreaming: Object.keys(runs).length > 0 };
   });
+  // A queued follow-up (typed mid-run, opencode-style) becomes the next turn.
+  void useChatStore.getState().flushQueue(convId);
 }
 
 /**
@@ -258,7 +262,7 @@ function screenshotParts(images: string[]): any[] {
 }
 
 interface FileAction {
-  action: 'read_file' | 'list_dir' | 'ask_user' | 'edit_file' | 'create_file' | 'create_dir' | 'delete' | 'rename' | 'copy' | 'exec' | 'open_app' | 'open_path' | 'system_info' | 'search' | 'glob' | 'update_todos' | 'git_status' | 'git_diff' | 'web_fetch' | 'web_search' | 'download' | 'mcp_call' | 'spawn_agent' | 'use_skill' | 'computer'
+  action: 'read_file' | 'list_dir' | 'ask_user' | 'edit_file' | 'create_file' | 'create_dir' | 'delete' | 'rename' | 'copy' | 'exec' | 'open_app' | 'open_path' | 'system_info' | 'perf_snapshot' | 'run_background' | 'background_status' | 'search' | 'glob' | 'update_todos' | 'git_status' | 'git_diff' | 'web_fetch' | 'web_search' | 'download' | 'mcp_call' | 'spawn_agent' | 'use_skill' | 'computer'
     | 'page_navigate' | 'page_snapshot' | 'page_click' | 'page_fill' | 'page_eval' | 'page_console' | 'remember';
   /** The `computer` tool's own request, nested so its `action` field survives. */
   computer?: ComputerRequest;
@@ -303,7 +307,7 @@ interface FileAction {
 // react to (so the agent loop should run another turn). Everything else is
 // either deferred for user confirmation or terminal.
 const INFO_ACTIONS = new Set([
-  'read_file', 'list_dir', 'create_file', 'create_dir', 'open_app', 'open_path', 'system_info', 'search', 'glob', 'update_todos', 'git_status', 'git_diff', 'web_fetch', 'web_search', 'download', 'mcp_call', 'spawn_agent', 'use_skill',
+  'read_file', 'list_dir', 'create_file', 'create_dir', 'open_app', 'open_path', 'system_info', 'perf_snapshot', 'background_status', 'search', 'glob', 'update_todos', 'git_status', 'git_diff', 'web_fetch', 'web_search', 'download', 'mcp_call', 'spawn_agent', 'use_skill',
   'page_navigate', 'page_snapshot', 'page_click', 'page_fill', 'page_eval', 'page_console', 'remember',
 ]);
 
@@ -311,7 +315,7 @@ const INFO_ACTIONS = new Set([
 // turn, they can safely run together. Mixed read/write batches stay sequential
 // because a later call may depend on an earlier mutation.
 const INDEPENDENT_READ_ACTIONS = new Set([
-  'read_file', 'list_dir', 'search', 'glob', 'system_info', 'git_status', 'git_diff',
+  'read_file', 'list_dir', 'search', 'glob', 'system_info', 'perf_snapshot', 'background_status', 'git_status', 'git_diff',
   'web_fetch', 'web_search', 'use_skill',
 ]);
 
@@ -319,12 +323,176 @@ const INDEPENDENT_READ_ACTIONS = new Set([
 // recognize BARE JSON action objects without mistakenly wrapping unrelated JSON.
 const KNOWN_ACTIONS = new Set([
   'read_file', 'list_dir', 'ask_user', 'edit_file', 'create_file', 'create_dir',
-  'delete', 'rename', 'copy', 'exec', 'open_app', 'open_path', 'system_info', 'search', 'glob', 'update_todos', 'git_status', 'git_diff', 'web_fetch', 'web_search', 'download', 'mcp_call', 'spawn_agent', 'use_skill', 'computer',
+  'delete', 'rename', 'copy', 'exec', 'open_app', 'open_path', 'system_info', 'perf_snapshot', 'run_background', 'background_status', 'search', 'glob', 'update_todos', 'git_status', 'git_diff', 'web_fetch', 'web_search', 'download', 'mcp_call', 'spawn_agent', 'use_skill', 'computer',
   'page_navigate', 'page_snapshot', 'page_click', 'page_fill', 'page_eval', 'page_console', 'remember',
 ]);
 
+// On-demand performance check backing the perf_snapshot tool (and the
+// perf-monitor skill): one live reading + breach verdict, plus the monitor's
+// auto-read errors/anomalies when it has been running. Check-only — it never
+// fixes anything.
+async function runPerfSnapshot(): Promise<string> {
+  let snap: any = null;
+  try {
+    snap = await window.electronAPI.app.getAppMetrics();
+  } catch {}
+  if (!snap) return 'Performance snapshot unavailable (main process did not answer).';
+  let heap: number | null = null;
+  try {
+    const mem = (performance as any)?.memory;
+    if (mem && typeof mem.usedJSHeapSize === 'number') heap = mem.usedJSHeapSize;
+  } catch {}
+  const sample = toSample(snap, heap);
+  const breaches = checkBreaches(sample, DEFAULT_THRESHOLDS);
+  const mon = useMonitorStore.getState();
+  const lines = [
+    'Performance snapshot:',
+    `- renderer JS heap: ${formatBytes(sample.jsHeapBytes)} (limit ${formatBytes(DEFAULT_THRESHOLDS.maxHeapBytes)})`,
+    `- busiest process RSS: ${formatBytes(sample.mainRSSBytes)} (limit ${formatBytes(DEFAULT_THRESHOLDS.maxMainRSSBytes)})`,
+    `- free memory: ${formatBytes(sample.freeMemBytes)} (floor ${formatBytes(DEFAULT_THRESHOLDS.minFreeMemBytes)})`,
+    `- load per CPU: ${sample.loadPerCpu.toFixed(1)} (limit ${DEFAULT_THRESHOLDS.maxLoadPerCpu})`,
+    breaches.length > 0
+      ? `Verdict: DEFECT LIKELY — breaching: ${breaches.map((b) => describeBreach(b, sample, DEFAULT_THRESHOLDS)).join('; ')}. One snapshot is a hint, not proof: enable the monitor (composer health dot) and re-check, or reproduce while watching.`
+      : 'Verdict: no defect in this snapshot.',
+  ];
+  if (mon.anomalies.length > 0) {
+    lines.push(`Monitor anomalies on record (${mon.anomalies.length}):`);
+    for (const a of mon.anomalies.slice(0, 3)) {
+      lines.push(`- ${new Date(a.t).toLocaleTimeString()}: ${a.summary}`);
+    }
+  }
+  if (mon.errors.length > 0) {
+    lines.push(`Auto-read renderer errors (${mon.errors.length}):`);
+    for (const e of mon.errors.slice(-5)) {
+      lines.push(`- [${e.source}] ${String(e.message).slice(0, 200)}`);
+    }
+  }
+  return lines.join('\n');
+}
+
+/**
+ * Start a run in a fresh conversation without touching the UI or the
+ * background-task registry. Both the composer's "run in background" and the
+ * model's `run_background` tool build on this; registration (if any) is the
+ * caller's job.
+ */
+async function startDetachedRun(content: string, providerId: string, modelId: string): Promise<string | null> {
+  if (isHolding(useInstallGateStore.getState().jobs)) return null;
+  if (!content.trim() || !providerId || !modelId) return null;
+  const set = useChatStore.setState;
+  const ws = useWorkspaceStore.getState();
+  // Same folder binding as a normal new chat, but the active conversation,
+  // its editor snapshot, and its todos stay untouched.
+  const conv = await window.electronAPI.conversation.create({
+    providerId,
+    modelId,
+    rootPath: ws.rootPath,
+  });
+  const userMsg: Message = {
+    id: uuidv4(),
+    conversationId: conv.id,
+    role: 'user',
+    content,
+    createdAt: Date.now(),
+  };
+  await window.electronAPI.message.create(userMsg);
+  const title = content.trim().replace(/\s+/g, ' ').slice(0, 50);
+  await window.electronAPI.conversation.update(conv.id, { title });
+  const now = Date.now();
+  set((s) => ({
+    conversations: [{ ...conv, title, updatedAt: now }, ...s.conversations],
+  }));
+  // runAgentLoop already isolates non-active runs (reloads its own persisted
+  // transcript, guards all writes by conversation id) — fire and forget.
+  void runAgentLoop(conv.id, providerId, modelId).catch((e) => {
+    console.error(`[background] run failed for ${conv.id}:`, e);
+  });
+  return conv.id;
+}
+
+/** Human-readable background task list for the `background_status` tool. */
+async function backgroundStatusText(parentConversationId?: string): Promise<string> {
+  const { useBackgroundStore } = await import('./background.store');
+  const tasks = Object.values(useBackgroundStore.getState().tasks)
+    .filter((t) => !parentConversationId || t.parentConversationId === parentConversationId)
+    .sort((a, b) => b.startedAt - a.startedAt);
+  if (tasks.length === 0) {
+    return parentConversationId
+      ? 'No background tasks started from this conversation.'
+      : 'No background tasks.';
+  }
+  return tasks.slice(0, 10).map((t) =>
+    `- "${t.title}" [${t.status}]${t.status === 'running' ? '' : ' (its result was delivered back here when it finished)'}`,
+  ).join('\n');
+}
+
 const MAX_ITERATIONS = 200;
 const MAX_STREAM_RETRIES = 2;
+
+/** One message typed while the run is still going (opencode-style queue). */
+export interface QueuedMessage {
+  id: string;
+  content: string;
+  providerId: string;
+  modelId: string;
+  createdAt: number;
+}
+
+/** Re-entrancy guard: endRun fires on every run end, flush chains from it. */
+const flushingQueues = new Set<string>();
+
+/**
+ * The body of a send for an EXPLICIT conversation: persist the user message,
+ * title + reorder, compact if needed, run. sendMessage (active view) and
+ * flushQueue (background view) share it; live-array writes only touch the
+ * conversation on screen.
+ */
+async function deliverToConversation(convId: string, content: string, providerId: string, modelId: string): Promise<void> {
+  const set = useChatStore.setState;
+  const get = useChatStore.getState;
+  if (content.trim()) {
+    const userMsg: Message = {
+      id: uuidv4(),
+      conversationId: convId,
+      role: 'user',
+      content,
+      createdAt: Date.now(),
+    };
+    await window.electronAPI.message.create(userMsg);
+    set((s) => s.activeConversationId === convId ? { messages: [...s.messages, userMsg] } : {});
+
+    // Auto-title from the first user message, and bump this conversation to
+    // the top of the list (recent-first ordering).
+    const conv = get().conversations.find((c) => c.id === convId);
+    let userMsgCount: number;
+    if (get().activeConversationId === convId) {
+      userMsgCount = get().messages.filter((m) => m.role === 'user' && !m.isToolResult).length;
+    } else {
+      const all = await window.electronAPI.message.list(convId).catch(() => []);
+      userMsgCount = all.filter((m: any) => m.role === 'user' && !m.isToolResult).length;
+    }
+    const patch: Partial<Conversation> = {};
+    if (conv && (!conv.title || conv.title === 'New Chat') && userMsgCount === 1) {
+      patch.title = content.trim().replace(/\s+/g, ' ').slice(0, 50);
+    }
+    if (conv && (conv.providerId !== providerId || conv.modelId !== modelId)) {
+      patch.providerId = providerId;
+      patch.modelId = modelId;
+    }
+    await window.electronAPI.conversation.update(convId, patch);
+    const now = Date.now();
+    set((s) => {
+      const target = s.conversations.find((c) => c.id === convId);
+      if (!target) return {} as any;
+      const merged = { ...target, ...patch, updatedAt: now };
+      return { conversations: [merged, ...s.conversations.filter((c) => c.id !== convId)] };
+    });
+  }
+
+  const canContinue = await autoCompactIfNeeded(convId, providerId, modelId);
+  if (!canContinue) return;
+  await runAgentLoop(convId, providerId, modelId);
+}
 
 function isTransientStreamError(error: any): boolean {
   if (error?.name === 'AbortError') return false;
@@ -377,6 +545,10 @@ async function executeIndependentRead(
     }
     case 'system_info':
       return `System info:\n${JSON.stringify(await window.electronAPI.app.getSystemInfo(), null, 2)}`;
+    case 'background_status':
+      return backgroundStatusText();
+    case 'perf_snapshot':
+      return runPerfSnapshot();
     case 'git_status': {
       const out = await window.electronAPI.git.status(action.cwd || action.path || ws.rootPath || undefined);
       return out?.trim() ? out : 'Not a git repository, or working tree is clean.';
@@ -1313,7 +1485,7 @@ Open file: ${ws.selectedFile || 'None'}`,
 
 // Read-only tools a research sub-agent is allowed to use.
 const SUB_AGENT_ACTIONS = new Set([
-  'read_file', 'list_dir', 'search', 'glob', 'git_status', 'git_diff', 'web_fetch', 'web_search',
+  'read_file', 'list_dir', 'search', 'glob', 'git_status', 'git_diff', 'web_fetch', 'web_search', 'perf_snapshot',
 ]);
 
 // Run a self-contained, READ-ONLY research sub-agent: it investigates `task`
@@ -2015,6 +2187,34 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
             result = `System info:\n${JSON.stringify(info, null, 2)}`;
             break;
           }
+          case 'background_status': {
+            result = await backgroundStatusText(convId);
+            break;
+          }
+          case 'run_background': {
+            const task = typeof action.task === 'string' ? action.task.trim() : '';
+            if (!task) {
+              result = 'Error: run_background needs a "task" instruction. Call it again with one.';
+              shouldContinue = true;
+              break;
+            }
+            const title = task.replace(/\s+/g, ' ').slice(0, 50);
+            const childId = await startDetachedRun(task, providerId, modelId);
+            if (!childId) {
+              result = 'Error: the background run could not start (an install may be holding the model).';
+              shouldContinue = true;
+              break;
+            }
+            const { useBackgroundStore } = await import('./background.store');
+            useBackgroundStore.getState().adopt(childId, { title, parentConversationId: convId });
+            result = `Background task started ("${title}"). Its result will arrive here automatically when it finishes — end your turn now unless you have independent work. Do not poll or wait.`;
+            // Terminal on purpose: not in INFO_ACTIONS, so this turn ends here.
+            break;
+          }
+          case 'perf_snapshot': {
+            result = await runPerfSnapshot();
+            break;
+          }
           case 'update_todos': {
             const valid: TodoStatus[] = ['pending', 'in_progress', 'completed'];
             const todos = (action.todos || [])
@@ -2457,6 +2657,8 @@ interface ChatStore {
    */
   streamingRuns: Record<string, StreamRunState>;
   error: string | null;
+  /** Follow-ups typed while a run is live, flushed when it ends. */
+  queuedMessages: Record<string, QueuedMessage[]>;
   messageEdits: Record<string, boolean>;
   workspaceSnapshots: Map<string, WorkspaceSnapshot>;
   reasoningEffort: ReasoningEffort;
@@ -2490,6 +2692,28 @@ interface ChatStore {
   deleteConversation: (id: string) => Promise<void>;
   renameConversation: (id: string, title: string) => Promise<void>;
   sendMessage: (content: string, providerId: string, modelId: string) => Promise<void>;
+  /**
+   * Typed while a run is live (opencode-style queue): stash for this
+   * conversation instead of blocking. Returns 'sent' when the run already
+   * ended (delivered straight away), 'queued' normally, 'dropped' on garbage.
+   */
+  enqueueMessage: (conversationId: string, content: string, providerId: string, modelId: string) => 'queued' | 'sent' | 'dropped';
+  dequeueMessage: (conversationId: string, id: string) => void;
+  /** Send the head of the queue, unless the run is live, held, or waiting. */
+  flushQueue: (conversationId: string) => Promise<void>;
+  /**
+   * OpenCode-style background task: start a run in a FRESH conversation without
+   * leaving the current one. Returns the new conversation id, or null when it
+   * could not start. No autoCompact: a single-message transcript never needs
+   * it, and autoCompact reads the ACTIVE view's messages (wrong transcript).
+   */
+  startBackgroundRun: (content: string, providerId: string, modelId: string) => Promise<string | null>;
+  /**
+   * Wake-up after a delegated background task finishes: append its result to
+   * the parent conversation and continue that run (unless it is live — then
+   * the loop picks the result up next turn). Never starts two runs at once.
+   */
+  resumeAfterBackground: (parentConversationId: string, label: string, summary: string) => Promise<void>;
   feedToolResults: (conversationId: string, providerId: string, modelId: string, content: string) => Promise<void>;
   resendMessage: (messageId: string) => Promise<void>;
   editMessage: (messageId: string, content: string, providerId: string, modelId: string) => Promise<void>;
@@ -2514,6 +2738,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   streamingRuns: {},
   error: null,
   messageEdits: {},
+  /** opencode-style follow-ups typed mid-run, per conversation (session-only). */
+  queuedMessages: {},
   workspaceSnapshots: new Map(),
   reasoningEffort: 'auto',
   planMode: false,
@@ -2682,8 +2908,36 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }));
   },
 
-  sendMessage: async (content, providerId, modelId) => {
-    // Hold: do not start a new run while something is installing — the
+  startBackgroundRun: async (content, providerId, modelId) => {
+    return startDetachedRun(content, providerId, modelId);
+  },
+
+  resumeAfterBackground: async (parentConversationId, label, summary) => {
+    const msg: Message = {
+      id: uuidv4(),
+      conversationId: parentConversationId,
+      role: 'user',
+      content: `[background task "${label}" finished]\n${summary}`,
+      createdAt: Date.now(),
+      isToolResult: true,
+    };
+    await persistMessage(msg);
+    set((s) => s.activeConversationId === parentConversationId
+      ? { messages: [...s.messages, msg] }
+      : {});
+    // A live run re-reads the transcript next turn; only a quiet parent needs
+    // a fresh loop. Either way there is never a second concurrent run.
+    if (get().streamingRuns[parentConversationId]) return;
+    const conv = get().conversations.find((c) => c.id === parentConversationId);
+    const providerId = conv?.providerId;
+    const modelId = conv?.modelId;
+    if (!providerId || !modelId) return;
+    void runAgentLoop(parentConversationId, providerId, modelId).catch((e) => {
+      console.error(`[background] resume failed for ${parentConversationId}:`, e);
+    });
+  },
+
+  sendMessage: async (content, providerId, modelId) => {    // Hold: do not start a new run while something is installing — the
     // auto-continue path is the only sender until the gate releases.
     if (isHolding(useInstallGateStore.getState().jobs)) return;
     let convId = get().activeConversationId;
@@ -2691,45 +2945,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       convId = await get().createConversation(providerId, modelId);
     }
     // Only block when THIS conversation already has a run — other conversations
-    // (even on the same model) may keep streaming concurrently.
+    // (even on the same model) may keep streaming concurrently. Mid-run typing
+    // goes through enqueueMessage instead of being dropped here.
     if (get().streamingRuns[convId] || get().messageEdits[convId]) return;
 
-    if (content.trim()) {
-      const userMsg: Message = {
-        id: uuidv4(),
-        conversationId: convId,
-        role: 'user',
-        content,
-        createdAt: Date.now(),
-      };
-      await window.electronAPI.message.create(userMsg);
-      set((s) => ({ messages: [...s.messages, userMsg] }));
-
-      // Auto-title from the first user message, and bump this conversation to
-      // the top of the list (recent-first ordering).
-      const conv = get().conversations.find((c) => c.id === convId);
-      const userMsgCount = get().messages.filter((m) => m.role === 'user' && !m.isToolResult).length;
-      const patch: Partial<Conversation> = {};
-      if (conv && (!conv.title || conv.title === 'New Chat') && userMsgCount === 1) {
-        patch.title = content.trim().replace(/\s+/g, ' ').slice(0, 50);
-      }
-      if (conv && (conv.providerId !== providerId || conv.modelId !== modelId)) {
-        patch.providerId = providerId;
-        patch.modelId = modelId;
-      }
-      await window.electronAPI.conversation.update(convId, patch);
-      const now = Date.now();
-      set((s) => {
-        const target = s.conversations.find((c) => c.id === convId);
-        if (!target) return {} as any;
-        const merged = { ...target, ...patch, updatedAt: now };
-        return { conversations: [merged, ...s.conversations.filter((c) => c.id !== convId)] };
-      });
-    }
-
-    const canContinue = await autoCompactIfNeeded(convId, providerId, modelId);
-    if (!canContinue) return;
-    await runAgentLoop(convId, providerId, modelId);
+    await deliverToConversation(convId, content, providerId, modelId);
 
     // Learn from the exchange once the turn has fully settled, so the next
     // session already knows this user. Runs silently and never blocks or fails
@@ -2743,6 +2963,85 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         .filter((m) => !m.isLocalNotice && !m.isToolResult && m.role !== 'tool')
         .map((m) => ({ role: m.role, content: m.content })),
     });
+  },
+
+  enqueueMessage: (conversationId, content, providerId, modelId) => {
+    if (!content.trim() || !providerId || !modelId) return 'dropped';
+    if (!get().conversations.some((c) => c.id === conversationId)) return 'dropped';
+    if (!get().streamingRuns[conversationId]) {
+      // Race: the run ended between render and Enter — deliver straight away.
+      void deliverToConversation(conversationId, content, providerId, modelId);
+      return 'sent';
+    }
+    const item: QueuedMessage = {
+      id: uuidv4(),
+      content,
+      providerId,
+      modelId,
+      createdAt: Date.now(),
+    };
+    set((s) => ({
+      queuedMessages: {
+        ...s.queuedMessages,
+        [conversationId]: [...(s.queuedMessages[conversationId] || []), item],
+      },
+    }));
+    return 'queued';
+  },
+
+  dequeueMessage: (conversationId, id) => {
+    set((s) => ({
+      queuedMessages: {
+        ...s.queuedMessages,
+        [conversationId]: (s.queuedMessages[conversationId] || []).filter((m) => m.id !== id),
+      },
+    }));
+  },
+
+  flushQueue: async (conversationId) => {
+    if (flushingQueues.has(conversationId)) return;
+    if (!get().queuedMessages[conversationId]?.length) return;
+    if (get().streamingRuns[conversationId] || get().messageEdits[conversationId]) return;
+    if (isHolding(useInstallGateStore.getState().jobs)) return;
+    if (!get().conversations.some((c) => c.id === conversationId)) {
+      // Conversation deleted with items still queued — drop them silently.
+      set((s) => {
+        const queuedMessages = { ...s.queuedMessages };
+        delete queuedMessages[conversationId];
+        return { queuedMessages };
+      });
+      return;
+    }
+    // Never cut in while the user owes this conversation an answer or an
+    // approval: the queued turn goes after, not before. Both resolve through
+    // paths that end in endRun, which re-triggers this flush.
+    try {
+      const { useCodeChangesStore } = await import('./codeChanges.store');
+      const awaitingApproval = useCodeChangesStore.getState().changes.some(
+        (c) => c.conversationId === conversationId && c.status === 'pending',
+      );
+      if (awaitingApproval) return;
+      const transcript = await window.electronAPI.message.list(conversationId).catch(() => []);
+      if (transcript.length > 0 && (transcript[transcript.length - 1] as any)?.isQuestion) return;
+    } catch {
+      return;
+    }
+    // Re-check after the awaits: a run may have started meanwhile.
+    if (get().streamingRuns[conversationId] || get().messageEdits[conversationId]) return;
+    const head = get().queuedMessages[conversationId]?.[0];
+    if (!head) return;
+    flushingQueues.add(conversationId);
+    try {
+      set((s) => ({
+        queuedMessages: {
+          ...s.queuedMessages,
+          [conversationId]: (s.queuedMessages[conversationId] || []).slice(1),
+        },
+      }));
+      await deliverToConversation(conversationId, head.content, head.providerId, head.modelId);
+    } finally {
+      flushingQueues.delete(conversationId);
+    }
   },
 
   feedToolResults: async (conversationId, providerId, modelId, content) => {

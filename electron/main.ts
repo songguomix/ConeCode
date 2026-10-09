@@ -1237,6 +1237,27 @@ function registerIPC() {
       homedir: os.homedir(),
     };
   });
+  // Live process metrics for the RSI performance monitor (per-process CPU /
+  // memory straight from Electron, plus host pressure). Polled, never pushed.
+  ipcMain.handle('app:getAppMetrics', async () => {
+    let processes: { pid: number; type: string; cpu: number; memory: number }[] = [];
+    try {
+      processes = app.getAppMetrics().map((m: any) => ({
+        pid: m.pid,
+        type: String(m.type || ''),
+        cpu: Number(m.cpu?.percentCPUUsage || 0),
+        memory: Number(m.memory?.workingSetSizeKB || 0),
+      }));
+    } catch {}
+    return {
+      processes,
+      mainMemory: process.memoryUsage(),
+      load: os.loadavg(),
+      freeMemory: os.freemem(),
+      totalMemory: os.totalmem(),
+      cpus: os.cpus().length,
+    };
+  });
 
   // ---- Git -------------------------------------------------------------
   ipcMain.handle('git:info', async (_, cwd?: string) => {

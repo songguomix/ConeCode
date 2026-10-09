@@ -37,8 +37,8 @@ export default function ProjectBriefComposer() {
   };
 
   return (
-    <section className="mb-8 rounded-2xl border border-[var(--border)] bg-[var(--bg-2)] p-5 min-w-0" aria-label={t('briefTitle')}>
-      <div className="flex items-center gap-2 mb-2 min-w-0">
+    <section className="mb-5 rounded-2xl border border-[var(--border)] bg-[var(--bg-2)] p-5 min-w-0" aria-label={t('briefTitle')}>
+      <div className="flex items-center gap-2 mb-3 min-w-0">
         <FiMessageSquare size={15} className="text-[var(--accent)] shrink-0" />
         <h2 className="text-sm font-semibold text-[var(--text-primary)] truncate">{t('briefTitle')}</h2>
         <div className="ml-auto flex items-center gap-1.5 text-[10px] font-medium shrink-0" aria-hidden={!brief}>
@@ -49,7 +49,6 @@ export default function ProjectBriefComposer() {
           <Step label={t('briefStep3')} active={starting} done={false} />
         </div>
       </div>
-      <p className="text-xs text-[var(--text-muted)] mb-3 leading-relaxed">{t('briefDescription')} {t('briefNoFolderNeeded')}</p>
       <div className="rounded-xl bg-[var(--bg-3)] p-3 focus-within:ring-1 focus-within:ring-[var(--accent)]/50">
         <textarea
           id="conecode-project-idea"

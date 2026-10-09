@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
-import { FiX, FiPlus, FiEdit3, FiTrash2, FiCheck, FiServer, FiAlertTriangle, FiZap, FiRefreshCw, FiShield, FiSliders, FiPackage, FiCpu, FiBell } from 'react-icons/fi';
+import { FiX, FiPlus, FiEdit3, FiTrash2, FiCheck, FiServer, FiAlertTriangle, FiZap, FiRefreshCw, FiShield, FiSliders, FiPackage, FiCpu, FiBell, FiBox } from 'react-icons/fi';
 import { useUIStore, useProviderStore, useLanguageStore, useSettingsStore, useModelStore } from '../../stores';
 import type { ProviderConfig, ProviderType } from '../../types';
 import MemoryPanel from '../memory/MemoryPanel';
 import SkillsPanel from '../skills/SkillsPanel';
+import SettingsPlugins from './SettingsPlugins';
 import ShortcutCard from '../screenshot/ShortcutCard';
 
 const MCP_PLACEHOLDER = `{
@@ -146,6 +147,7 @@ export default function SettingsModal() {
     { id: 'general', label: 'setGeneral', icon: <FiSliders size={14} /> },
     { id: 'providers', label: 'setProviders', icon: <FiServer size={14} /> },
     { id: 'skills', label: 'skills', icon: <FiPackage size={14} /> },
+    { id: 'plugins', label: 'plugins', icon: <FiBox size={14} /> },
     { id: 'memory', label: 'memory', icon: <FiCpu size={14} /> },
     { id: 'mcp', label: 'mcpServers', icon: <FiZap size={14} /> },
   ] as const;
@@ -365,6 +367,10 @@ export default function SettingsModal() {
                 <SectionHeading title={t('skills')} desc={t('skillsHint')} />
                 <SkillsPanel t={t} />
               </>
+            )}
+
+            {section === 'plugins' && (
+              <SettingsPlugins t={t} />
             )}
 
             {section === 'memory' && (

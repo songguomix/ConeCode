@@ -38,7 +38,7 @@ export const useProjectBriefStore = create<ProjectBriefStore>((set, get) => ({
       const result = await window.electronAPI.chat.stream({
         providerId, modelId, silent: true, maxTokens: 4096,
         messages: [
-          { role: 'system', content: `${PROJECT_BRIEF_SYSTEM_PROMPT}\nWrite the title and prompt in ${locale === 'zh' ? 'Simplified Chinese' : locale === 'ja' ? 'Japanese' : 'English'}, unless the user explicitly requests another language.` },
+          { role: 'system', content: `${PROJECT_BRIEF_SYSTEM_PROMPT}\nWrite the title and prompt in ${locale === 'zh' ? 'Simplified Chinese' : locale === 'zhHant' ? 'Traditional Chinese' : locale === 'ja' ? 'Japanese' : 'English'}, unless the user explicitly requests another language.` },
           { role: 'user', content: idea },
         ],
       });

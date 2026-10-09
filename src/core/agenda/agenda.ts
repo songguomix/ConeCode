@@ -251,6 +251,77 @@ export function rankTasks(tasks: SuggestedTask[]): SuggestedTask[] {
   );
 }
 
+/**
+ * Filenames out of `git status --porcelain`. Defensive: skips short lines,
+ * unquotes git's quoted paths, and takes the new side of renames.
+ */
+export function dirtyFiles(statusText: string): string[] {
+  const out: string[] = [];
+  for (const line of statusText.split('\n')) {
+    if (line.length < 4) continue;
+    let p = line.slice(3).trim();
+    if (p.startsWith('"') && p.endsWith('"') && p.length > 1) {
+      try {
+        p = JSON.parse(p);
+      } catch {}
+    }
+    const arrow = p.indexOf(' -> ');
+    if (arrow !== -1) p = p.slice(arrow + 4);
+    if (p) out.push(p);
+  }
+  return [...new Set(out)];
+}
+
+/**
+ * One-click tasks derived LOCALLY from the scan — no tokens, no guessing.
+ * Review what's dirty, clear the TODOs, add the first test when there are
+ * none. Running scripts stays a separate UI (exec buttons on the scan's
+ * script list) so a `dev` server can never sneak into an agent prompt.
+ */
+export function buildLocalTasks(scan: WorkspaceScan, t: (k: string) => string): SuggestedTask[] {
+  const tasks: SuggestedTask[] = [];
+  if (scan.git.dirty > 0) {
+    const files = dirtyFiles(scan.statusText);
+    tasks.push({
+      id: 'local-review',
+      title: `${t('homeTaskReview')} (${scan.git.dirty})`,
+      rationale: '',
+      kind: 'chore',
+      effort: 'quick',
+      risk: 'low',
+      files: files.slice(0, 6),
+      prompt: `Review the current uncommitted changes in this project (${scan.git.dirty} file(s): ${files.slice(0, 10).join(', ') || 'see git status'}). Read the diff, point out bugs or risky spots, and propose the smallest safe fix for each real issue. Do not commit anything.`,
+    });
+  }
+  if (scan.todoComments.length > 0) {
+    const files = [...new Set(scan.todoComments.map((c) => c.file))];
+    tasks.push({
+      id: 'local-todos',
+      title: `${t('homeTaskTodos')} (${scan.todoComments.length})`,
+      rationale: '',
+      kind: scan.todoComments.some((c) => /FIXME/i.test(c.text)) ? 'bug' : 'chore',
+      effort: 'medium',
+      risk: 'low',
+      files: files.slice(0, 6),
+      prompt: `Work through these TODO/FIXME comments in the code:\n${scan.todoComments.slice(0, 12).map((c) => `- ${c.file}:${c.line}: ${c.text}`).join('\n')}\nResolve each one properly (implement it, or remove it if obsolete) and verify the touched area still passes typecheck/tests.`,
+    });
+  }
+  const hasTestScript = scan.scripts.some((s) => s === 'test' || s.startsWith('test:'));
+  if (!scan.hasTests && !hasTestScript) {
+    tasks.push({
+      id: 'local-add-tests',
+      title: t('homeTaskAddTests'),
+      rationale: '',
+      kind: 'test',
+      effort: 'medium',
+      risk: 'low',
+      files: [],
+      prompt: 'This project has no tests. Add the first meaningful test for the core logic (look at the entry point and cover the main path), using whatever test runner fits the repo, and run it to prove it passes.',
+    });
+  }
+  return tasks;
+}
+
 // ---------------------------------------------------------------------------
 // "What should I do next?"
 // ---------------------------------------------------------------------------

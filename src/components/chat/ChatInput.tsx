@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
-import { FiSquare, FiPaperclip, FiX, FiFile, FiArrowUp, FiPlus, FiTarget, FiList, FiLayers, FiZap, FiTool, FiChevronRight, FiCamera } from 'react-icons/fi';
+import { FiSquare, FiPaperclip, FiX, FiFile, FiArrowUp, FiPlus, FiTarget, FiList, FiLayers, FiZap, FiTool, FiChevronRight, FiCamera, FiClock } from 'react-icons/fi';
 import { AGENT_MODES, type AgentMode } from '../../core/agents/modePrompts';
 import { useMemoryStore, useChatStore, useModelStore, useLanguageStore, useWorkspaceStore, useSettingsStore, useUIStore, useGoalStore, useSkillsStore } from '../../stores';
 import { useScreenshotStore } from '../../stores/screenshot.store';
+import { useBackgroundStore } from '../../stores/background.store';
 import { prettyShortcut } from '../../core/screenshot/shortcut';
 import { useInstallGateStore, isHolding } from '../../stores/installGate.store';
 import {
@@ -22,6 +23,7 @@ function mentionTokenAt(value: string, caret: number): string | null {
 export default function ChatInput() {
   const [input, setInput] = useState('');
   const sendMessage = useChatStore((s) => s.sendMessage);
+  const enqueueMessage = useChatStore((s) => s.enqueueMessage);
   // Only THIS conversation's run turns the input into a stop button; other
   // conversations may be streaming concurrently.
   const activeConversationId = useChatStore((s) => s.activeConversationId);
@@ -63,6 +65,7 @@ export default function ChatInput() {
   const startScreenshot = useScreenshotStore((s) => s.start);
   const screenshotStarting = useScreenshotStore((s) => s.starting);
   const screenshotShortcut = useScreenshotStore((s) => s.shortcut);
+  const launchBackground = useBackgroundStore((s) => s.launch);
 
   const [slashIndex, setSlashIndex] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState(false);
@@ -268,7 +271,7 @@ export default function ChatInput() {
   };
 
   const handleSend = async () => {
-    if (isStreaming || isSavingEdit || installHolding) return;
+    if (isSavingEdit || installHolding) return;
     const text = input;
     if (!text.trim()) return;
 
@@ -300,10 +303,38 @@ export default function ChatInput() {
       if (body) full = `Skill "${skill.id}" — follow these instructions for this task:\n\n${body}\n\n${text}`;
       setActiveSkillId(null);
     }
+    // Mid-run typing queues behind the live run (opencode-style) instead of
+    // being swallowed: it becomes the next turn when this one ends.
+    if (isStreaming && activeConversationId) {
+      enqueueMessage(activeConversationId, full, selectedModel.providerId, selectedModel.id);
+      setInput('');
+      setMentionQuery(null);
+      resetHeight();
+      return;
+    }
     setInput('');
     setMentionQuery(null);
     resetHeight();
     await sendMessage(full, selectedModel.providerId, selectedModel.id);
+  };
+
+  // OpenCode-style: keep chatting here, run this text in a fresh background
+  // conversation (skill prefix applies the same as a normal send).
+  const handleBackgroundSend = async () => {
+    if (isStreaming || isSavingEdit || installHolding) return;
+    const text = input;
+    if (!text.trim() || !selectedModel) return;
+    const skill = activeSkill;
+    let full = text;
+    if (skill) {
+      const body = skillBody(skill.id);
+      if (body) full = `Skill "${skill.id}" — follow these instructions for this task:\n\n${body}\n\n${text}`;
+      setActiveSkillId(null);
+    }
+    setInput('');
+    setMentionQuery(null);
+    resetHeight();
+    await launchBackground(full);
   };
 
   const isImeConfirm = (e: React.KeyboardEvent) => {
@@ -540,6 +571,14 @@ export default function ChatInput() {
                         </kbd>
                       )}
                     </button>
+                    <button
+                      onClick={() => { void handleBackgroundSend(); setPlusOpen(false); }}
+                      disabled={!input.trim() || !selectedModel}
+                      className="w-full flex items-center gap-2.5 px-3 py-2.5 text-[13px] text-[var(--text-secondary)] hover:bg-[var(--bg-3)] transition-colors disabled:opacity-50"
+                    >
+                      <FiClock size={14} />
+                      <span className="flex-1 text-left">{t('backgroundSend')}</span>
+                    </button>
                     <div className="my-1 border-t border-[var(--border)]" />
                     <div className="px-3 pb-1 text-[10px] uppercase tracking-wider text-[var(--text-muted)]">
                       {t('modeMenu')}
@@ -634,9 +673,11 @@ export default function ChatInput() {
               onCompositionStart={handleCompositionStart}
               onCompositionEnd={handleCompositionEnd}
               placeholder={
-                agentMode !== 'standard'
-                  ? `${t(agentMode === 'goal' ? 'modeTask' : agentMode === 'orchestrate' ? 'modeOrchestrate' : agentMode === 'rsi' ? 'modeRsi' : 'agentModeStandard')} · ${t('typeMessage')}`
-                  : t('typeMessage')
+                isStreaming
+                  ? t('queueHint')
+                  : agentMode !== 'standard'
+                    ? `${t(agentMode === 'goal' ? 'modeTask' : agentMode === 'orchestrate' ? 'modeOrchestrate' : agentMode === 'rsi' ? 'modeRsi' : 'agentModeStandard')} · ${t('typeMessage')}`
+                    : t('typeMessage')
               }
               rows={1}
               className="flex-1 bg-transparent border-0 py-2 text-[15px] resize-none outline-none max-h-[200px] overflow-y-auto placeholder:text-[var(--text-muted)]"

@@ -204,6 +204,26 @@ describe('the built-in library', () => {
     expect(skill!.body).not.toMatch(/skip(ping)? tests?/i);
   });
 
+  it('ships 性能巡检: check-only performance plugin, any mode on demand', () => {
+    const skill = findBuiltin('perf-monitor');
+    expect(skill?.name).toBe('性能巡检');
+    // Snapshot first, never guess.
+    expect(skill!.body).toMatch(/perf_snapshot/);
+    // Check-only: report with evidence, no fixing without being asked.
+    expect(skill!.body).toMatch(/只检查、不修/);
+    expect(skill!.body).toMatch(/不要直接改代码/);
+  });
+
+  it('ships read-only project plugins: todo-scan, commit-msg, repo-map', () => {
+    for (const [id, tool] of [['todo-scan', 'search'], ['commit-msg', 'git_diff'], ['repo-map', 'list_dir']] as const) {
+      const skill = findBuiltin(id);
+      expect(skill, id).toBeDefined();
+      expect(skill!.body).toContain(tool);
+      // Read-only plugins observe; they never mutate without being asked.
+      expect(skill!.body).toMatch(/只读|只扫描|只写信息/);
+    }
+  });
+
   it('asks the user before computer-use testing and never drives the machine unasked', () => {
     const skill = findBuiltin('software-dev');
     // Question comes AFTER tests pass, via ask_user, with an explicit opt-out.

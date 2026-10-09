@@ -60,6 +60,7 @@ interface UIStore {
   terminalOpen: boolean;
   changedFilesOpen: boolean;
   reviewOpen: boolean;
+  backgroundOpen: boolean;
   worktreesOpen: boolean;
   remoteOpen: boolean;
   previewOpen: boolean;
@@ -85,6 +86,8 @@ interface UIStore {
   closeChangedFiles: () => void;
   toggleReview: () => void;
   closeReview: () => void;
+  toggleBackground: () => void;
+  closeBackground: () => void;
   toggleWorktrees: () => void;
   closeWorktrees: () => void;
   toggleRemote: () => void;
@@ -110,6 +113,7 @@ export const useUIStore = create<UIStore>((set) => ({
   terminalOpen: false,
   changedFilesOpen: false,
   reviewOpen: false,
+  backgroundOpen: false,
   worktreesOpen: false,
   remoteOpen: false,
   previewOpen: false,
@@ -136,6 +140,8 @@ export const useUIStore = create<UIStore>((set) => ({
   closeChangedFiles: () => set({ changedFilesOpen: false }),
   toggleReview: () => set((s) => ({ reviewOpen: !s.reviewOpen })),
   closeReview: () => set({ reviewOpen: false }),
+  toggleBackground: () => set((s) => ({ backgroundOpen: !s.backgroundOpen })),
+  closeBackground: () => set({ backgroundOpen: false }),
   toggleWorktrees: () => set((s) => ({ worktreesOpen: !s.worktreesOpen })),
   closeWorktrees: () => set({ worktreesOpen: false }),
   toggleRemote: () => set((s) => ({ remoteOpen: !s.remoteOpen })),

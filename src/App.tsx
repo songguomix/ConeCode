@@ -1,6 +1,8 @@
 import { useEffect, useRef } from 'react';
 import { useProviderStore, useModelStore, useChatStore, useSettingsStore, useMemoryStore, useSkillsStore, usePreviewStore, useWorkspaceStore, useCodeChangesStore, useLanguageStore } from './stores';
 import { useScreenshotStore } from './stores/screenshot.store';
+import { useBackgroundStore } from './stores/background.store';
+import { useMonitorStore } from './stores/monitor.store';
 import AppShell from './components/layout/AppShell';
 import { initRemoteBridge } from './core/remote/bridge';
 
@@ -77,6 +79,25 @@ export default function App() {
     // Re-register the stored screenshot hotkey (main forgets on quit) and
     // answer its trigger.
     const stopScreenshot = initScreenshot();
+    // Background tasks (opencode-style): reconcile detached runs so finished
+    // ones badge + notify even while the user chats elsewhere.
+    const initBackground = useBackgroundStore.getState().init;
+    const stopBackground = initBackground();
+    // RSI performance monitor: auto-read renderer errors, resume sampling when
+    // it was left on (persisted flag).
+    const monitor = useMonitorStore.getState();
+    const onWindowError = (e: ErrorEvent) => {
+      const src = e.filename ? `${e.filename.split('/').pop()}:${e.lineno ?? 0}` : 'window.onerror';
+      monitor.captureError(e.message || 'unknown error', src);
+    };
+    const onUnhandledRejection = (e: PromiseRejectionEvent) => {
+      const reason = e.reason as any;
+      const msg = typeof reason === 'string' ? reason : reason?.message || String(reason);
+      monitor.captureError(msg, 'unhandledrejection');
+    };
+    window.addEventListener('error', onWindowError);
+    window.addEventListener('unhandledrejection', onUnhandledRejection);
+    if (monitor.enabled) monitor.start();
     // The fullscreen overlay window reports confirmed shots here (it has no
     // access to this window's chat state): clipboard + chat attachment.
     const stopShotResult = (window as any).electronAPI?.screenshot?.onResult?.(
@@ -90,6 +111,10 @@ export default function App() {
     );
     return () => {
       stopScreenshot();
+      stopBackground();
+      monitor.stop();
+      window.removeEventListener('error', onWindowError);
+      window.removeEventListener('unhandledrejection', onUnhandledRejection);
       stopShotResult?.();
     };
   }, []);

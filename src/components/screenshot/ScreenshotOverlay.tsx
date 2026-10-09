@@ -1,19 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  FiSquare, FiCircle, FiArrowUpRight, FiEdit3, FiType,
+  FiSquare, FiCircle, FiArrowUpRight, FiEdit3,
   FiDownload, FiX, FiCheck,
 } from 'react-icons/fi';
 import { useLanguageStore, useWorkspaceStore } from '../../stores';
 import { useScreenshotStore } from '../../stores/screenshot.store';
 
-type Tool = 'rect' | 'ellipse' | 'arrow' | 'pen' | 'text';
+type Tool = 'rect' | 'ellipse' | 'arrow' | 'pen';
 
 type Shape =
   | { kind: 'rect'; x0: number; y0: number; x1: number; y1: number }
   | { kind: 'ellipse'; x0: number; y0: number; x1: number; y1: number }
   | { kind: 'arrow'; x0: number; y0: number; x1: number; y1: number }
-  | { kind: 'pen'; pts: { x: number; y: number }[] }
-  | { kind: 'text'; x: number; y: number; text: string };
+  | { kind: 'pen'; pts: { x: number; y: number }[] };
 
 interface Rect { x: number; y: number; w: number; h: number }
 
@@ -67,32 +66,26 @@ function drawShape(ctx: CanvasRenderingContext2D, s: Shape, color: string): void
       for (const p of s.pts.slice(1)) ctx.lineTo(p.x, p.y);
       ctx.stroke();
     }
-  } else {
-    ctx.font = '600 16px system-ui, sans-serif';
-    ctx.lineWidth = 4;
-    ctx.strokeStyle = 'rgba(255,255,255,0.9)';
-    ctx.strokeText(s.text, s.x, s.y);
-    ctx.fillStyle = color;
-    ctx.fillText(s.text, s.x, s.y);
   }
 }
 
-function ToolBtn({ title, active, danger, success, onClick, children }: {
-  title: string; active?: boolean; danger?: boolean; success?: boolean;
+function ToolBtn({ title, active, danger, success, dark, onClick, children }: {
+  title: string; active?: boolean; danger?: boolean; success?: boolean; dark?: boolean;
   onClick: () => void; children: React.ReactNode;
 }) {
-  // Always-on-dark (WeChat/QQ-style): the bar floats over arbitrary desktop
-  // content, so theme-aware grays wash out — fixed white-on-black instead.
+  // The bar floats over arbitrary desktop content: fixed high-contrast pairs
+  // (dark or light, chosen by the pixels behind it) instead of theme grays.
+  const idle = dark
+    ? 'text-white/75 hover:bg-white/10 hover:text-white'
+    : 'text-black/65 hover:bg-black/10 hover:text-black';
+  const dangerCls = dark ? 'text-[#ff6b62] hover:bg-white/10' : 'text-red-600 hover:bg-black/5';
+  const successCls = dark ? 'text-[#4ade80] hover:bg-white/10' : 'text-green-600 hover:bg-black/5';
   return (
     <button onClick={onClick} title={title} aria-label={title}
       className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all ${
         active
           ? 'bg-[var(--accent)] text-white shadow-md scale-105'
-          : danger
-            ? 'text-[#ff6b62] hover:bg-white/10'
-            : success
-              ? 'text-[#4ade80] hover:bg-white/10'
-              : 'text-white/75 hover:bg-white/10 hover:text-white'
+          : danger ? dangerCls : success ? successCls : idle
       }`}>
       {children}
     </button>
@@ -100,8 +93,8 @@ function ToolBtn({ title, active, danger, success, onClick, children }: {
 }
 
 /**
- * Full-screen screenshot: drag a region, annotate with 8 tools only
- * (rect / ellipse / arrow / pen / text / save / cancel / confirm), then
+ * Full-screen screenshot: drag a region, annotate with 7 tools only
+ * (rect / ellipse / arrow / pen / save / cancel / confirm), then
  * confirm to clipboard + chat, or save to disk.
  *
  * Props override the close/confirm targets: the fullscreen overlay window
@@ -121,7 +114,7 @@ export default function ScreenshotOverlay({ onClose, onConfirm }: {
 
   const boxRef = useRef<HTMLDivElement>(null);
   const workRef = useRef<HTMLCanvasElement>(null);
-  const textInputRef = useRef<HTMLInputElement>(null);
+  const barRef = useRef<HTMLDivElement>(null);
   const [img, setImg] = useState<HTMLImageElement | null>(null);
   const [box, setBox] = useState({ w: 0, h: 0 });
   const [phase, setPhase] = useState<'select' | 'annotate'>('select');
@@ -130,10 +123,10 @@ export default function ScreenshotOverlay({ onClose, onConfirm }: {
   const [tool, setTool] = useState<Tool>('rect');
   const [shapes, setShapes] = useState<Shape[]>([]);
   const [draft, setDraft] = useState<Shape | null>(null);
-  const [textAt, setTextAt] = useState<{ x: number; y: number } | null>(null);
-  const [textValue, setTextValue] = useState('');
   const [savedTick, setSavedTick] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Floating bar theme follows the pixels behind it (recomputed below).
+  const [barDark, setBarDark] = useState(true);
 
   const color = useMemo(() => {
     try {
@@ -162,22 +155,66 @@ export default function ScreenshotOverlay({ onClose, onConfirm }: {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !textAt) {
+      if (e.key === 'Escape') {
         e.preventDefault();
         handleClose();
       }
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [handleClose, textAt]);
-
-  useEffect(() => {
-    if (textAt) textInputRef.current?.focus();
-  }, [textAt]);
+  }, [handleClose]);
 
   const fit = img && box.w > 0 ? contain(img.naturalWidth, img.naturalHeight, box.w, box.h) : null;
   // Native px per display px (keeps the export sharp on retina).
   const scale = img && fit && fit.w > 0 ? img.naturalWidth / fit.w : 1;
+
+  // Floating bar follows the pixels behind it: sample the displayed image
+  // region under the bar (24px thumbnail), dim it like the overlay does
+  // (0.45) unless it overlaps the full-bright selection, and pick the bar
+  // theme with enough contrast. Runs when layout-affecting state settles.
+  useEffect(() => {
+    if (phase !== 'annotate' || !img || !fit) return;
+    const bar = barRef.current;
+    const boxEl = boxRef.current;
+    if (!bar || !boxEl) return;
+    try {
+      const b = bar.getBoundingClientRect();
+      const r = boxEl.getBoundingClientRect();
+      const bx = b.left - r.left;
+      const by = b.top - r.top;
+      const ix = Math.max(bx, fit.x);
+      const iy = Math.max(by, fit.y);
+      const ix2 = Math.min(bx + b.width, fit.x + fit.w);
+      const iy2 = Math.min(by + b.height, fit.y + fit.h);
+      if (ix2 <= ix || iy2 <= iy || b.width <= 0 || b.height <= 0) {
+        setBarDark(true);
+        return;
+      }
+      const s = img.naturalWidth / fit.w;
+      const c = document.createElement('canvas');
+      const N = 24;
+      c.width = N;
+      c.height = N;
+      const ctx = c.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return;
+      ctx.drawImage(img, (ix - fit.x) * s, (iy - fit.y) * s, (ix2 - ix) * s, (iy2 - iy) * s, 0, 0, N, N);
+      const d = ctx.getImageData(0, 0, N, N).data;
+      let sum = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        sum += (0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2]) / 255;
+      }
+      const avg = sum / (d.length / 4);
+      const overlapsBright =
+        !!sel &&
+        bx < sel.x + sel.w && bx + b.width > sel.x &&
+        by < sel.y + sel.h && by + b.height > sel.y;
+      setBarDark(avg * (overlapsBright ? 1 : 0.45) < 0.5);
+    } catch {
+      setBarDark(true);
+    }
+    // fit is a fresh object every render — depend on its primitives instead.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, img, fit?.x, fit?.y, fit?.w, fit?.h, sel, box.w, box.h]);
 
   const clampToFit = useCallback((x: number, y: number): { x: number; y: number } => {
     if (!fit) return { x, y };
@@ -233,14 +270,9 @@ export default function ScreenshotOverlay({ onClose, onConfirm }: {
   };
 
   const onWorkDown = (e: React.PointerEvent) => {
-    if (textAt || !sel) return;
+    if (!sel) return;
     (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
     const p = local(e);
-    if (tool === 'text') {
-      setTextAt(p);
-      setTextValue('');
-      return;
-    }
     if (tool === 'pen') setDraft({ kind: 'pen', pts: [p] });
     else setDraft({ kind: tool, x0: p.x, y0: p.y, x1: p.x, y1: p.y });
   };
@@ -249,8 +281,6 @@ export default function ScreenshotOverlay({ onClose, onConfirm }: {
     const p = local(e);
     if (draft.kind === 'pen') {
       setDraft({ kind: 'pen', pts: [...draft.pts, p] });
-    } else if (draft.kind === 'text') {
-      return;
     } else {
       setDraft({ kind: draft.kind, x0: draft.x0, y0: draft.y0, x1: p.x, y1: p.y });
     }
@@ -263,14 +293,6 @@ export default function ScreenshotOverlay({ onClose, onConfirm }: {
         Math.abs(draft.x1 - draft.x0) < 3 && Math.abs(draft.y1 - draft.y0) < 3);
     if (!tiny) setShapes((s) => [...s, draft]);
     setDraft(null);
-  };
-
-  const commitText = () => {
-    if (textAt && textValue.trim()) {
-      setShapes((s) => [...s, { kind: 'text', x: textAt.x, y: textAt.y, text: textValue.trim() }]);
-    }
-    setTextAt(null);
-    setTextValue('');
   };
 
   // Redraw the working canvas: cropped region + all shapes.
@@ -447,7 +469,7 @@ export default function ScreenshotOverlay({ onClose, onConfirm }: {
             {/* Working canvas = the cropped region, full brightness */}
             <canvas
               ref={workRef}
-              className={tool === 'text' ? 'absolute cursor-text' : 'absolute cursor-crosshair'}
+              className="absolute cursor-crosshair"
               style={{ left: sel.x, top: sel.y, width: sel.w, height: sel.h }}
               onPointerDown={onWorkDown}
               onPointerMove={onWorkMove}
@@ -457,49 +479,33 @@ export default function ScreenshotOverlay({ onClose, onConfirm }: {
               style={{ left: sel.x, top: Math.max(4, sel.y - 30), backgroundColor: color }}>
               {selLabel}
             </div>
-            {textAt && (
-              <input
-                ref={textInputRef}
-                value={textValue}
-                onChange={(e) => setTextValue(e.target.value)}
-                onBlur={commitText}
-                onKeyDown={(e) => {
-                  e.stopPropagation();
-                  if (e.key === 'Enter') commitText();
-                  if (e.key === 'Escape') { setTextAt(null); setTextValue(''); }
-                }}
-                placeholder={t('screenshotTextPlaceholder')}
-                spellCheck={false}
-                className="absolute z-10 px-2 py-1 rounded-lg bg-white text-black text-[14px] outline-none shadow-xl min-w-[140px]"
-                style={{ left: sel.x + textAt.x, top: sel.y + textAt.y }}
-              />
-            )}
-            {/* 8 tools only: rect ellipse arrow pen text | save | cancel confirm */}
-            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-1 px-2 py-1.5 rounded-2xl bg-[#1e1e20]/95 backdrop-blur-xl border border-white/10 shadow-2xl anim-menu">
-              <ToolBtn title={t('toolRect')} active={tool === 'rect'} onClick={() => setTool('rect')}>
+            {/* 7 tools only: rect ellipse arrow pen | save | cancel confirm */}
+            <div
+              ref={barRef}
+              className={`absolute bottom-10 left-1/2 -translate-x-1/2 flex items-center gap-1 px-2 py-1.5 rounded-2xl backdrop-blur-xl border shadow-2xl anim-menu ${
+                barDark ? 'bg-[#1e1e20]/95 border-white/10' : 'bg-white/92 border-black/10'
+              }`}>
+              <ToolBtn title={t('toolRect')} dark={barDark} active={tool === 'rect'} onClick={() => setTool('rect')}>
                 <FiSquare size={15} />
               </ToolBtn>
-              <ToolBtn title={t('toolEllipse')} active={tool === 'ellipse'} onClick={() => setTool('ellipse')}>
+              <ToolBtn title={t('toolEllipse')} dark={barDark} active={tool === 'ellipse'} onClick={() => setTool('ellipse')}>
                 <FiCircle size={15} />
               </ToolBtn>
-              <ToolBtn title={t('toolArrow')} active={tool === 'arrow'} onClick={() => setTool('arrow')}>
+              <ToolBtn title={t('toolArrow')} dark={barDark} active={tool === 'arrow'} onClick={() => setTool('arrow')}>
                 <FiArrowUpRight size={16} />
               </ToolBtn>
-              <ToolBtn title={t('toolPen')} active={tool === 'pen'} onClick={() => setTool('pen')}>
+              <ToolBtn title={t('toolPen')} dark={barDark} active={tool === 'pen'} onClick={() => setTool('pen')}>
                 <FiEdit3 size={15} />
               </ToolBtn>
-              <ToolBtn title={t('toolText')} active={tool === 'text'} onClick={() => setTool('text')}>
-                <FiType size={16} />
+              <div className={`w-px h-6 mx-0.5 ${barDark ? 'bg-white/15' : 'bg-black/10'}`} />
+              <ToolBtn title={savedTick ? t('screenshotSaved') : t('screenshotSave')} dark={barDark} onClick={handleSave}>
+                {savedTick ? <FiCheck size={15} className={barDark ? 'text-[#4ade80]' : 'text-green-600'} /> : <FiDownload size={15} />}
               </ToolBtn>
-              <div className="w-px h-6 bg-white/15 mx-0.5" />
-              <ToolBtn title={savedTick ? t('screenshotSaved') : t('screenshotSave')} onClick={handleSave}>
-                {savedTick ? <FiCheck size={15} className="text-[var(--success)]" /> : <FiDownload size={15} />}
-              </ToolBtn>
-              <div className="w-px h-6 bg-white/15 mx-0.5" />
-              <ToolBtn title={t('screenshotCancel')} danger onClick={handleClose}>
+              <div className={`w-px h-6 mx-0.5 ${barDark ? 'bg-white/15' : 'bg-black/10'}`} />
+              <ToolBtn title={t('screenshotCancel')} dark={barDark} danger onClick={handleClose}>
                 <FiX size={16} />
               </ToolBtn>
-              <ToolBtn title={t('screenshotConfirm')} success onClick={handleConfirm}>
+              <ToolBtn title={t('screenshotConfirm')} dark={barDark} success onClick={handleConfirm}>
                 <FiCheck size={16} />
               </ToolBtn>
             </div>
