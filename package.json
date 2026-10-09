@@ -1,6 +1,6 @@
 {
   "name": "conecode",
-  "version": "2.4.1",
+  "version": "2.4.2",
   "description": "AI Desktop Client",
   "author": "ConeCode",
   "main": "dist-electron/main.js",

@@ -190,6 +190,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   screenshot: {
     capture: () => ipcRenderer.invoke('screenshot:capture'),
+    begin: () => ipcRenderer.invoke('screenshot:begin'),
+    getImage: () => ipcRenderer.invoke('screenshot:get-image'),
+    finish: (dataUrl: string) => ipcRenderer.invoke('screenshot:finish', dataUrl),
+    cancel: () => ipcRenderer.invoke('screenshot:cancel'),
+    onResult: (callback: (dataUrl: string) => void) => {
+      const listener = (_: unknown, dataUrl: string) => callback(dataUrl);
+      ipcRenderer.on('screenshot:result', listener);
+      return () => ipcRenderer.removeListener('screenshot:result', listener);
+    },
     save: (dataUrl: string) => ipcRenderer.invoke('screenshot:save', dataUrl),
     setShortcut: (accelerator: string | null) => ipcRenderer.invoke('screenshot:set-shortcut', accelerator),
     openSettings: () => ipcRenderer.invoke('screenshot:open-settings'),

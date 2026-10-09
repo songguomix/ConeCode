@@ -81,16 +81,18 @@ function ToolBtn({ title, active, danger, success, onClick, children }: {
   title: string; active?: boolean; danger?: boolean; success?: boolean;
   onClick: () => void; children: React.ReactNode;
 }) {
+  // Always-on-dark (WeChat/QQ-style): the bar floats over arbitrary desktop
+  // content, so theme-aware grays wash out — fixed white-on-black instead.
   return (
     <button onClick={onClick} title={title} aria-label={title}
       className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all ${
         active
           ? 'bg-[var(--accent)] text-white shadow-md scale-105'
           : danger
-            ? 'text-[var(--error)] hover:bg-[var(--error)]/10'
+            ? 'text-[#ff6b62] hover:bg-white/10'
             : success
-              ? 'text-[var(--success)] hover:bg-[var(--success)]/10'
-              : 'text-[var(--text-secondary)] hover:bg-[var(--bg-3)] hover:text-[var(--text-primary)]'
+              ? 'text-[#4ade80] hover:bg-white/10'
+              : 'text-white/75 hover:bg-white/10 hover:text-white'
       }`}>
       {children}
     </button>
@@ -101,11 +103,19 @@ function ToolBtn({ title, active, danger, success, onClick, children }: {
  * Full-screen screenshot: drag a region, annotate with 8 tools only
  * (rect / ellipse / arrow / pen / text / save / cancel / confirm), then
  * confirm to clipboard + chat, or save to disk.
+ *
+ * Props override the close/confirm targets: the fullscreen overlay window
+ * reports back to main over IPC (main reshows + drops the shot into chat),
+ * while the in-app instance (permission-error card) keeps store behavior.
  */
-export default function ScreenshotOverlay() {
+export default function ScreenshotOverlay({ onClose, onConfirm }: {
+  onClose?: () => void;
+  onConfirm?: (dataUrl: string) => void | Promise<void>;
+} = {}) {
   const image = useScreenshotStore((s) => s.image);
   const captureError = useScreenshotStore((s) => s.error);
   const close = useScreenshotStore((s) => s.close);
+  const handleClose = onClose ?? close;
   const addPastedImage = useWorkspaceStore((s) => s.addPastedImage);
   const { t } = useLanguageStore();
 
@@ -154,12 +164,12 @@ export default function ScreenshotOverlay() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && !textAt) {
         e.preventDefault();
-        close();
+        handleClose();
       }
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [close, textAt]);
+  }, [handleClose, textAt]);
 
   useEffect(() => {
     if (textAt) textInputRef.current?.focus();
@@ -319,6 +329,17 @@ export default function ScreenshotOverlay() {
     if (busy) return;
     const url = exportPNG();
     if (!url) return;
+    // Overlay-window mode: hand the pixels to main (it reshows the app and
+    // drops the shot into the chat there).
+    if (onConfirm) {
+      setBusy(true);
+      try {
+        await onConfirm(url);
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     setBusy(true);
     try {
       try {
@@ -454,7 +475,7 @@ export default function ScreenshotOverlay() {
               />
             )}
             {/* 8 tools only: rect ellipse arrow pen text | save | cancel confirm */}
-            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-1 px-2 py-1.5 rounded-2xl bg-[var(--bg-2)]/92 backdrop-blur-xl border border-[var(--border)] shadow-2xl anim-menu">
+            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-1 px-2 py-1.5 rounded-2xl bg-[#1e1e20]/95 backdrop-blur-xl border border-white/10 shadow-2xl anim-menu">
               <ToolBtn title={t('toolRect')} active={tool === 'rect'} onClick={() => setTool('rect')}>
                 <FiSquare size={15} />
               </ToolBtn>
@@ -470,12 +491,12 @@ export default function ScreenshotOverlay() {
               <ToolBtn title={t('toolText')} active={tool === 'text'} onClick={() => setTool('text')}>
                 <FiType size={16} />
               </ToolBtn>
-              <div className="w-px h-6 bg-[var(--border)] mx-0.5" />
+              <div className="w-px h-6 bg-white/15 mx-0.5" />
               <ToolBtn title={savedTick ? t('screenshotSaved') : t('screenshotSave')} onClick={handleSave}>
                 {savedTick ? <FiCheck size={15} className="text-[var(--success)]" /> : <FiDownload size={15} />}
               </ToolBtn>
-              <div className="w-px h-6 bg-[var(--border)] mx-0.5" />
-              <ToolBtn title={t('screenshotCancel')} danger onClick={close}>
+              <div className="w-px h-6 bg-white/15 mx-0.5" />
+              <ToolBtn title={t('screenshotCancel')} danger onClick={handleClose}>
                 <FiX size={16} />
               </ToolBtn>
               <ToolBtn title={t('screenshotConfirm')} success onClick={handleConfirm}>

@@ -35,6 +35,121 @@ let mainWindow: BrowserWindow | null = null;
 let screenshotAccelerator: string | null = null;
 
 /**
+ * Grab the primary display at native resolution (region crops stay sharp).
+ * Returns pixels, or { error } — pixels (not the media-status string) are
+ * the ground truth, because the status API can stay stale after a grant.
+ */
+async function captureScreenOnce(): Promise<
+  | { dataUrl: string; width: number; height: number }
+  | { error: string; needsPermission?: string }
+> {
+  const display = screen.getPrimaryDisplay();
+  const scale = display.scaleFactor || 1;
+  const fullW = Math.round(display.size.width * scale);
+  const fullH = Math.round(display.size.height * scale);
+  // Try full-res first, then progressively smaller: oversized thumbnails are
+  // a known cause of empty captures on some GPUs.
+  const attempts = [
+    { width: fullW, height: fullH },
+    { width: 1920, height: Math.max(1, Math.round((1920 * fullH) / Math.max(1, fullW))) },
+    { width: display.size.width, height: display.size.height },
+  ];
+  for (const thumbnailSize of attempts) {
+    try {
+      const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize });
+      const ordered = [
+        sources.find((s) => s.display_id === String(display.id)),
+        ...sources,
+      ].filter((s): s is (typeof sources)[number] => !!s);
+      for (const source of ordered) {
+        if (source.thumbnail.isEmpty()) continue;
+        const size = source.thumbnail.getSize();
+        if (size.width === 0 || size.height === 0) continue;
+        return { dataUrl: source.thumbnail.toDataURL(), width: size.width, height: size.height };
+      }
+    } catch (err) {
+      console.error('screenshot:capture attempt failed', thumbnailSize, err);
+    }
+  }
+  // A granted macOS TCC permission is not always reflected immediately in
+  // desktopCapturer. The native tool uses the same system permission and
+  // gives us a reliable second capture path before we show a permission UI.
+  const fallback = await captureMacScreenFallback();
+  if (fallback) return fallback;
+
+  let granted = true;
+  try {
+    granted = process.platform !== 'darwin' || systemPreferences.getMediaAccessStatus('screen') === 'granted';
+  } catch {}
+  return granted ? { error: 'empty' } : { error: 'permission', needsPermission: 'screenRecording' };
+}
+
+// ---- WeChat-style system overlay -------------------------------------------
+// The annotation UI lives in its own fullscreen transparent window covering
+// the whole display — NOT inside the app window. Main hides first so the app
+// itself is never in the shot.
+let shotOverlay: BrowserWindow | null = null;
+let shotImage: { dataUrl: string; width: number; height: number } | null = null;
+/** True when begin() hid the main window (so finish/cancel know to reshow). */
+let shotHidMain = false;
+
+function reshowMainAfterShot(): void {
+  if (shotHidMain) {
+    shotHidMain = false;
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  }
+}
+
+function createShotOverlay(): void {
+  if (shotOverlay && !shotOverlay.isDestroyed()) {
+    shotOverlay.focus();
+    return;
+  }
+  const b = screen.getPrimaryDisplay().bounds;
+  shotOverlay = new BrowserWindow({
+    x: b.x,
+    y: b.y,
+    width: b.width,
+    height: b.height,
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    hasShadow: false,
+    show: false,
+    title: 'ConeCode Screenshot',
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, 'preload.js'),
+    },
+  });
+  shotOverlay.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  shotOverlay.setAlwaysOnTop(true, 'screen-saver');
+  const distPath = path.join(__dirname, '../dist/index.html');
+  if (fs.existsSync(distPath)) {
+    void shotOverlay.loadFile(distPath, { hash: 'screenshot' });
+  } else {
+    void shotOverlay.loadURL('http://localhost:5173/#screenshot');
+  }
+  shotOverlay.once('ready-to-show', () => shotOverlay?.show());
+  shotOverlay.on('closed', () => {
+    shotOverlay = null;
+    shotImage = null;
+    reshowMainAfterShot();
+  });
+}
+
+/**
  * desktopCapturer can occasionally return empty thumbnails on macOS even
  * after Screen Recording has been granted (notably after an in-place TCC
  * permission change). Use the OS capture path as a fallback so an empty
@@ -547,6 +662,12 @@ app.on('window-all-closed', () => {
   }
 });
 app.on('activate', () => {
+  // A screenshot overlay covers the screen while main hides: dock-click then
+  // means "come back to the shot", not "build another main window".
+  if (shotOverlay && !shotOverlay.isDestroyed()) {
+    shotOverlay.focus();
+    return;
+  }
   // May fire before `ready` on a slow macOS cold start; createWindow() itself
   // defers in that case, so this stays safe to call unconditionally.
   if (!mainWindow) createWindow();
@@ -1509,57 +1630,61 @@ function registerIPC() {
   // ---- Screenshot (user region capture + annotate) ------------------------
   // Unlike computer:screenshot (agent eyes, downscaled), this returns the full
   // native-resolution screen so the region crop stays sharp.
-  ipcMain.handle('screenshot:capture', async () => {
-    const display = screen.getPrimaryDisplay();
-    const scale = display.scaleFactor || 1;
-    const fullW = Math.round(display.size.width * scale);
-    const fullH = Math.round(display.size.height * scale);
-    // Try full-res first, then progressively smaller: oversized thumbnails are
-    // a known cause of empty captures on some GPUs, and the media-status API
-    // can stay stale after the user grants permission — so pixels (not the
-    // status string) are the ground truth. Gate on permission only at the end.
-    const attempts = [
-      { width: fullW, height: fullH },
-      { width: 1920, height: Math.max(1, Math.round((1920 * fullH) / Math.max(1, fullW))) },
-      { width: display.size.width, height: display.size.height },
-    ];
-    for (const thumbnailSize of attempts) {
-      try {
-        const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize });
-        const ordered = [
-          sources.find((s) => s.display_id === String(display.id)),
-          ...sources,
-        ].filter((s): s is (typeof sources)[number] => !!s);
-        for (const source of ordered) {
-          if (source.thumbnail.isEmpty()) continue;
-          const size = source.thumbnail.getSize();
-          if (size.width === 0 || size.height === 0) continue;
-          return { dataUrl: source.thumbnail.toDataURL(), width: size.width, height: size.height };
-        }
-      } catch (err) {
-        console.error('screenshot:capture attempt failed', thumbnailSize, err);
+  ipcMain.handle('screenshot:capture', () => captureScreenOnce());
+  // WeChat-style flow: hide the app, grab clean pixels, open the fullscreen
+  // overlay window. Returns ok:false (with error) when capture fails — the
+  // main window then shows the failure card instead.
+  ipcMain.handle('screenshot:begin', async () => {
+    if (shotOverlay && !shotOverlay.isDestroyed()) {
+      shotOverlay.focus();
+      return { ok: true };
+    }
+    shotHidMain = !!mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible();
+    if (shotHidMain) mainWindow?.hide();
+    // Let the compositor drop our window before grabbing pixels.
+    await new Promise((r) => setTimeout(r, 300));
+    const cap = await captureScreenOnce();
+    if ('error' in cap) {
+      reshowMainAfterShot();
+      return { ok: false, error: cap.error, needsPermission: (cap as { needsPermission?: string }).needsPermission };
+    }
+    shotImage = cap;
+    createShotOverlay();
+    return { ok: true };
+  });
+  // The overlay window pulls the pixels main grabbed for it.
+  ipcMain.handle('screenshot:get-image', () => shotImage ?? { error: 'empty' });
+  ipcMain.handle('screenshot:finish', (_, dataUrl: string) => {
+    const url = String(dataUrl || '');
+    shotOverlay?.close();
+    reshowMainAfterShot();
+    if (url.startsWith('data:image/')) mainWindow?.webContents.send('screenshot:result', url);
+    return { ok: true };
+  });
+  ipcMain.handle('screenshot:cancel', () => {
+    shotOverlay?.close();
+    reshowMainAfterShot();
+    return { ok: true };
+  });
+  ipcMain.handle('screenshot:save', async (_, dataUrl: string) => {
+    // The overlay sits at screen-saver level: drop it below the save dialog
+    // while the dialog is up, otherwise the dialog opens underneath it.
+    const lowered = !!shotOverlay && !shotOverlay.isDestroyed();
+    if (lowered) shotOverlay?.setAlwaysOnTop(false);
+    try {
+      const { filePath, canceled } = await dialog.showSaveDialog({
+        defaultPath: `screenshot-${new Date().toISOString().replace(/[:.]/g, '-')}.png`,
+        filters: [{ name: 'PNG', extensions: ['png'] }],
+      });
+      if (canceled || !filePath) return { ok: false };
+      const base64 = String(dataUrl).split(',')[1] || '';
+      fs.writeFileSync(filePath, Buffer.from(base64, 'base64'));
+      return { ok: true, path: filePath };
+    } finally {
+      if (lowered && shotOverlay && !shotOverlay.isDestroyed()) {
+        shotOverlay.setAlwaysOnTop(true, 'screen-saver');
       }
     }
-    // A granted macOS TCC permission is not always reflected immediately in
-    // desktopCapturer. The native tool uses the same system permission and
-    // gives us a reliable second capture path before we show a permission UI.
-    const fallback = await captureMacScreenFallback();
-    if (fallback) return fallback;
-
-    let granted = true;
-    try {
-      granted = process.platform !== 'darwin' || systemPreferences.getMediaAccessStatus('screen') === 'granted';
-    } catch {}
-    return granted ? { error: 'empty' } : { error: 'permission', needsPermission: 'screenRecording' };
-  });
-  ipcMain.handle('screenshot:save', async (_, dataUrl: string) => {    const { filePath, canceled } = await dialog.showSaveDialog({
-      defaultPath: `screenshot-${new Date().toISOString().replace(/[:.]/g, '-')}.png`,
-      filters: [{ name: 'PNG', extensions: ['png'] }],
-    });
-    if (canceled || !filePath) return { ok: false };
-    const base64 = String(dataUrl).split(',')[1] || '';
-    fs.writeFileSync(filePath, Buffer.from(base64, 'base64'));
-    return { ok: true, path: filePath };
   });
   // Permission recovery: deep-link straight into Screen Recording settings,
   // and relaunch (a grant only takes effect after a full restart — the most

@@ -34,6 +34,8 @@ interface ScreenshotStore {
   /** Capture the screen and open the overlay. */
   start: () => Promise<void>;
   close: () => void;
+  /** Overlay window only: show pixels main grabbed (no capture from here). */
+  openWithImage: (image: ShotImage) => void;
   /** Register a new global hotkey (or null/'' to disable). */
   applyShortcut: (accelerator: string | null) => Promise<boolean>;
   /** Boot: register the stored hotkey + listen for its trigger. */
@@ -51,19 +53,23 @@ export const useScreenshotStore = create<ScreenshotStore>((set, get) => ({
     if (get().starting) return;
     set({ starting: true, error: null });
     try {
-      const res = await (window as any).electronAPI?.screenshot?.capture?.();
-      if (!res || 'error' in res) {
-        // Open anyway so the overlay can show the failure (permission hint).
+      // WeChat-style: main hides the app, grabs clean pixels, and opens the
+      // fullscreen overlay window. ok:true means the overlay took over (this
+      // window hides); only failures land here as an in-app error card.
+      const res = await (window as any).electronAPI?.screenshot?.begin?.();
+      if (!res?.ok) {
         set({ open: true, image: null, error: res?.needsPermission ? 'permission' : 'failed', starting: false });
         return;
       }
-      set({ open: true, image: res, error: null, starting: false });
+      set({ starting: false });
     } catch {
       set({ open: true, image: null, error: 'failed', starting: false });
     }
   },
 
   close: () => set({ open: false, image: null, error: null }),
+
+  openWithImage: (image) => set({ open: true, image, error: null, starting: false }),
 
   applyShortcut: async (accelerator) => {
     const acc = accelerator || null;

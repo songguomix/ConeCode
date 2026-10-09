@@ -77,7 +77,21 @@ export default function App() {
     // Re-register the stored screenshot hotkey (main forgets on quit) and
     // answer its trigger.
     const stopScreenshot = initScreenshot();
-    return () => stopScreenshot();
+    // The fullscreen overlay window reports confirmed shots here (it has no
+    // access to this window's chat state): clipboard + chat attachment.
+    const stopShotResult = (window as any).electronAPI?.screenshot?.onResult?.(
+      async (dataUrl: string) => {
+        try {
+          const blob = await (await fetch(dataUrl)).blob();
+          await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+        } catch {}
+        useWorkspaceStore.getState().addPastedImage(dataUrl, `screenshot-${Date.now()}.png`);
+      },
+    );
+    return () => {
+      stopScreenshot();
+      stopShotResult?.();
+    };
   }, []);
 
   // Project skills follow the active workspace. Keep this at app level so the

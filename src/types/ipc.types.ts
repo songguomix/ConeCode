@@ -309,6 +309,14 @@ export interface ElectronAPI {
     >;
     save: (dataUrl: string) => Promise<{ ok: boolean; path?: string }>;
     setShortcut: (accelerator: string | null) => Promise<{ ok: boolean }>;
+    begin: () => Promise<{ ok: boolean; error?: string; needsPermission?: string }>;
+    getImage: () => Promise<
+      | { dataUrl: string; width: number; height: number }
+      | { error: string; needsPermission?: string }
+    >;
+    finish: (dataUrl: string) => Promise<{ ok: boolean }>;
+    cancel: () => Promise<{ ok: boolean }>;
+    onResult: (callback: (dataUrl: string) => void) => () => void;
     openSettings: () => Promise<{ ok: boolean }>;
     relaunch: () => Promise<{ ok: boolean }>;
     onTrigger: (callback: () => void) => () => void;
