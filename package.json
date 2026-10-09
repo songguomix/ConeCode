@@ -13,7 +13,9 @@
     "start": "electron .",
     "pack": "npm run build && electron-builder --mac",
     "dist": "npm run build && electron-builder --mac --publish=never",
+    "dist:mac:unsigned": "npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --publish=never",
     "dist:win": "npm run build && electron-builder --win --x64 --publish=never",
+    "dist:linux": "npm run build && electron-builder --linux AppImage --x64 --publish=never",
     "dist:all": "npm run build && electron-builder -mw --publish=never"
   },
   "build": {
