@@ -111,6 +111,13 @@ interface WorkspaceStore extends ProjectConfig {
   addRoot: (folderPath: string) => Promise<AddRootResult>;
   addRootFromDialog: () => Promise<AddRootResult>;
   removeRoot: (folderPath: string) => void;
+  /**
+   * Close one open folder from the tree (single click on it). Closing the last
+   * folder leaves a blank project so a new one can be picked; otherwise the
+   * first extra folder is promoted to primary. The new state is persisted on
+   * the active conversation, so each chat keeps its own folders.
+   */
+  closeRoot: (folderPath: string) => void;
   ensureFileList: () => Promise<string[]>;
   saveSnapshot: () => { rootPath: string | null; files: FileItem[]; extraRoots: ExtraRoot[]; selectedFile: string | null; openTabs: string[]; fileContent: string | null; selectedFileIsImage: boolean; contextFiles: ContextFile[] } & ProjectConfig;
   restoreSnapshot: (snapshot: { rootPath: string | null; files: FileItem[]; extraRoots?: ExtraRoot[]; selectedFile: string | null; openTabs?: string[]; fileContent: string | null; selectedFileIsImage?: boolean; contextFiles: ContextFile[] } & Partial<ProjectConfig>) => void;
@@ -201,6 +208,16 @@ async function loadProjectConfig(rootPath: string): Promise<ProjectConfig> {
   return { agentsMd, agentsMdPath, memoryFiles, customCommands };
 }
 
+// Remember the current folder state on the active conversation (persisted), so
+// each chat comes back to its own folders when re-selected. Fire-and-forget:
+// failures must never break a folder close.
+async function persistFolderBinding(): Promise<void> {
+  try {
+    const { useChatStore } = await import('./chat.store');
+    await useChatStore.getState().setConversationFolder(useWorkspaceStore.getState().rootPath);
+  } catch {}
+}
+
 export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   rootPath: null,
   files: [],
@@ -221,11 +238,14 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   openFolder: async () => {
     const folderPath = await window.electronAPI.dialog.openFolder();
     if (!folderPath) return;
-    await get().openFolderPath(folderPath);
-    // Bind the folder to the active conversation (persisted), so this chat's
-    // folder comes back when the user returns to it — even after a restart.
-    // Dynamic import: chat.store imports this store statically.
+    // A newly chosen folder starts a new conversation immediately: create
+    // FIRST so the previous chat's snapshot keeps the OLD workspace, then
+    // open the folder and bind it to the fresh chat.
     const { useChatStore } = await import('./chat.store');
+    const { useModelStore } = await import('./model.store');
+    const model = useModelStore.getState().getSelectedModel();
+    await useChatStore.getState().createConversation(model?.providerId || '', model?.id || '');
+    if (!await get().openFolderPath(folderPath)) return;
     await useChatStore.getState().setConversationFolder(folderPath);
   },
 
@@ -522,6 +542,49 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     if (closesOpenFile && remaining.length) {
       void get().selectFile(remaining[remaining.length - 1]);
     }
+  },
+
+  closeRoot: (folderPath: string) => {
+    const path = normalizeRoot(folderPath);
+    const state = get();
+    // Extra folder → detach it.
+    if (state.extraRoots.some((r) => r.path === path)) {
+      get().removeRoot(path);
+      void persistFolderBinding();
+      return;
+    }
+    if (state.rootPath !== path) return;
+    const [next, ...rest] = state.extraRoots;
+    if (!next) {
+      // Last folder out → blank project, ready to pick a new one.
+      get().resetWorkspace();
+      void persistFolderBinding();
+      return;
+    }
+    // Promote the first extra folder to primary so the others survive.
+    const remainingRoots = [next.path, ...rest.map((r) => r.path)];
+    const remaining = state.openTabs.filter((p) => rootOf(p, remainingRoots) !== null);
+    const closesOpenFile = state.selectedFile ? rootOf(state.selectedFile, remainingRoots) === null : false;
+    const dirtyTabs = Object.fromEntries(
+      Object.entries(state.dirtyTabs).filter(([p]) => rootOf(p, remainingRoots) !== null),
+    );
+    set({
+      rootPath: next.path,
+      files: next.files,
+      extraRoots: rest,
+      fileList: null,
+      openTabs: remaining,
+      dirtyTabs,
+      ...(closesOpenFile ? { selectedFile: null, fileContent: null, selectedFileIsImage: false } : {}),
+    });
+    void (async () => {
+      set(await loadProjectConfig(next.path));
+      (window as any).electronAPI?.mcp?.reload?.(next.path)
+        .then((tools: any[]) => set({ mcpTools: tools || [] }))
+        .catch(() => {});
+      if (closesOpenFile && remaining.length) await get().selectFile(remaining[remaining.length - 1]);
+      await persistFolderBinding();
+    })();
   },
 
   // Lazily build (and cache) a flat list of workspace-relative file paths for

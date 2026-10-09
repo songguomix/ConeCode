@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   FiFolder, FiFile, FiChevronRight, FiChevronDown, FiFolderPlus, FiFilePlus,
-  FiRefreshCw, FiMinusSquare,
+  FiRefreshCw, FiMinusSquare, FiX,
 } from 'react-icons/fi';
 import { useWorkspaceStore, useLanguageStore, useAiHighlightsStore } from '../../stores';
 import type { FileItem } from '../../stores/workspace.store';
@@ -18,7 +18,7 @@ interface MenuState {
 export default function FileTree() {
   const {
     files, extraRoots, selectedFile, toggleExpand, collapseAll, selectFile,
-    openFolder, addRootFromDialog, removeRoot, rootPath, allRoots,
+    openFolder, addRootFromDialog, closeRoot, rootPath, allRoots,
     createFile, createFolder, renamePath, deletePath, refreshFiles,
   } = useWorkspaceStore();
   const aiLines = useAiHighlightsStore((s) => s.lines);
@@ -51,10 +51,10 @@ export default function FileTree() {
 
   if (!rootPath) {
     return (
-      <div className="px-2 py-2">
+      <div className="px-1.5 py-1">
         <button onClick={openFolder}
-          className="w-full px-2.5 py-1.5 rounded-lg bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[var(--accent)]/20 text-[13px] transition-colors">
-          {t('openFolder')}
+          className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg text-[12px] font-medium bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[var(--accent)]/20 transition-colors">
+          <FiFolder size={12} /> {t('openFolder')}
         </button>
       </div>
     );
@@ -144,6 +144,13 @@ export default function FileTree() {
 
   return (
     <div className="text-sm min-w-0">
+      {/* Add-folder lives at the very top so it is always in reach. */}
+      <div className="px-1.5 py-1">
+        <button onClick={() => addRootFromDialog()}
+          className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg text-[12px] font-medium bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[var(--accent)]/20 transition-colors">
+          <FiFolderPlus size={12} /> {t('addFolder')}
+        </button>
+      </div>
       {/* Explorer toolbar — VS Code order: new file, new folder, refresh, collapse. */}
       <div className="flex items-center gap-0.5 px-1.5 py-1">
         <input
@@ -169,32 +176,23 @@ export default function FileTree() {
 
       <div className="px-1 pb-2">
         <RootSection path={rootPath} files={files} roots={roots} {...shared}
-          trailing={menu && menu.isRoot && menu.targetPath === rootPath ? undefined : (
-            <button
-              onContextMenu={(e) => openMenu(e, rootPath, true, true)}
-              onClick={(e) => openMenu(e, rootPath, true, true)}
-              title={t('explorerMore')}
-              className="p-0.5 rounded hover:bg-[var(--bg-3)] text-[var(--text-muted)]"
-            >
-              <FiChevronDown size={12} />
+          trailing={
+            <button onClick={() => closeRoot(rootPath)} title={t('closeFolder')}
+              className="p-0.5 rounded hover:bg-[var(--bg-3)] hover:text-[var(--error)] text-[var(--text-muted)] shrink-0">
+              <FiX size={12} />
             </button>
-          )}
+          }
         />
         {extraRoots.map((root) => (
           <RootSection key={root.path} path={root.path} files={root.files} roots={roots} {...shared}
             trailing={
-              <button onClick={() => removeRoot(root.path)} title={t('removeFolder')}
-                className="p-0.5 rounded hover:bg-[var(--bg-3)] text-[var(--text-muted)] hover:text-[var(--error)]">
-                <FiChevronDown size={12} />
+              <button onClick={() => closeRoot(root.path)} title={t('closeFolder')}
+                className="p-0.5 rounded hover:bg-[var(--bg-3)] hover:text-[var(--error)] text-[var(--text-muted)] shrink-0">
+                <FiX size={12} />
               </button>
             }
           />
         ))}
-
-        <button onClick={() => addRootFromDialog()}
-          className="mt-1 w-full flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-[12px] text-[var(--text-muted)] hover:bg-[var(--bg-2)] hover:text-[var(--text-secondary)] transition-colors">
-          <FiFolderPlus size={12} /> {t('addFolder')}
-        </button>
       </div>
 
       {menu && menuPos && (
@@ -246,6 +244,10 @@ function RootSection({ path, files, roots, trailing, ...shared }: {
   roots: string[];
   trailing?: React.ReactNode;
 } & SharedProps) {
+  // Single click on the folder closes it (→ blank project when it was the
+  // last one); right-click still opens the folder menu.
+  const { t } = useLanguageStore();
+  const closeRoot = useWorkspaceStore((s) => s.closeRoot);
   return (
     <div className="mb-1">
       <div
@@ -253,7 +255,10 @@ function RootSection({ path, files, roots, trailing, ...shared }: {
         title={path}
         onContextMenu={(e) => shared.onMenu(e, path, true, true)}
       >
-        <span className="truncate">{rootLabel(path, roots)}</span>
+        <button onClick={() => closeRoot(path)} title={`${t('closeFolder')} · ${path}`}
+          className="flex-1 min-w-0 truncate text-left hover:text-[var(--text-primary)] transition-colors">
+          {rootLabel(path, roots)}
+        </button>
         {trailing}
       </div>
       {shared.creating?.parentDir === path && (

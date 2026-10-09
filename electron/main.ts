@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, Menu, clipboard, shell, Notification, powerSaveBlocker } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, Menu, clipboard, shell, Notification, powerSaveBlocker, desktopCapturer, screen, systemPreferences, globalShortcut, nativeImage } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import { exec, spawn, execSync } from 'child_process';
@@ -14,6 +14,16 @@ import {
   type SandboxMode,
 } from '../src/core/exec/sandbox';
 import { parseSkill, isSafeSkillId, SKILL_FILE } from '../src/core/skills/skills';
+import {
+  normalizeWebUrl, htmlToText, parseDuckResults, formatCompactResults,
+  looksLikeJsShell, createTtlCache, parseResultRef, resolveSearchRef,
+  saveSearchRefs, MAX_SEARCH_RESULTS,
+} from '../src/core/browser/policy';
+import {
+  browserSearch, browserRead, browserNavigate, browserSnapshot,
+  browserClick, browserFill, browserEval, browserHistory,
+  hasBrowserSession, closeBrowserUse,
+} from '../src/core/browser/use';
 import { remoteServer } from './remote/server';
 import { startTunnel, stopTunnel } from './remote/tunnel';
 import { previewManager, detectPreview } from './preview/devserver';
@@ -21,6 +31,37 @@ import { computerController } from './computer/controller';
 import type { ProviderConfig } from '../src/types';
 
 let mainWindow: BrowserWindow | null = null;
+/** Currently registered global screenshot hotkey (main-side, so it outlives renderer reloads). */
+let screenshotAccelerator: string | null = null;
+
+/**
+ * desktopCapturer can occasionally return empty thumbnails on macOS even
+ * after Screen Recording has been granted (notably after an in-place TCC
+ * permission change). Use the OS capture path as a fallback so an empty
+ * Electron thumbnail is not misreported as a missing permission.
+ */
+async function captureMacScreenFallback(): Promise<{ dataUrl: string; width: number; height: number } | null> {
+  if (process.platform !== 'darwin') return null;
+
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'conecode-screenshot-'));
+  const output = path.join(directory, 'capture.png');
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn('/usr/sbin/screencapture', ['-x', '-t', 'png', output], { stdio: 'ignore' });
+      child.once('error', reject);
+      child.once('exit', (code) => code === 0 ? resolve() : reject(new Error(`screencapture exited with code ${code}`)));
+    });
+    const image = nativeImage.createFromPath(output);
+    if (image.isEmpty()) return null;
+    const size = image.getSize();
+    return { dataUrl: image.toDataURL(), width: size.width, height: size.height };
+  } catch (error) {
+    console.error('macOS screenshot fallback failed', error);
+    return null;
+  } finally {
+    try { fs.rmSync(directory, { recursive: true, force: true }); } catch {}
+  }
+}
 // One abort controller per concurrently running conversation. Keyed by the
 // conversation id the renderer passes with each chat:stream call, so several
 // chats (even on the same model) can stream at the same time without
@@ -172,50 +213,114 @@ function resolveSandbox(
 }
 
 // ---- Web tools -------------------------------------------------------------
-function htmlToText(html: string): string {
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<\/(p|div|h[1-6]|li|tr|br)\s*>/gi, '\n')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
-    .replace(/[ \t]+/g, ' ')
-    .replace(/\n\s*\n\s*\n+/g, '\n\n')
-    .trim();
-}
+// ---- Web tools: fast fetch first, built-in Chromium (BrowserUse) fallback -
+// Search and fetch results are cached for 5 minutes, so repeated asks cost
+// nothing. External URLs are https-only (plain http is upgraded); only local
+// dev servers may stay on http.
+const searchCache = createTtlCache<{ text: string; refs: { title: string; link: string }[] }>(50, 5 * 60 * 1000);
+const fetchCache = createTtlCache<string>(50, 5 * 60 * 1000);
 
-async function netFetch(url: string): Promise<string> {
+async function netFetch(url: string, scope?: string): Promise<string> {
+  let target = (url || '').trim();
+  // "#N" opens the Nth hit of this conversation's latest search — no long URL
+  // pasted through the transcript in either direction.
+  const ref = parseResultRef(target);
+  if (ref !== null) {
+    const resolved = resolveSearchRef(scope, ref);
+    if (!resolved.ok) return `Error: ${resolved.error}`;
+    target = resolved.url;
+  }
+  const normalized = normalizeWebUrl(target);
+  if (!normalized.ok) return `Error: ${normalized.error}`;
+  target = normalized.url;
+  const cached = fetchCache.get(target);
+  if (cached !== undefined) return cached;
+  const done = (body: string): string => {
+    fetchCache.set(target, body);
+    return body;
+  };
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 20000);
-    const res = await fetch(url, { signal: controller.signal, headers: { 'User-Agent': 'Mozilla/5.0 (ConeCode)' } });
-    clearTimeout(timer);
+    const timer = setTimeout(() => controller.abort(), 12000);
+    let res: Response;
+    try {
+      res = await fetch(target, { signal: controller.signal, headers: { 'User-Agent': 'Mozilla/5.0 (ConeCode)' } });
+    } finally {
+      clearTimeout(timer);
+    }
     const ct = res.headers.get('content-type') || '';
-    const raw = await res.text();
+    // Bound the regex work: 3 MB of HTML is plenty for a 15k-char excerpt.
+    const raw = (await res.text()).slice(0, 3_000_000);
     const body = (ct.includes('html') || /<html/i.test(raw.slice(0, 500))) ? htmlToText(raw) : raw;
-    return `URL: ${url}\nStatus: ${res.status} ${res.statusText}\n\n${body.slice(0, 15000)}`;
+    // A 200 with no real content is a shell only a real browser can fill in —
+    // re-render it in the built-in Chromium instead of handing back crumbs.
+    if (res.ok && looksLikeJsShell(body, raw)) {
+      try {
+        const rendered = await browserRead(target);
+        if (rendered.text.trim()) {
+          return done(`URL: ${rendered.url}\nRendered in the built-in browser${rendered.title ? `: ${rendered.title}` : ''}\n\n${rendered.text.slice(0, 15000)}`);
+        }
+      } catch {
+        // Fall through to whatever the fetch got.
+      }
+    }
+    return done(`URL: ${target}\nStatus: ${res.status} ${res.statusText}\n\n${body.slice(0, 15000)}`);
   } catch (e: any) {
-    return `Error fetching ${url}: ${e?.message || String(e)}`;
+    // No HTTP response at all (blocked host, DNS, timeout): one last chance
+    // via the built-in browser before giving up.
+    try {
+      const rendered = await browserRead(target);
+      if (rendered.text.trim()) {
+        return done(`URL: ${rendered.url}\nRendered in the built-in browser${rendered.title ? `: ${rendered.title}` : ''}\n\n${rendered.text.slice(0, 15000)}`);
+      }
+    } catch {
+      // Report the original fetch failure below.
+    }
+    return `Error fetching ${target}: ${e?.message || String(e)}`;
   }
 }
 
-async function netSearch(query: string): Promise<string> {
+async function netSearch(query: string, scope?: string): Promise<string> {
+  const q = (query || '').trim();
+  if (!q) return 'No web results for "".';
+  const cacheKey = q.toLowerCase();
+  const cached = searchCache.get(cacheKey);
+  // A cached hit still belongs to this conversation's ref table — the numbers
+  // in it must open the same pages.
+  if (cached !== undefined) {
+    if (cached.refs.length) saveSearchRefs(scope, cached.refs);
+    return cached.text;
+  }
+  const done = (text: string, refs: { title: string; link: string }[]): string => {
+    saveSearchRefs(scope, refs);
+    searchCache.set(cacheKey, { text, refs });
+    return text;
+  };
+  // L1: cheap fetch of the html endpoint (~1s when it works). Now with
+  // snippets, so most asks are answered without ever opening the browser.
   try {
-    const res = await fetch('https://html.duckduckgo.com/html/?q=' + encodeURIComponent(query), {
-      headers: { 'User-Agent': 'Mozilla/5.0 (ConeCode)' },
-    });
-    const html = await res.text();
-    const re = /<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
-    const out: string[] = [];
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(html)) && out.length < 8) {
-      const uddg = m[1].match(/uddg=([^&]+)/)?.[1];
-      const link = uddg ? decodeURIComponent(uddg) : m[1];
-      const title = m[2].replace(/<[^>]+>/g, '').trim();
-      if (title) out.push(`${out.length + 1}. ${title}\n   ${link}`);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    let html = '';
+    try {
+      const res = await fetch('https://html.duckduckgo.com/html/?q=' + encodeURIComponent(q), {
+        signal: controller.signal,
+        headers: { 'User-Agent': 'Mozilla/5.0 (ConeCode)' },
+      });
+      html = await res.text();
+    } finally {
+      clearTimeout(timer);
     }
-    return out.length ? `Web results for "${query}":\n\n${out.join('\n')}` : `No web results for "${query}".`;
+    const results = parseDuckResults(html, MAX_SEARCH_RESULTS);
+    if (results.length) return done(formatCompactResults(q, results), results);
+  } catch {
+    // Blocked or timed out — fall through to the browser path.
+  }
+  // L2: render the search page in the built-in Chromium (resists the bot
+  // blocks that stop plain fetches) and parse the anchors.
+  try {
+    const results = await browserSearch(q, MAX_SEARCH_RESULTS);
+    return done(formatCompactResults(q, results), results);
   } catch (e: any) {
     return `Search error: ${e?.message || String(e)}`;
   }
@@ -223,19 +328,22 @@ async function netSearch(query: string): Promise<string> {
 
 // Download a file from a URL to an absolute path (the agent's `download` action).
 async function netDownload(url: string, dest: string): Promise<string> {
+  const normalized = normalizeWebUrl(url);
+  if (!normalized.ok) return `Error: ${normalized.error}`;
+  const target = normalized.url;
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 120000);
-    const res = await fetch(url, { signal: controller.signal, headers: { 'User-Agent': 'Mozilla/5.0 (ConeCode)' } });
+    const res = await fetch(target, { signal: controller.signal, headers: { 'User-Agent': 'Mozilla/5.0 (ConeCode)' } });
     clearTimeout(timer);
-    if (!res.ok) return `Error: HTTP ${res.status} ${res.statusText} downloading ${url}`;
+    if (!res.ok) return `Error: HTTP ${res.status} ${res.statusText} downloading ${target}`;
     const buf = Buffer.from(await res.arrayBuffer());
     const resolved = path.isAbsolute(dest) ? dest : path.join(process.cwd(), dest);
     fs.mkdirSync(path.dirname(resolved), { recursive: true });
     fs.writeFileSync(resolved, buf);
-    return `Downloaded ${buf.length} bytes from ${url} to ${resolved}`;
+    return `Downloaded ${buf.length} bytes from ${target} to ${resolved}`;
   } catch (e: any) {
-    return `Error downloading ${url}: ${e?.message || String(e)}`;
+    return `Error downloading ${target}: ${e?.message || String(e)}`;
   }
 }
 
@@ -331,6 +439,15 @@ function readMcpConfig(rootPath?: string): Record<string, McpServerConfig> {
 }
 
 function createWindow() {
+  // On macOS a cold start (unsigned build + Gatekeeper scan = slow ready) can
+  // deliver `activate` before `ready`. Creating a BrowserWindow that early
+  // throws "Cannot create BrowserWindow before app is ready" and kills the
+  // app with the main-process error dialog — so defer instead of crashing.
+  if (!app.isReady()) {
+    app.once('ready', createWindow);
+    return;
+  }
+  if (mainWindow) return;
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
@@ -410,6 +527,7 @@ app.on('before-quit', () => {
   stopTunnel();
   remoteServer.stop();
   previewManager.stop();
+  void closeBrowserUse();
   // Never leave a mouse button held down by a quit mid-drag.
   computerController.panic();
   if (powerSaveBlockerId != null && powerSaveBlocker.isStarted(powerSaveBlockerId)) {
@@ -428,7 +546,11 @@ app.on('window-all-closed', () => {
     app.quit();
   }
 });
-app.on('activate', () => { if (!mainWindow) createWindow(); });
+app.on('activate', () => {
+  // May fire before `ready` on a slow macOS cold start; createWindow() itself
+  // defers in that case, so this stays safe to call unconditionally.
+  if (!mainWindow) createWindow();
+});
 
 function initProviders() {
   const providers = providerRepo.findAll();
@@ -1135,9 +1257,23 @@ function registerIPC() {
   });
 
   // ---- Web tools -------------------------------------------------------
-  ipcMain.handle('net:fetch', (_, url: string) => netFetch(url));
-  ipcMain.handle('net:search', (_, query: string) => netSearch(query));
+  ipcMain.handle('net:fetch', (_, url: string, scope?: string) => netFetch(url, scope));
+  ipcMain.handle('net:search', (_, query: string, scope?: string) => netSearch(query, scope));
   ipcMain.handle('net:download', (_, url: string, dest: string) => netDownload(url, dest));
+
+  // ---- Built-in browser (headless BrowserUse for the open web) ------------
+  // Same ref-annotated driving as the preview panel's page_* tools, but for
+  // any https URL with no project or panel needed. The window is created lazily
+  // and reused; navigating the preview panel releases it (see chat.store).
+  ipcMain.handle('browser:navigate', (_, url: string, scope?: string) => browserNavigate(url, scope));
+  ipcMain.handle('browser:snapshot', () => browserSnapshot());
+  ipcMain.handle('browser:click', (_, ref: string) => browserClick(ref));
+  ipcMain.handle('browser:fill', (_, ref: string, text: string, submit: boolean) => browserFill(ref, text ?? '', !!submit));
+  ipcMain.handle('browser:eval', (_, expression: string) => browserEval(expression));
+  ipcMain.handle('browser:history', (_, action: 'reload' | 'back') =>
+    action === 'back' ? browserHistory('back') : browserHistory('reload'));
+  ipcMain.handle('browser:status', () => ({ active: hasBrowserSession() }));
+  ipcMain.handle('browser:close', () => closeBrowserUse());
 
   // ---- Skills (the plugin library) -------------------------------------
   // Global skills live in ~/.conecode/skills; project skills in
@@ -1368,5 +1504,91 @@ function registerIPC() {
   ipcMain.handle('computer:panic', async () => {
     await computerController.panic();
     return computerController.status();
+  });
+
+  // ---- Screenshot (user region capture + annotate) ------------------------
+  // Unlike computer:screenshot (agent eyes, downscaled), this returns the full
+  // native-resolution screen so the region crop stays sharp.
+  ipcMain.handle('screenshot:capture', async () => {
+    const display = screen.getPrimaryDisplay();
+    const scale = display.scaleFactor || 1;
+    const fullW = Math.round(display.size.width * scale);
+    const fullH = Math.round(display.size.height * scale);
+    // Try full-res first, then progressively smaller: oversized thumbnails are
+    // a known cause of empty captures on some GPUs, and the media-status API
+    // can stay stale after the user grants permission — so pixels (not the
+    // status string) are the ground truth. Gate on permission only at the end.
+    const attempts = [
+      { width: fullW, height: fullH },
+      { width: 1920, height: Math.max(1, Math.round((1920 * fullH) / Math.max(1, fullW))) },
+      { width: display.size.width, height: display.size.height },
+    ];
+    for (const thumbnailSize of attempts) {
+      try {
+        const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize });
+        const ordered = [
+          sources.find((s) => s.display_id === String(display.id)),
+          ...sources,
+        ].filter((s): s is (typeof sources)[number] => !!s);
+        for (const source of ordered) {
+          if (source.thumbnail.isEmpty()) continue;
+          const size = source.thumbnail.getSize();
+          if (size.width === 0 || size.height === 0) continue;
+          return { dataUrl: source.thumbnail.toDataURL(), width: size.width, height: size.height };
+        }
+      } catch (err) {
+        console.error('screenshot:capture attempt failed', thumbnailSize, err);
+      }
+    }
+    // A granted macOS TCC permission is not always reflected immediately in
+    // desktopCapturer. The native tool uses the same system permission and
+    // gives us a reliable second capture path before we show a permission UI.
+    const fallback = await captureMacScreenFallback();
+    if (fallback) return fallback;
+
+    let granted = true;
+    try {
+      granted = process.platform !== 'darwin' || systemPreferences.getMediaAccessStatus('screen') === 'granted';
+    } catch {}
+    return granted ? { error: 'empty' } : { error: 'permission', needsPermission: 'screenRecording' };
+  });
+  ipcMain.handle('screenshot:save', async (_, dataUrl: string) => {    const { filePath, canceled } = await dialog.showSaveDialog({
+      defaultPath: `screenshot-${new Date().toISOString().replace(/[:.]/g, '-')}.png`,
+      filters: [{ name: 'PNG', extensions: ['png'] }],
+    });
+    if (canceled || !filePath) return { ok: false };
+    const base64 = String(dataUrl).split(',')[1] || '';
+    fs.writeFileSync(filePath, Buffer.from(base64, 'base64'));
+    return { ok: true, path: filePath };
+  });
+  // Permission recovery: deep-link straight into Screen Recording settings,
+  // and relaunch (a grant only takes effect after a full restart — the most
+  // common "I allowed it but it still fails" cause).
+  ipcMain.handle('screenshot:open-settings', async () => {
+    await shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');
+    return { ok: true };
+  });
+  ipcMain.handle('screenshot:relaunch', () => {
+    app.relaunch();
+    app.exit(0);
+    return { ok: true };
+  });
+  // Customizable global hotkey. Registration lives here (main) so it works
+  // while the app is in the background; the renderer only stores the string.
+  ipcMain.handle('screenshot:set-shortcut', (_, accelerator: string | null) => {
+    if (screenshotAccelerator) {
+      try { globalShortcut.unregister(screenshotAccelerator); } catch {}
+      screenshotAccelerator = null;
+    }
+    if (!accelerator) return { ok: true };
+    try {
+      const ok = globalShortcut.register(accelerator, () => {
+        mainWindow?.webContents.send('screenshot:trigger');
+      });
+      if (ok) screenshotAccelerator = accelerator;
+      return { ok };
+    } catch {
+      return { ok: false };
+    }
   });
 }

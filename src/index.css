@@ -74,6 +74,30 @@
 .syntax-type     { color: var(--syntax-type); }
 .syntax-constant { color: var(--syntax-constant); }
 
+/* Editor diagnostics: wavy underlines drawn as repeating SVG backgrounds so
+   they work on empty ranges and survive any font. Colors follow the theme. */
+.squiggle-error, .squiggle-warning {
+  position: absolute;
+  background-repeat: repeat-x;
+  background-position: left bottom;
+  pointer-events: none;
+}
+.squiggle-error {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='3'%3E%3Cpath d='M0 2 Q1.5 0.5 3 2 T6 2' fill='none' stroke='%23C43E2E' stroke-width='1'/%3E%3C/svg%3E");
+}
+.squiggle-warning {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='3'%3E%3Cpath d='M0 2 Q1.5 0.5 3 2 T6 2' fill='none' stroke='%23B8762B' stroke-width='1'/%3E%3C/svg%3E");
+}
+/* Matched bracket pair, shown while the caret touches either end. */
+.bracket-match {
+  position: absolute;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  pointer-events: none;
+  box-sizing: border-box;
+}
+
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 ::selection { background: var(--accent-soft); }
@@ -172,6 +196,13 @@ input, textarea, select, button { font-family: inherit; }
   100% { transform: scale(1); }
 }
 
+/* 流沙 — grains drift down through three offset layers (tile heights divide
+   the travel distance, so the loop is seamless; sizes differ for parallax). */
+@keyframes sand-fall {
+  from { background-position: 0 -26px, 4px -20px, 7px -32px; }
+  to   { background-position: 0 26px, 4px 20px, 7px 32px; }
+}
+
 /* Dialog / sheet panel: spring entrance. */
 .anim-modal {
   animation: anim-modal-in var(--dur-enter) var(--ease-spring) both;
@@ -227,6 +258,81 @@ input, textarea, select, button { font-family: inherit; }
   animation: anim-check-pop var(--dur-slow) var(--ease-spring) both;
 }
 
+/* Flowing sand on the deepest thinking stop — hourglass grains falling.
+   Color follows currentColor so the active stop glows in the accent hue. */
+.sand-fall {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  color: var(--text-muted);
+  opacity: 0.4;
+  background-image:
+    radial-gradient(circle, currentColor 0.9px, transparent 1.2px),
+    radial-gradient(circle, currentColor 0.6px, transparent 0.9px),
+    radial-gradient(circle, currentColor 0.7px, transparent 1px);
+  background-size: 14px 26px, 9px 20px, 11px 32px;
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 30%, #000 72%, transparent);
+  mask-image: linear-gradient(to bottom, transparent, #000 30%, #000 72%, transparent);
+  animation: sand-fall 2.6s linear infinite;
+}
+.sand-fall-hot {
+  color: var(--accent);
+  opacity: 0.85;
+  animation-duration: 1.5s;
+}
+
+/* ── Thinking slider ─────────────────────────────────────────────────── */
+
+/* Popup: springy rise from its bottom-right anchor. */
+@keyframes anim-effort-pop {
+  0%   { opacity: 0; transform: translate3d(0, 10px, 0) scale(0.94); }
+  60%  { opacity: 1; transform: translate3d(0, -2px, 0) scale(1.012); }
+  100% { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+}
+.anim-effort-pop {
+  animation: anim-effort-pop var(--dur-enter) var(--ease-spring) both;
+  transform-origin: bottom right;
+}
+
+/* Track and labels arrive just after the shell. */
+.anim-effort-pop .effort-stagger-1 { animation: anim-fade-up 320ms var(--ease-emphasized) 70ms both; }
+.anim-effort-pop .effort-stagger-2 { animation: anim-fade-up 320ms var(--ease-emphasized) 140ms both; }
+
+/* Fill: a soft highlight gliding along the fill, like light on wet paint. */
+@keyframes fill-sweep {
+  from { background-position: 200% 0; }
+  to   { background-position: -200% 0; }
+}
+.effort-fill::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background-image: linear-gradient(105deg, transparent 35%, rgba(255, 255, 255, 0.4) 50%, transparent 65%);
+  background-size: 200% 100%;
+  animation: fill-sweep 2.6s linear infinite;
+}
+
+/* Hourglass stopper: a full tip-over turn when the deepest stop is reached. */
+@keyframes effort-flip {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+.effort-flip { animation: effort-flip 700ms var(--ease-spring); }
+
+/* Thumb and fill glide between stops; the knob swells while held — left
+   snaps to the cursor, transform keeps its spring. */
+.effort-thumb {
+  transition: left 160ms var(--ease-emphasized), transform 160ms var(--ease-emphasized);
+}
+.effort-thumb.dragging {
+  transform: scale(1.15);
+  transition: transform 160ms var(--ease-emphasized);
+}
+.effort-fill { transition: width 160ms var(--ease-emphasized); }
+.effort-fill.dragging { transition: none; }
+
 /* Shared hover/focus helpers that stay on transform/opacity. */
 .anim-hover {
   transition:
@@ -266,12 +372,20 @@ input, textarea, select, button { font-family: inherit; }
   .anim-caret,
   .anim-shimmer,
   .anim-pop,
+  .sand-fall,
+  .anim-effort-pop,
+  .effort-stagger-1,
+  .effort-stagger-2,
+  .effort-flip,
   .animate-pulse,
   .animate-spin,
   .animate-bounce {
     animation: none !important;
   }
   .anim-hover, .anim-press { transition: none; transform: none !important; box-shadow: none !important; }
+  .effort-thumb, .effort-fill { transition: none !important; }
+  .effort-thumb.dragging { transform: none !important; }
+  .effort-fill::after { animation: none !important; }
   .anim-modal, .anim-menu, .anim-scrim, .anim-message {
     opacity: 1 !important;
     transform: none !important;

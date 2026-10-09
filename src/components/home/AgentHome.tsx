@@ -1,17 +1,15 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo } from 'react';
 import {
-  FiRefreshCw, FiFolder, FiPlus, FiGitBranch, FiClock, FiArrowRight, FiZap,
+  FiRefreshCw, FiFolder, FiGitBranch, FiArrowRight, FiZap,
   FiAlertCircle, FiTool, FiFileText, FiCheckSquare, FiPackage,
-  FiPlay,
 } from 'react-icons/fi';
 import {
   useAgendaStore, useChatStore, useLanguageStore, useModelStore, useWorkspaceStore,
 } from '../../stores';
-import { buildResumePrompt, recommendNext, type SuggestedTask, type TaskKind } from '../../core/agenda/agenda';
+import { type SuggestedTask, type TaskKind } from '../../core/agenda/agenda';
 import AppIcon from '../common/AppIcon';
 import ProjectIdeas from './ProjectIdeas';
 import ProjectBriefComposer from './ProjectBriefComposer';
-import NextActionDialog from './NextActionDialog';
 
 const KIND_STYLE: Record<TaskKind, { icon: JSX.Element; color: string; bg: string }> = {
   bug: { icon: <FiAlertCircle size={14} />, color: 'text-red-500', bg: 'bg-red-500/10' },
@@ -37,15 +35,13 @@ function timeAgo(ts: number, t: (k: string) => string): string {
 /**
  * The home screen: instead of an empty prompt, the agent looks at the real state
  * of the workspace and offers work to start — proposed tasks grounded in the
- * scan, unfinished conversations to resume, or a new project to scaffold.
+ * scan, or a new project to scaffold.
  */
 export default function AgentHome() {
   const { t } = useLanguageStore();
   const rootPath = useWorkspaceStore((s) => s.rootPath);
   const openFolder = useWorkspaceStore((s) => s.openFolder);
   const sendMessage = useChatStore((s) => s.sendMessage);
-  const setActiveConversation = useChatStore((s) => s.setActiveConversation);
-  const conversations = useChatStore((s) => s.conversations);
   const getSelectedModel = useModelStore((s) => s.getSelectedModel);
   const model = getSelectedModel();
 
@@ -55,11 +51,9 @@ export default function AgentHome() {
   const suggesting = useAgendaStore((s) => s.suggesting);
   const error = useAgendaStore((s) => s.error);
   const generatedAt = useAgendaStore((s) => s.generatedAt);
-  const resume = useAgendaStore((s) => s.resume);
   const findWork = useAgendaStore((s) => s.findWork);
   const loadCached = useAgendaStore((s) => s.loadCached);
   const scanWorkspace = useAgendaStore((s) => s.scanWorkspace);
-  const loadResume = useAgendaStore((s) => s.loadResume);
 
 
   // The greeting follows the clock rather than being one fixed line.
@@ -96,32 +90,10 @@ export default function AgentHome() {
     loadCached();
     void scanWorkspace();
   }, [rootPath, scanWorkspace, loadCached]);
-  useEffect(() => { void loadResume(); }, [conversations, loadResume]);
 
   const start = async (prompt: string) => {
     if (!model) return;
     await sendMessage(prompt, model.providerId, model.id);
-  };
-
-  const resumeWork = async (candidate: (typeof resume)[number]) => {
-    await setActiveConversation(candidate.conversationId);
-    if (!model) return;
-    await sendMessage(buildResumePrompt(candidate), model.providerId, model.id);
-  };
-
-  // The screen makes the call; the user only has to agree — or rewrite it in the dialog.
-  const recommendation = useMemo(() => recommendNext({
-    hasFolder: !!rootPath,
-    dirty: scan?.git.dirty ?? 0,
-    hasTests: scan?.hasTests ?? true,
-    openTodos: resume.reduce((n, r) => n + r.openTodos.length, 0),
-    topTask: tasks[0]?.title,
-  }), [rootPath, scan, resume, tasks]);
-
-  const ideasSectionRef = useRef<HTMLElement>(null);
-  const scrollToIdeas = () => {
-    ideasSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    document.getElementById('conecode-project-idea')?.focus({ preventScroll: true });
   };
 
   const busy = scanning || suggesting;
@@ -130,12 +102,12 @@ export default function AgentHome() {
   const showSkeletons = suggesting || (scanning && tasks.length === 0);
 
   return (
-    <div className="max-w-[900px] mx-auto w-full py-4 px-4 min-w-0">
+    <div className="max-w-[900px] mx-auto w-full pt-8 pb-6 min-w-0">
       {/* ---- Header: who you are, where you are ---- */}
-      <div className="flex items-start gap-3 mb-6 min-w-0">
-        <AppIcon size={40} className="rounded-xl" />
+      <div className="flex items-start gap-3 mb-8 min-w-0">
+        <AppIcon size={36} className="rounded-xl" />
         <div className="min-w-0 flex-1">
-          <h1 className="text-xl font-semibold text-[var(--text-primary)] leading-tight">
+          <h1 className="text-lg font-semibold text-[var(--text-primary)] leading-tight">
             {t(greetingKey)}
           </h1>
           <div className="mt-1 flex items-center gap-1.5 flex-wrap text-xs text-[var(--text-muted)]">
@@ -172,20 +144,11 @@ export default function AgentHome() {
         </div>
       </div>
 
-      {/* ---- The call: one recommended next action, as a real dialog ---- */}
-      <NextActionDialog
-        recommendation={recommendation}
-        tasks={tasks}
-        resume={resume}
-        hasFolder={!!rootPath}
-        onSend={start}
-        onOpenFolder={() => void openFolder()}
-        onScrollToIdeas={scrollToIdeas}
-      />
+      <ProjectBriefComposer />
 
       {/* ---- The main event: work the agent found ---- */}
-      <section className="mb-6 min-w-0">
-        <div className="flex items-center gap-2 mb-2.5 min-w-0">
+      <section className="mb-8 min-w-0">
+        <div className="flex items-center gap-2 mb-3 min-w-0">
           <h2 className="text-sm font-semibold text-[var(--text-primary)] truncate">{t('homeFindWork')}</h2>
           {generatedAt && !busy && (
             <span className="text-[11px] text-[var(--text-muted)] shrink-0">{timeAgo(generatedAt, t)}</span>
@@ -225,88 +188,9 @@ export default function AgentHome() {
         )}
       </section>
 
-      {/* ---- Pick up yesterday's thread ---- */}
-      {resume.length > 0 && (
-        <section className="mb-6 min-w-0">
-          <h2 className="text-sm font-semibold text-[var(--text-primary)] mb-2.5">{t('homeResume')}</h2>
-          <div className="space-y-2 min-w-0">
-            {resume.map((r) => (
-              <div key={r.conversationId}
-                className="group rounded-xl border border-[var(--border)] bg-[var(--bg-2)] p-3 hover:border-[var(--accent)]/50 transition-colors min-w-0">
-                <div className="flex items-start gap-3 min-w-0">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-[var(--text-primary)] truncate">{r.title}</span>
-                      <span className="shrink-0 text-[11px] text-[var(--text-muted)] inline-flex items-center gap-1">
-                        <FiClock size={10} />{timeAgo(r.updatedAt, t)}
-                      </span>
-                    </div>
-                    {r.lastMessage && (
-                      <p className="mt-1 text-xs text-[var(--text-muted)] line-clamp-2">{r.lastMessage}</p>
-                    )}
-                    <div className="mt-1.5 flex items-center gap-2 flex-wrap text-[11px]">
-                      {r.rootPath && (
-                        <span className="text-[var(--text-muted)] inline-flex items-center gap-1">
-                          <FiFolder size={10} />{r.rootPath.split('/').pop()}
-                        </span>
-                      )}
-                      {r.openTodos.length > 0 && (
-                        <span className="px-1.5 py-0.5 rounded bg-[var(--accent-soft)] text-[var(--accent)] font-medium">
-                          {r.openTodos.length} {t('homeOpenTodos')}
-                        </span>
-                      )}
-                      {r.pendingChanges > 0 && (
-                        <span className="px-1.5 py-0.5 rounded bg-[var(--warning)]/15 text-[var(--warning)] font-medium">
-                          {r.pendingChanges} {t('pending')}
-                        </span>
-                      )}
-                    </div>
-                    {r.openTodos.length > 0 && (
-                      <ul className="mt-1.5 space-y-0.5">
-                        {r.openTodos.slice(0, 3).map((todo, i) => (
-                          <li key={i} className="text-[11px] text-[var(--text-secondary)] flex items-start gap-1.5">
-                            <span className="mt-1 w-1 h-1 rounded-full bg-[var(--text-muted)] shrink-0" />
-                            <span className="truncate">{todo}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                  <div className="flex flex-col gap-1.5 shrink-0">
-                    <button onClick={() => resumeWork(r)} disabled={!model}
-                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-[var(--accent)] text-white text-xs font-medium hover:bg-[var(--accent-hover)] disabled:opacity-40">
-                      <FiPlay size={11} /> {t('homeContinue')}
-                    </button>
-                    <button onClick={() => setActiveConversation(r.conversationId)}
-                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-[var(--bg-3)] text-[var(--text-secondary)] text-xs hover:bg-[var(--bg-4)]">
-                      {t('homeOpenOnly')}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
-
-      {/* ---- Start something new: ONE entry (idea brief + optional inspiration) ---- */}
-      <section id="conecode-new-project" ref={ideasSectionRef} className="space-y-3">
-        <div className="flex items-center gap-2">
-          <h2 className="text-sm font-semibold text-[var(--text-primary)]">{t('homeNewProject')}</h2>
-          <span className="text-[11px] text-[var(--text-muted)]">{t('homeNewProjectDesc')}</span>
-          <button onClick={openFolder} className="ml-auto inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-[var(--bg-3)] text-[var(--text-secondary)] border border-[var(--border)] hover:border-[var(--accent)] hover:text-[var(--accent)] transition-colors">
-            <FiFolder size={11} /> {t('openFolder')}
-          </button>
-        </div>
-        <ProjectBriefComposer />
-        <details className="rounded-xl border border-[var(--border)] bg-[var(--bg-2)] px-3 py-2">
-          <summary className="cursor-pointer text-xs font-medium text-[var(--text-secondary)] select-none">
-            {t('autopilotMore')}
-          </summary>
-          <div className="mt-2">
-            <ProjectIdeas />
-          </div>
-        </details>
+      {/* ---- Start something new: pick one, it builds itself ---- */}
+      <section id="conecode-new-project" className="min-w-0">
+        <ProjectIdeas />
       </section>
 
       {!model && (

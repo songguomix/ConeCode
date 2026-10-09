@@ -32,6 +32,26 @@ import {
 import {
   pageSnapshot, pageClick, pageFill, pageEval, pageHistory, waitForPage,
 } from '../core/preview/agentpage';
+import { normalizeWebUrl, isLocalUrl, parseResultRef } from '../core/browser/policy';
+
+/** The headless built-in browser (main process), if this session has one. */
+const browserAPI = () => (window as any).electronAPI?.browser;
+/** True when the agent currently drives an external page headlessly. */
+async function useHeadlessBrowser(): Promise<boolean> {
+  try {
+    return (await browserAPI()?.status())?.active === true;
+  } catch {
+    return false;
+  }
+}
+/** Best-effort release of the hidden window (navigating the preview instead). */
+function releaseHeadlessBrowser(): void {
+  try {
+    void browserAPI()?.close()?.catch(() => {});
+  } catch {
+    // No bridge (web preview) — nothing to release.
+  }
+}
 
 // Why the most recent stream ended (OpenAI `finish_reason`), captured by the
 // global chunk listener and read back in runAgentLoop to explain empty replies.
@@ -326,6 +346,7 @@ function toolFailure(label: string, error: unknown): string {
 async function executeIndependentRead(
   action: FileAction,
   ws: ReturnType<typeof useWorkspaceStore.getState>,
+  scope?: string,
 ): Promise<string> {
   switch (action.action) {
     case 'read_file': {
@@ -365,9 +386,9 @@ async function executeIndependentRead(
       return out?.trim() ? out : 'No changes (empty diff).';
     }
     case 'web_fetch':
-      return window.electronAPI.net.fetch(action.url!);
+      return window.electronAPI.net.fetch(action.url!, scope);
     case 'web_search':
-      return window.electronAPI.net.search(action.query!);
+      return window.electronAPI.net.search(action.query!, scope);
     case 'use_skill': {
       const body = useSkillsStore.getState().body(action.id!);
       return body
@@ -1299,7 +1320,11 @@ const SUB_AGENT_ACTIONS = new Set([
 // using read tools and returns a text report. Its model streams are silent (they
 // don't touch the main transcript's live view). Reuses the same parse/normalize
 // helpers as the main loop. Capped at 12 steps.
+let subAgentSeq = 0;
 async function runHeadlessAgent(task: string, providerId: string, modelId: string, signal: AbortSignal): Promise<string> {
+  // Own search-ref scope, so a sub-agent's "#N" never collides with the main
+  // conversation's (or another sub-agent's) latest search.
+  const scope = `sub:${++subAgentSeq} ${Date.now().toString(36)}`;
   const ws = useWorkspaceStore.getState();
   const { useModelStore } = await import('./model.store');
   // Same protocol choice as the main loop, narrowed to the read-only tools.
@@ -1369,7 +1394,7 @@ Workspace root: ${describeRoots(ws)}`;
     const results = await Promise.all(entries.map(async (entry) => {
       if (!entry.action) return entry.error || 'Error: invalid tool call.';
       try {
-        return await executeIndependentRead(entry.action, ws);
+        return await executeIndependentRead(entry.action, ws, scope);
       } catch (error) {
         return toolFailure(toolActionLabel(entry.action), error);
       }
@@ -1602,8 +1627,9 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
             providerId,
             modelId,
             messages: allMessages,
-            // Auto intensity resolves per-turn from the user's ask (codex-style).
-            reasoningEffort: resolveEffort(reasoningEffort, lastUserText(allMessages)),
+            // Auto intensity resolves per-turn from the user's ask (codex-style),
+            // then clamps to the levels the selected model actually declares.
+            reasoningEffort: resolveEffort(reasoningEffort, lastUserText(allMessages), selectedModel?.reasoningEfforts),
             maxTokens,
             // Tags every chunk and keys the main-process abort controller, so
             // concurrent conversations never cancel or mix each other's output.
@@ -1808,7 +1834,7 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
           const action = entry.action!;
           const label = toolActionLabel(action);
           try {
-            return { call: entry.call, label, result: await executeIndependentRead(action, ws) };
+            return { call: entry.call, label, result: await executeIndependentRead(action, ws, convId) };
           } catch (error) {
             return { call: entry.call, label, result: toolFailure(label, error) };
           }
@@ -2013,11 +2039,11 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
             break;
           }
           case 'web_fetch': {
-            result = await window.electronAPI.net.fetch(action.url!);
+            result = await window.electronAPI.net.fetch(action.url!, convId);
             break;
           }
           case 'web_search': {
-            result = await window.electronAPI.net.search(action.query!);
+            result = await window.electronAPI.net.search(action.query!, convId);
             break;
           }
           case 'download': {
@@ -2142,10 +2168,12 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
           case 'page_navigate': {
             const { usePreviewStore } = await import('./preview.store');
             const { useUIStore } = await import('./ui.store');
-            useUIStore.getState().openPreview();
-            const preview = usePreviewStore.getState();
 
             if (action.history === 'reload' || action.history === 'back') {
+              if (await useHeadlessBrowser()) {
+                result = await browserAPI().history(action.history);
+                break;
+              }
               result = await pageHistory(action.history);
               break;
             }
@@ -2153,7 +2181,9 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
             let target = action.url;
             if (!target) {
               // No address given: run the project and open whatever it serves.
+              useUIStore.getState().openPreview();
               if (!ws.rootPath) { result = 'No folder is open, so there is no dev server to start. Pass a url instead.'; break; }
+              const preview = usePreviewStore.getState();
               if (preview.state !== 'running') await preview.start(ws.rootPath);
               const started = usePreviewStore.getState();
               if (!started.url) {
@@ -2163,29 +2193,82 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
               target = started.url;
             }
 
+            // External https URLs need no project and no panel: drive them in
+            // the headless built-in browser (same refs/snapshot as the panel).
+            // A bare port ("3000") is the dev-server shorthand — not external.
+            // A bare "#N" re-opens the Nth hit of this chat's latest search.
+            if (parseResultRef(target.trim()) !== null) {
+              if (!browserAPI()) {
+                result = 'The built-in browser is not available in this session. Use web_fetch to read the page instead.';
+                break;
+              }
+              const nav = await browserAPI().navigate(target.trim(), convId);
+              result = nav.ok
+                ? `Opened ${nav.url}.\n\n${nav.snapshot}`
+                : (nav.error || 'Could not open the page.');
+              break;
+            }
+            const normalized = /^\d{2,5}$/.test(target.trim()) ? null : normalizeWebUrl(target);
+            if (normalized?.ok && !isLocalUrl(normalized.url)) {
+              if (!browserAPI()) {
+                result = 'The built-in browser is not available in this session. Use web_fetch to read the page instead.';
+                break;
+              }
+              const nav = await browserAPI().navigate(normalized.url, convId);
+              result = nav.ok
+                ? `Opened ${nav.url}.${normalized.upgraded ? ' (Upgraded http to https.)' : ''}\n\n${nav.snapshot}`
+                : (nav.error || 'Could not open the page.');
+              break;
+            }
+
+            useUIStore.getState().openPreview();
+            // The preview takes over from here — release the hidden window so
+            // later snapshots read the panel, not a stale headless page.
+            releaseHeadlessBrowser();
+            const preview = usePreviewStore.getState();
             preview.navigateTab(usePreviewStore.getState().activeTabId, target!);
             await waitForPage();
             result = `Opened ${target}.\n\n${await pageSnapshot()}`;
             break;
           }
           case 'page_snapshot': {
+            if (await useHeadlessBrowser()) {
+              result = await browserAPI().snapshot();
+              break;
+            }
             await waitForPage(2000);
             result = await pageSnapshot();
             break;
           }
           case 'page_click': {
+            if (await useHeadlessBrowser()) {
+              result = await browserAPI().click(action.ref!);
+              break;
+            }
             result = await pageClick(action.ref!);
             break;
           }
           case 'page_fill': {
+            if (await useHeadlessBrowser()) {
+              result = await browserAPI().fill(action.ref!, action.text ?? '', !!action.submit);
+              break;
+            }
             result = await pageFill(action.ref!, action.text ?? '', !!action.submit);
             break;
           }
           case 'page_eval': {
+            if (await useHeadlessBrowser()) {
+              result = await browserAPI().eval(action.expression!);
+              break;
+            }
             result = await pageEval(action.expression!);
             break;
           }
           case 'page_console': {
+            if (await useHeadlessBrowser()) {
+              result = 'External pages have no dev-server log. Use page_snapshot to re-read the page, or page_eval to inspect its state.';
+              break;
+            }
             const { usePreviewStore } = await import('./preview.store');
             const logs = usePreviewStore.getState().logs.slice(-60);
             result = logs.length === 0
@@ -2396,6 +2479,14 @@ interface ChatStore {
   createConversation: (providerId: string, modelId: string) => Promise<string>;
   setActiveConversation: (id: string) => Promise<void>;
   setConversationFolder: (rootPath: string | null) => Promise<void>;
+  /**
+   * Click a folder badge in the sidebar: detach that folder from the workspace
+   * (blank project when it was the last one) and land back on the home
+   * default. Nothing on disk is touched and the folder's conversations keep
+   * their binding — reopening any of them brings the folder back. Later chats
+   * start folder-less by inheriting the blank workspace.
+   */
+  closeFolderGroup: (folderKey: string) => Promise<void>;
   deleteConversation: (id: string) => Promise<void>;
   renameConversation: (id: string, title: string) => Promise<void>;
   sendMessage: (content: string, providerId: string, modelId: string) => Promise<void>;
@@ -2525,14 +2616,16 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             // moved are skipped rather than failing the whole restore.
             for (const extra of conv.extraRoots || []) await ws.addRoot(extra);
           } else {
-            // Persisted folder is gone. Keep the current workspace instead of
-            // wiping it: other conversations may still be using it.
+            // Persisted folder is gone → fall back to the blank default rather
+            // than showing a folder this conversation doesn't belong to.
+            ws.resetWorkspace();
           }
         }
       } else {
-        // Legacy conversation with no folder bound (created before multi-chat
-        // per folder). Keep the current folder so a new chat under an open
-        // folder doesn't lose it — the user can close it explicitly.
+        // No folder bound to this conversation → blank project (the default).
+        // A new chat adopts the open folder at creation, so null here means
+        // the user closed it or never opened one.
+        ws.resetWorkspace();
       }
     }
   },
@@ -2552,8 +2645,21 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }));
   },
 
-  deleteConversation: async (id) => {
-    const deletingActive = get().activeConversationId === id;
+  closeFolderGroup: async (folderKey) => {
+    // The "no folder" group has nothing to close.
+    if (!folderKey) return;
+    conversationLoadRequest++;
+    // Detach the folder from the workspace (blank project if it was the last
+    // one). Memory-only: files on disk and conversation bindings are untouched,
+    // so reopening any of this folder's chats brings it straight back.
+    useWorkspaceStore.getState().closeRoot(folderKey);
+    // Back to the home default: no active chat, empty transcript. The next
+    // chat inherits the (now blank) workspace, so it starts folder-less too.
+    useTodosStore.getState().clearTodos();
+    set({ activeConversationId: null, messages: [] });
+  },
+
+  deleteConversation: async (id) => {    const deletingActive = get().activeConversationId === id;
     const deletingRunning = !!get().streamingRuns[id];
     if (deletingActive) conversationLoadRequest++;
     if (deletingRunning) get().stopGeneration(id);

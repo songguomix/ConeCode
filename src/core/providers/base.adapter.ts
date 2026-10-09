@@ -1,5 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { ProviderConfig, ProviderAdapter, SendMessageParams, ChatMessage, StreamChunk, AIModel } from '../../types';
+import { detectReasoningEfforts } from '../model/reasoningEfforts';
 
 // Known reasoning/thinking-capable model families. Provider /models endpoints
 // almost never advertise a reasoning flag, so without these patterns every
@@ -294,6 +295,9 @@ export abstract class BaseAdapter implements ProviderAdapter {
     const supportsReasoning = capabilities.supportsReasoning ?? this.detectReasoningCapability(modelId, raw);
     const detectedContextWindow = this.detectContextWindow(raw);
     const detectedMaxOutput = this.detectMaxOutput(raw);
+    // Levels the model declares in its metadata; undefined (most /models
+    // endpoints say nothing) leaves the UI showing the full ladder.
+    const reasoningEfforts = capabilities.reasoningEfforts ?? detectReasoningEfforts(raw);
 
     return {
       id: modelId,
@@ -306,6 +310,7 @@ export abstract class BaseAdapter implements ProviderAdapter {
       supportsAudioOutput: capabilities.supportsAudioOutput ?? this.detectAudioOutput(modelId, raw),
       supportsFunctionCalling: capabilities.supportsFunctionCalling ?? this.detectFunctionCalling(modelId, raw),
       supportsReasoning,
+      ...(reasoningEfforts?.length ? { reasoningEfforts } : {}),
       contextWindow: capabilities.contextWindow ?? detectedContextWindow ?? 128000,
       maxOutputTokens: capabilities.maxOutputTokens ?? detectedMaxOutput ?? (supportsReasoning ? 128000 : 8192),
       enabled: true,

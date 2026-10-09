@@ -229,17 +229,18 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
   {
     name: 'page_navigate',
     description:
-      'Open a page in the built-in browser. With no url, starts the project\'s dev server and opens it — this is how you check your own work on a web project. ' +
+      'Open a page in the built-in browser. Any https URL works with no project open (driven headless: snapshot/click/fill keep working on it). ' +
+      'With no url, starts the project\'s dev server and opens it — this is how you check your own work on a web project. ' +
       'Use "reload" after editing files, or "back" to go back.',
     parameters: {
       type: 'object',
       properties: {
-        url: str('Address to open. Omit to start and open the project\'s dev server.'),
+        url: str('https address to open, or "#N" for the Nth hit of the latest web_search. Omit to start and open the project\'s dev server.'),
         history: { type: 'string', description: 'Reload the current page or go back instead of opening a url', enum: ['reload', 'back'] },
       },
     },
     mutating: true,
-    promptExample: '{"action": "page_navigate", "url": "http://localhost:5173"}',
+    promptExample: '{"action": "page_navigate", "url": "https://example.com/docs"}',
   },
   {
     name: 'page_snapshot',
@@ -402,17 +403,17 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
   },
   {
     name: 'web_fetch',
-    description: 'Fetch a URL and return its readable text content.',
+    description: 'Fetch an https URL and return its readable text. Static pages come from a fast fetch; JavaScript-heavy pages are automatically re-rendered in the built-in browser. Plain http is upgraded to https. Pass "#N" to open the Nth hit of the latest web_search instead of a URL.',
     parameters: {
       type: 'object',
-      properties: { url: str('The URL to fetch') },
+      properties: { url: str('The https URL to fetch, or "#N" for the Nth hit of the latest web_search') },
       required: ['url'],
     },
     promptExample: '{"action": "web_fetch", "url": "https://..."}',
   },
   {
     name: 'web_search',
-    description: 'Search the web and return the top results with links.',
+    description: 'Search the web (https) and return numbered hits: title, domain, one-line snippet. A fast fetch answers most asks; pages that resist it are rendered in the built-in browser automatically. Open a hit later with web_fetch/page_navigate using its "#N" — never re-paste a URL. Prefer this over navigating to a search engine by hand.',
     parameters: {
       type: 'object',
       properties: { query: str('Search terms') },

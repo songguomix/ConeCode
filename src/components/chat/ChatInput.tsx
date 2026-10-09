@@ -1,7 +1,9 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
-import { FiSquare, FiPaperclip, FiX, FiFile, FiArrowUp, FiPlus, FiTarget, FiList, FiLayers, FiZap } from 'react-icons/fi';
+import { FiSquare, FiPaperclip, FiX, FiFile, FiArrowUp, FiPlus, FiTarget, FiList, FiLayers, FiZap, FiTool, FiChevronRight, FiCamera } from 'react-icons/fi';
 import { AGENT_MODES, type AgentMode } from '../../core/agents/modePrompts';
-import { useMemoryStore, useChatStore, useModelStore, useLanguageStore, useWorkspaceStore, useSettingsStore, useUIStore, useGoalStore } from '../../stores';
+import { useMemoryStore, useChatStore, useModelStore, useLanguageStore, useWorkspaceStore, useSettingsStore, useUIStore, useGoalStore, useSkillsStore } from '../../stores';
+import { useScreenshotStore } from '../../stores/screenshot.store';
+import { prettyShortcut } from '../../core/screenshot/shortcut';
 import { useInstallGateStore, isHolding } from '../../stores/installGate.store';
 import {
   BUILTIN_COMMANDS, parseSlashInput, matchCommands, findCommand, expandTemplate,
@@ -33,8 +35,15 @@ export default function ChatInput() {
   const installHolding = useInstallGateStore((s) => isHolding(s.jobs));
   const togglePlanMode = useChatStore((s) => s.togglePlanMode);
   const [plusOpen, setPlusOpen] = useState(false);
+  /** Skill picker popup inside the + menu (one row → full list). */
+  const [skillPickerOpen, setSkillPickerOpen] = useState(false);
   const agentMode = useChatStore((s) => s.agentMode);
   const setAgentMode = useChatStore((s) => s.setAgentMode);
+  /** Skill armed from the + menu — its instructions lead the next message. */
+  const [activeSkillId, setActiveSkillId] = useState<string | null>(null);
+  const effectiveSkills = useSkillsStore((s) => s.effective);
+  const skillBody = useSkillsStore((s) => s.body);
+  const activeSkill = activeSkillId ? effectiveSkills.find((s) => s.id === activeSkillId) ?? null : null;
   const selectedModel = useModelStore((s) => s.getSelectedModel());
   const { t } = useLanguageStore();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -51,6 +60,9 @@ export default function ChatInput() {
   const toggleWorktrees = useUIStore((s) => s.toggleWorktrees);
   const inputContent = useUIStore((s) => s.inputContent);
   const setInputContent = useUIStore((s) => s.setInputContent);
+  const startScreenshot = useScreenshotStore((s) => s.start);
+  const screenshotStarting = useScreenshotStore((s) => s.starting);
+  const screenshotShortcut = useScreenshotStore((s) => s.shortcut);
 
   const [slashIndex, setSlashIndex] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState(false);
@@ -79,7 +91,9 @@ export default function ChatInput() {
 
   useEffect(() => {
     if (inputContent) {
-      setInput(inputContent);
+      // Append, never overwrite: a pin or picked element lands after whatever
+      // the user already typed.
+      setInput((prev) => (prev ? `${prev}\n${inputContent}` : inputContent));
       setInputContent('');
       textareaRef.current?.focus();
     }
@@ -276,10 +290,20 @@ export default function ChatInput() {
     }
 
     if (!selectedModel) return;
+    // An armed skill leads the message with its full instructions (same shape
+    // as the use_skill tool result, so the agent treats it identically), then
+    // disarms — one skill, one message.
+    const skill = activeSkill;
+    let full = text;
+    if (skill) {
+      const body = skillBody(skill.id);
+      if (body) full = `Skill "${skill.id}" — follow these instructions for this task:\n\n${body}\n\n${text}`;
+      setActiveSkillId(null);
+    }
     setInput('');
     setMentionQuery(null);
     resetHeight();
-    await sendMessage(text, selectedModel.providerId, selectedModel.id);
+    await sendMessage(full, selectedModel.providerId, selectedModel.id);
   };
 
   const isImeConfirm = (e: React.KeyboardEvent) => {
@@ -289,6 +313,16 @@ export default function ChatInput() {
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Escape' && skillPickerOpen) {
+      e.preventDefault();
+      setSkillPickerOpen(false);
+      return;
+    }
+    if (e.key === 'Escape' && plusOpen) {
+      e.preventDefault();
+      setPlusOpen(false);
+      return;
+    }
     if (showSlash) {
       if (e.key === 'ArrowDown') { e.preventDefault(); setSlashIndex((i) => (i + 1) % slashMatches.length); return; }
       if (e.key === 'ArrowUp') { e.preventDefault(); setSlashIndex((i) => (i - 1 + slashMatches.length) % slashMatches.length); return; }
@@ -365,9 +399,19 @@ export default function ChatInput() {
   return (
     <div className="bg-[var(--bg-0)]">
       {/* Context files indicator */}
-      {(autoIncludeFileContext && selectedFile) || contextFiles.length > 0 ? (
+      {(autoIncludeFileContext && selectedFile) || contextFiles.length > 0 || activeSkill ? (
         <div className="max-w-[900px] mx-auto w-full px-4 pt-2 pb-1">
           <div className="flex flex-wrap gap-1.5">
+            {activeSkill && (
+              <span title={activeSkill.description || activeSkill.name}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[var(--accent-soft)] text-[var(--accent)] text-xs font-medium">
+                <FiTool size={10} />
+                {activeSkill.name}
+                <button onClick={() => setActiveSkillId(null)} className="ml-0.5 hover:opacity-70 transition-opacity">
+                  <FiX size={10} />
+                </button>
+              </span>
+            )}
             {autoIncludeFileContext && selectedFile && (
               <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[var(--accent-soft)] text-[var(--accent)] text-xs font-medium">
                 <FiPaperclip size={10} />
@@ -459,10 +503,10 @@ export default function ChatInput() {
             {/* + menu: upload + agent modes (no standalone plan/attach clutter). */}
             <div className="relative shrink-0 mb-0.5">
               <button
-                onClick={() => setPlusOpen((v) => !v)}
+                onClick={() => { setPlusOpen((v) => !v); setSkillPickerOpen(false); }}
                 title={t('modeMenu')}
                 className={`w-9 h-9 rounded-xl flex items-center justify-center transition-colors ${
-                  plusOpen || agentMode !== 'standard'
+                  plusOpen || agentMode !== 'standard' || activeSkill
                     ? 'text-[var(--accent)] bg-[var(--accent-soft)]'
                     : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-3)]'
                 }`}
@@ -482,6 +526,19 @@ export default function ChatInput() {
                     >
                       <FiPaperclip size={14} />
                       <span className="flex-1 text-left">{t('attachFiles')}</span>
+                    </button>
+                    <button
+                      onClick={() => { setPlusOpen(false); setSkillPickerOpen(false); void startScreenshot(); }}
+                      disabled={screenshotStarting}
+                      className="w-full flex items-center gap-2.5 px-3 py-2.5 text-[13px] text-[var(--text-secondary)] hover:bg-[var(--bg-3)] transition-colors disabled:opacity-50"
+                    >
+                      <FiCamera size={14} />
+                      <span className="flex-1 text-left">{t('screenshot')}</span>
+                      {screenshotShortcut && (
+                        <kbd className="text-[10px] px-1.5 py-0.5 rounded-md bg-[var(--bg-3)] text-[var(--text-muted)] font-sans shrink-0">
+                          {prettyShortcut(screenshotShortcut)}
+                        </kbd>
+                      )}
                     </button>
                     <div className="my-1 border-t border-[var(--border)]" />
                     <div className="px-3 pb-1 text-[10px] uppercase tracking-wider text-[var(--text-muted)]">
@@ -508,6 +565,59 @@ export default function ChatInput() {
                         {agentMode === item.mode && <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)]" />}
                       </button>
                     ))}
+                    <div className="my-1 border-t border-[var(--border)]" />
+                    {/* One row → popup with the full skill list. */}
+                    <button
+                      onClick={() => setSkillPickerOpen((v) => !v)}
+                      className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-[13px] transition-colors ${
+                        skillPickerOpen || activeSkill
+                          ? 'text-[var(--accent)] bg-[var(--accent-soft)]'
+                          : 'text-[var(--text-secondary)] hover:bg-[var(--bg-3)]'
+                      }`}
+                    >
+                      <FiTool size={14} />
+                      <span className="flex-1 text-left truncate">
+                        {activeSkill ? activeSkill.name : t('selectSkill')}
+                      </span>
+                      <FiChevronRight size={13} className="shrink-0 text-[var(--text-muted)]" />
+                    </button>
+                    {skillPickerOpen && (
+                      <div
+                        className="absolute left-full bottom-0 ml-2 w-64 rounded-2xl border border-[var(--border)] bg-[var(--bg-2)] shadow-xl z-50 py-1.5 anim-menu"
+                        style={{ ['--menu-origin' as any]: 'bottom left', ['--menu-shift' as any]: '6px' }}
+                      >
+                        <div className="px-3 pb-1 text-[10px] uppercase tracking-wider text-[var(--text-muted)]">
+                          {t('skills')}
+                        </div>
+                        {effectiveSkills.length === 0 ? (
+                          <div className="px-3 py-1.5 text-[12px] text-[var(--text-muted)] leading-snug">
+                            {t('noSkillsYet')}
+                          </div>
+                        ) : (
+                          <div className="max-h-48 overflow-y-auto">
+                            {effectiveSkills.map((skill) => (
+                              <button
+                                key={`${skill.scope}:${skill.id}`}
+                                onClick={() => { setActiveSkillId(skill.id); setSkillPickerOpen(false); setPlusOpen(false); textareaRef.current?.focus(); }}
+                                title={skill.description || skill.name}
+                                className={`w-full flex items-center gap-2.5 px-3 py-2 text-[13px] transition-colors ${
+                                  activeSkillId === skill.id
+                                    ? 'text-[var(--accent)] bg-[var(--accent-soft)]'
+                                    : 'text-[var(--text-secondary)] hover:bg-[var(--bg-3)]'
+                                }`}
+                              >
+                                <FiTool size={13} className="shrink-0" />
+                                <span className="flex-1 text-left truncate">{skill.name}</span>
+                                <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-[var(--bg-3)] text-[var(--text-muted)] shrink-0">
+                                  {skill.scope === 'project' ? t('skillProjectShort') : t('skillGlobalShort')}
+                                </span>
+                                {activeSkillId === skill.id && <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)] shrink-0" />}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </>
               )}

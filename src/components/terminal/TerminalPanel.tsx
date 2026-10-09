@@ -88,9 +88,9 @@ export default function TerminalPanel() {
 
   return (
     <div className="flex flex-col h-full bg-[var(--bg-0)] border-t border-[var(--border)]">
-      {/* Tab bar */}
-      <div className="flex items-center px-2 py-1.5 shrink-0 gap-1.5">
-        <div className="relative">
+      {/* Tab bar — the bar drags the window; tabs and buttons opt out. */}
+      <div className="flex items-center px-2 py-1.5 shrink-0 gap-1.5" style={{ WebkitAppRegion: 'drag' } as any}>
+        <div className="relative" style={{ WebkitAppRegion: 'no-drag' } as any}>
           {renaming ? (
             <input
               ref={renameRef}
@@ -160,6 +160,7 @@ export default function TerminalPanel() {
         <div className="w-px h-4 bg-[var(--border)]" />
         <button
           onClick={addTab}
+          style={{ WebkitAppRegion: 'no-drag' } as any}
           className="p-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-3)] transition-colors"
           title={t('newTerminal')}
         >
@@ -169,6 +170,7 @@ export default function TerminalPanel() {
         <div className="flex-1" />
         <button
           onClick={toggleTerminal}
+          style={{ WebkitAppRegion: 'no-drag' } as any}
           className="p-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-3)] transition-colors"
           title={t('close')}
         >

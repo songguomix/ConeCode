@@ -102,9 +102,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
     remove: (cwd: string, worktreePath: string) => ipcRenderer.invoke('worktree:remove', cwd, worktreePath),
   },
   net: {
-    fetch: (url: string) => ipcRenderer.invoke('net:fetch', url),
-    search: (query: string) => ipcRenderer.invoke('net:search', query),
+    fetch: (url: string, scope?: string) => ipcRenderer.invoke('net:fetch', url, scope),
+    search: (query: string, scope?: string) => ipcRenderer.invoke('net:search', query, scope),
     download: (url: string, dest: string) => ipcRenderer.invoke('net:download', url, dest),
+  },
+  browser: {
+    navigate: (url: string, scope?: string) => ipcRenderer.invoke('browser:navigate', url, scope),
+    snapshot: () => ipcRenderer.invoke('browser:snapshot'),
+    click: (ref: string) => ipcRenderer.invoke('browser:click', ref),
+    fill: (ref: string, text: string, submit: boolean) => ipcRenderer.invoke('browser:fill', ref, text, submit),
+    eval: (expression: string) => ipcRenderer.invoke('browser:eval', expression),
+    history: (action: 'reload' | 'back') => ipcRenderer.invoke('browser:history', action),
+    status: () => ipcRenderer.invoke('browser:status'),
+    close: () => ipcRenderer.invoke('browser:close'),
   },
   skill: {
     list: (rootPath?: string) => ipcRenderer.invoke('skill:list', rootPath),
@@ -177,6 +187,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
     screenshot: () => ipcRenderer.invoke('computer:screenshot'),
     act: (req: any) => ipcRenderer.invoke('computer:act', req),
     panic: () => ipcRenderer.invoke('computer:panic'),
+  },
+  screenshot: {
+    capture: () => ipcRenderer.invoke('screenshot:capture'),
+    save: (dataUrl: string) => ipcRenderer.invoke('screenshot:save', dataUrl),
+    setShortcut: (accelerator: string | null) => ipcRenderer.invoke('screenshot:set-shortcut', accelerator),
+    openSettings: () => ipcRenderer.invoke('screenshot:open-settings'),
+    relaunch: () => ipcRenderer.invoke('screenshot:relaunch'),
+    onTrigger: (callback: () => void) => {
+      const listener = () => callback();
+      ipcRenderer.on('screenshot:trigger', listener);
+      return () => ipcRenderer.removeListener('screenshot:trigger', listener);
+    },
   },
   terminal: {
     spawn: (id: string, cwd?: string) => ipcRenderer.invoke('terminal:spawn', id, cwd),

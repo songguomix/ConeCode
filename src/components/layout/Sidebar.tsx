@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import { FiPlus, FiSettings, FiTrash2, FiGlobe, FiEdit3, FiMenu, FiTerminal, FiFileText, FiSmartphone, FiMonitor, FiCpu, FiGrid, FiShield, FiGitBranch, FiLoader, FiFolder, FiMessageSquare } from 'react-icons/fi';
-import { useChatStore, useUIStore, useLanguageStore, usePreviewStore, useComputerStore, useModelStore, useCodeChangesStore, useWorkspaceStore } from '../../stores';
+import { FiPlus, FiSettings, FiTrash2, FiGlobe, FiEdit3, FiMenu, FiTerminal, FiFileText, FiSmartphone, FiMonitor, FiCpu, FiGrid, FiShield, FiGitBranch, FiLoader, FiFolder, FiMessageSquare, FiChevronDown, FiChevronRight } from 'react-icons/fi';
+import { useChatStore, useUIStore, useLanguageStore, usePreviewStore, useComputerStore, useModelStore, useCodeChangesStore, useWorkspaceStore, useAiHighlightsStore } from '../../stores';
 import { groupConversationsByFolder } from '../../core/workspace/conversations';
 import { mostUrgentDot, type DotKind } from './panelDot';
 import FileTree from './FileTree';
@@ -52,6 +52,7 @@ export default function Sidebar() {
     [runningKey],
   );
   const setActiveConversation = useChatStore((s) => s.setActiveConversation);
+  const closeFolderGroup = useChatStore((s) => s.closeFolderGroup);
   const deleteConversation = useChatStore((s) => s.deleteConversation);
   const renameConversation = useChatStore((s) => s.renameConversation);
   const createConversation = useChatStore((s) => s.createConversation);
@@ -119,6 +120,20 @@ export default function Sidebar() {
       .map((change) => change.filePath.split('/').pop() || change.filePath),
   )).slice(0, 2);
 
+  // Green AI marks currently live in the editor, grouped per file. A chat row
+  // gets the dot when any file it touched still carries AI-written lines.
+  const aiLines = useAiHighlightsStore((s) => s.lines);
+  const aiCountFor = (conversationId: string) => {
+    const touched = new Set(
+      changes
+        .filter((c) => c.conversationId === conversationId && (c.kind === 'edit' || c.kind === 'create'))
+        .map((c) => c.filePath),
+    );
+    let n = 0;
+    for (const f of touched) n += aiLines[f]?.length ?? 0;
+    return n;
+  };
+
   const handleRename = (id: string) => {
     if (editTitle.trim()) {
       renameConversation(id, editTitle.trim());
@@ -127,19 +142,20 @@ export default function Sidebar() {
   };
 
   return (
-    <div className="w-[260px] flex flex-col bg-[var(--bg-1)]/70 backdrop-blur-2xl border-r border-[var(--glass-border)] min-h-0">
+    <div className="w-full flex flex-col bg-[var(--bg-1)]/70 backdrop-blur-2xl border-r border-[var(--glass-border)] min-h-0">
       {/* Drag region — tall enough to clear macOS traffic lights with a
           comfortable gap below them before the toolbar starts. */}
       <div className="h-[58px] shrink-0" style={{ WebkitAppRegion: 'drag' } as any} />
-      {/* Toolbar — two anchors and one menu, with space to breathe. */}
-      <div className="flex items-center gap-1 px-3 pb-2 shrink-0">
+      {/* Toolbar — the row itself drags the window; buttons opt out. */}
+      <div className="flex items-center gap-1 px-3 pb-2 shrink-0" style={{ WebkitAppRegion: 'drag' } as any}>
         <button onClick={toggleSidebar}
+          style={{ WebkitAppRegion: 'no-drag' } as any}
           className="w-8 h-8 rounded-xl flex items-center justify-center text-[var(--text-muted)] hover:bg-[var(--bg-3)] transition-colors">
           <FiMenu size={16} />
         </button>
         <div className="flex-1" />
 
-        <div className="relative">
+        <div className="relative" style={{ WebkitAppRegion: 'no-drag' } as any}>
           <button onClick={() => setPanelsOpen(!panelsOpen)}
             className={`relative w-8 h-8 rounded-xl flex items-center justify-center transition-colors ${
               panelsOpen || anyPanelOpen
@@ -158,7 +174,7 @@ export default function Sidebar() {
               <div role="menu"
                 className="absolute top-full right-0 mt-1 w-44 bg-[var(--bg-2)] border border-[var(--border)] rounded-xl shadow-xl z-50 overflow-hidden py-1 anim-menu">
                 {primaryPanels.map((p) => (
-                  <button key={p.key} role="menuitemcheckbox" aria-checked={p.open}
+                  <button key={p.key} role="menuitem" aria-pressed={p.open}
                     onClick={() => p.toggle()}
                     className={`w-full flex items-center gap-2.5 px-3 py-2 text-[13px] transition-colors ${
                       p.open ? 'bg-[var(--accent-soft)] text-[var(--accent)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-3)]'
@@ -166,18 +182,6 @@ export default function Sidebar() {
                     {p.icon}
                     <span className="flex-1 text-left truncate">{p.label}</span>
                     {p.dot && <StatusDot kind={p.dot} />}
-                    <span
-                      aria-hidden
-                      className={`relative w-8 h-[18px] rounded-full transition-colors shrink-0 ${
-                        p.open ? 'bg-[var(--accent)]' : 'bg-[var(--bg-4)]'
-                      }`}
-                    >
-                      <span
-                        className={`absolute top-[2px] h-[14px] w-[14px] rounded-full bg-white shadow transition-transform ${
-                          p.open ? 'translate-x-[16px]' : 'translate-x-[2px]'
-                        }`}
-                      />
-                    </span>
                   </button>
                 ))}
                 <div className="my-1 border-t border-[var(--border)]" />
@@ -185,7 +189,7 @@ export default function Sidebar() {
                   {t('panelsMore')}
                 </div>
                 {extraPanels.map((p) => (
-                  <button key={p.key} role="menuitemcheckbox" aria-checked={p.open}
+                  <button key={p.key} role="menuitem" aria-pressed={p.open}
                     onClick={() => p.toggle()}
                     className={`w-full flex items-center gap-2.5 px-3 py-2 text-[13px] transition-colors ${
                       p.open ? 'bg-[var(--accent-soft)] text-[var(--accent)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-3)]'
@@ -193,18 +197,6 @@ export default function Sidebar() {
                     {p.icon}
                     <span className="flex-1 text-left truncate">{p.label}</span>
                     {p.dot && <StatusDot kind={p.dot} />}
-                    <span
-                      aria-hidden
-                      className={`relative w-8 h-[18px] rounded-full transition-colors shrink-0 ${
-                        p.open ? 'bg-[var(--accent)]' : 'bg-[var(--bg-4)]'
-                      }`}
-                    >
-                      <span
-                        className={`absolute top-[2px] h-[14px] w-[14px] rounded-full bg-white shadow transition-transform ${
-                          p.open ? 'translate-x-[16px]' : 'translate-x-[2px]'
-                        }`}
-                      />
-                    </span>
                   </button>
                 ))}
               </div>
@@ -213,6 +205,7 @@ export default function Sidebar() {
         </div>
 
         <button onClick={() => createConversation(selectedModel?.providerId || '', selectedModel?.id || '')}
+          style={{ WebkitAppRegion: 'no-drag' } as any}
           className="w-8 h-8 rounded-xl flex items-center justify-center text-[var(--text-muted)] hover:bg-[var(--bg-3)] hover:text-[var(--text-primary)] transition-colors"
           title={t('newChat')}>
           <FiPlus size={16} />
@@ -228,17 +221,31 @@ export default function Sidebar() {
         <div className="space-y-2.5">
           {groups.map(([folderKey, items]) => {
             const isCurrent = !!folderKey && folderKey === rootPath;
+            const collapsed = collapsedGroups.has(folderKey || '__nofolder__');
             return (
               <div key={folderKey || '__nofolder__'} className="min-w-0">
-                {/* Folder badge — a floating card above its chats, not a chat row. */}
+                {/* Folder badge — a floating card above its chats, not a chat row.
+                    Single click closes the folder (→ home default); the chevron
+                    only collapses the group. */}
                 <div
-                  className={`flex items-center gap-1.5 px-2.5 py-2 rounded-xl min-w-0 border backdrop-blur-md transition-all shadow-[0_2px_10px_rgba(0,0,0,0.06)] hover:shadow-[0_4px_14px_rgba(0,0,0,0.10)] hover:-translate-y-px ${
+                  onClick={folderKey ? () => void closeFolderGroup(folderKey) : undefined}
+                  title={folderKey ? t('closeFolder') : undefined}
+                  className={`flex items-center gap-1 px-2.5 py-2 rounded-xl min-w-0 border backdrop-blur-md transition-all shadow-[0_2px_10px_rgba(0,0,0,0.06)] hover:shadow-[0_4px_14px_rgba(0,0,0,0.10)] ${
+                    folderKey ? 'cursor-pointer' : ''
+                  } ${
                     isCurrent
                       ? 'bg-[var(--accent-soft)] border-[var(--accent)]/35 text-[var(--accent)]'
                       : 'bg-[var(--bg-2)]/85 border-[var(--border)] text-[var(--text-secondary)]'
                   }`}
-                  title={folderKey || t('noFolderGroup')}
                 >
+                  <button
+                    onClick={(e) => { e.stopPropagation(); toggleGroup(folderKey || '__nofolder__'); }}
+                    aria-expanded={!collapsed}
+                    title={t('collapseAll')}
+                    className="p-0.5 -ml-1 rounded hover:bg-[var(--bg-3)] text-[var(--text-muted)] shrink-0"
+                  >
+                    {collapsed ? <FiChevronRight size={12} /> : <FiChevronDown size={12} />}
+                  </button>
                   <FiFolder size={13} className={`shrink-0 ${folderKey ? 'text-amber-500' : 'text-[var(--text-muted)]'}`} />
                   <span className="flex-1 truncate text-[11px] font-semibold uppercase tracking-wide min-w-0">
                     {folderKey ? folderKey.split('/').pop() || folderKey : t('noFolderGroup')}
@@ -250,6 +257,7 @@ export default function Sidebar() {
                   </span>
                 </div>
                 {/* Chats hang under the floating folder badge, indented with a guide line. */}
+                {!collapsed && (
                 <div className="ml-3 pl-2.5 border-l border-[var(--border)] mt-1.5 space-y-0.5">
                   {items.map((conv) => (
                     <div key={conv.id}
@@ -283,6 +291,9 @@ export default function Sidebar() {
                                   : 'bg-[var(--border)]'
                             }`} />
                             <span className="truncate">{conv.title}</span>
+                            {aiCountFor(conv.id) > 0 && (
+                              <span className="w-1.5 h-1.5 rounded-full bg-[var(--success)] shrink-0" title={t('aiChanges')} />
+                            )}
                             {runningConversationIds.includes(conv.id) && (
                               <FiLoader size={11} className="shrink-0 text-[var(--accent)] animate-spin" />
                             )}
@@ -307,6 +318,7 @@ export default function Sidebar() {
                     </div>
                   ))}
                 </div>
+                )}
               </div>
             );
           })}

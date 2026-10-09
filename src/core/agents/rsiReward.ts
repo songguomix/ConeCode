@@ -110,3 +110,80 @@ export function isConverged(rewardHistory: number[], window = 3, epsilon = 1e-3)
   const tailBest = Math.max(...tail);
   return tailBest <= priorBest + epsilon;
 }
+
+// ---------------------------------------------------------------------------
+// GEPA-style Pareto retention + calibrated judging (additive; the greedy
+// single-objective path above is unchanged).
+//
+// A single composite reward averages complementary strengths away: a
+// candidate that is uniquely best on one frozen metric should survive even
+// when its composite trails. The Pareto front keeps exactly those.
+// ---------------------------------------------------------------------------
+
+export interface ParetoCandidate {
+  id: string;
+  /** Per-metric signed deltas (higher = better on every axis). */
+  metrics: Record<string, number>;
+}
+
+/** True when `a` is at least as good on every metric and better on one. */
+export function dominates(a: ParetoCandidate, b: ParetoCandidate): boolean {
+  const keys = new Set([...Object.keys(a.metrics), ...Object.keys(b.metrics)]);
+  if (keys.size === 0) return false;
+  let better = false;
+  for (const k of keys) {
+    const av = a.metrics[k] ?? -Infinity;
+    const bv = b.metrics[k] ?? -Infinity;
+    if (av < bv) return false;
+    if (av > bv) better = true;
+  }
+  return better;
+}
+
+/** Non-dominated candidates — each is the best at something. Stable order. */
+export function paretoFront(cands: ParetoCandidate[]): ParetoCandidate[] {
+  return cands.filter((c) => !cands.some((o) => o !== c && dominates(o, c)));
+}
+
+/** Ids that lead outright on each metric (GEPA best-per-instance anchors). */
+export function bestOnEachMetric(cands: ParetoCandidate[]): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  const keys = new Set<string>();
+  for (const c of cands) for (const k of Object.keys(c.metrics)) keys.add(k);
+  for (const k of keys) {
+    let best = -Infinity;
+    for (const c of cands) best = Math.max(best, c.metrics[k] ?? -Infinity);
+    out[k] = cands.filter((c) => (c.metrics[k] ?? -Infinity) === best).map((c) => c.id);
+  }
+  return out;
+}
+
+/**
+ * Calibrated judging across 2+ panels (Self-Rewarding insight: judges drift).
+ * Discipline veto is preserved and widened: ANY panel's veto discards the
+ * candidate. Otherwise each axis takes the trimmed mean (drop min/max with
+ * ≥3 panels), so one loud judge cannot buy a win.
+ */
+export function combineJudgePanels(panels: JudgeScores[]): JudgeScores {
+  if (!panels.length) return { alignment: 0, simplicity: 0, discipline: 0 };
+  if (panels.some((p) => clamp01(p.discipline) <= 0)) {
+    const rest = combineWithoutDiscipline(panels);
+    return { ...rest, discipline: 0 };
+  }
+  return combineWithoutDiscipline(panels, true);
+}
+
+function trimmedMean(values: number[]): number {
+  const xs = [...values].sort((a, b) => a - b);
+  const core = xs.length >= 3 ? xs.slice(1, -1) : xs;
+  return core.reduce((a, b) => a + b, 0) / Math.max(1, core.length);
+}
+
+function combineWithoutDiscipline(panels: JudgeScores[], includeDiscipline = false): JudgeScores {
+  const axis = (f: (p: JudgeScores) => number) => trimmedMean(panels.map((p) => clamp01(f(p))));
+  return {
+    alignment: axis((p) => p.alignment),
+    simplicity: axis((p) => p.simplicity),
+    discipline: includeDiscipline ? axis((p) => p.discipline) : 1,
+  };
+}

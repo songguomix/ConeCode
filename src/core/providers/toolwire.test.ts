@@ -55,6 +55,16 @@ describe('OpenAI wire format', () => {
     expect(nested.maxOutputTokens).toBe(32_000);
   });
 
+  it('surfaces reasoning effort levels declared by model metadata', () => {
+    const declared = openai.model({
+      id: 'efforts',
+      supported_parameters: ['reasoning_effort:low', 'reasoning_effort:high'],
+    });
+    expect(declared.reasoningEfforts).toEqual(['low', 'high']);
+    // No metadata → the field stays off so the UI shows the full ladder.
+    expect(openai.model({ id: 'quiet' }).reasoningEfforts).toBeUndefined();
+  });
+
   it('encodes assistant tool_calls and tool results', () => {
     const out = openai.clean(exchange);
     const assistant = out[2];

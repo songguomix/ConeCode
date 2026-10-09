@@ -35,12 +35,26 @@ const DEVICES: { id: DevicePreset; icon: typeof FiMonitor; labelKey: string }[] 
   { id: 'mobile', icon: FiSmartphone, labelKey: 'previewMobile' },
 ];
 
-/** Turn what the user typed into something loadable ("3000" → localhost:3000). */
+/** Turn what the user typed into something loadable ("3000" → localhost:3000). External http is upgraded to https (https-only policy); local dev servers keep http. */
 function normalizeAddress(raw: string): string | null {
   const value = raw.trim();
   if (!value) return null;
   if (/^\d{2,5}$/.test(value)) return `http://localhost:${value}`;
-  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return `http://${value}`;
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return `https://${value}`;
+  if (/^http:\/\//i.test(value)) {
+    try {
+      const parsed = new URL(value);
+      const host = parsed.hostname.toLowerCase();
+      const local = host === 'localhost' || host === '::1' || host === '[::1]'
+        || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) || host.endsWith('.local');
+      if (!local) {
+        parsed.protocol = 'https:';
+        return parsed.toString();
+      }
+    } catch {
+      return value;
+    }
+  }
   return value;
 }
 
@@ -503,10 +517,7 @@ export default function PreviewPanel() {
       {/* Pages — every tab stays mounted; only the active one is visible */}
       <div
         ref={viewportRef}
-        onClick={onAnnotateClick}
-        className={`flex-1 min-h-0 relative bg-[var(--bg-1)] border-t border-[var(--border)] ${
-          annotateOn ? 'cursor-crosshair' : ''
-        }`}
+        className="flex-1 min-h-0 relative bg-[var(--bg-1)] border-t border-[var(--border)]"
       >
         {tabs.map((tab) => {
           const isActive = tab.id === activeTabId;
@@ -525,7 +536,7 @@ export default function PreviewPanel() {
                     height: frame.height,
                     transform: frame.scale < 1 ? `scale(${frame.scale})` : undefined,
                   }}
-                  className={`bg-white overflow-hidden shrink-0 ${
+                  className={`bg-white overflow-hidden shrink-0 relative ${
                     device === 'desktop' ? '' : 'rounded-[28px] border border-[var(--border)] shadow-2xl'
                   }`}
                 >
@@ -542,6 +553,35 @@ export default function PreviewPanel() {
                     partition="persist:conecode-preview"
                     style={{ width: '100%', height: '100%', display: 'inline-flex' }}
                   />
+                  {/* Annotate capture: the <webview> guest swallows pointer
+                      events, so clicks on the page never bubble to React. The
+                      overlay takes the click instead, in the frame's own
+                      coordinate space (correct even when scaled/letterboxed);
+                      pins render inside the same box so markers sit where the
+                      page actually is. */}
+                  {annotateOn && isActive && (
+                    <div className="absolute inset-0 z-10 cursor-crosshair" onClick={onAnnotateClick} />
+                  )}
+                  {isActive && pins.map((pin) => (
+                    <button
+                      key={pin.id}
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setChatInput(formatPinPrompt(pin));
+                      }}
+                      title={formatPinPrompt(pin)}
+                      className="absolute z-20 -translate-x-1/2 -translate-y-full anim-pop"
+                      style={{ left: `${pin.x * 100}%`, top: `${pin.y * 100}%` }}
+                    >
+                      <span className="flex flex-col items-center">
+                        <span className="w-6 h-6 rounded-full bg-[var(--accent)] text-white text-[10px] font-bold shadow-lg border-2 border-white flex items-center justify-center">
+                          {pin.label.replace('点', '')}
+                        </span>
+                        <span className="w-0 h-0 border-l-[5px] border-r-[5px] border-t-[7px] border-l-transparent border-r-transparent border-t-[var(--accent)]" />
+                      </span>
+                    </button>
+                  ))}
                 </div>
               ) : (
                 <NewTabPage
@@ -582,27 +622,8 @@ export default function PreviewPanel() {
           </div>
         )}
 
-        {/* Coordinate pins for precise follow-up edits. */}
-        {pins.map((pin) => (
-          <button
-            key={pin.id}
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              setChatInput(formatPinPrompt(pin));
-            }}
-            title={formatPinPrompt(pin)}
-            className="absolute z-20 -translate-x-1/2 -translate-y-full anim-pop"
-            style={{ left: `${pin.x * 100}%`, top: `${pin.y * 100}%` }}
-          >
-            <span className="flex flex-col items-center">
-              <span className="w-6 h-6 rounded-full bg-[var(--accent)] text-white text-[10px] font-bold shadow-lg border-2 border-white flex items-center justify-center">
-                {pin.label.replace('点', '')}
-              </span>
-              <span className="w-0 h-0 border-l-[5px] border-r-[5px] border-t-[7px] border-l-transparent border-r-transparent border-t-[var(--accent)]" />
-            </span>
-          </button>
-        ))}
+        {/* Coordinate pins for precise follow-up edits (markers now live
+            inside the active frame, next to the overlay above). */}
         {annotateOn && (
           <div className="absolute top-3 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-full bg-[var(--accent)] text-white shadow-lg text-[12px] pointer-events-none anim-menu">
             {t('previewAnnotateHint')}

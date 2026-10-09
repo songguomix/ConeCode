@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { useProviderStore, useModelStore, useChatStore, useSettingsStore, useMemoryStore, useSkillsStore, usePreviewStore, useWorkspaceStore, useCodeChangesStore, useLanguageStore } from './stores';
+import { useScreenshotStore } from './stores/screenshot.store';
 import AppShell from './components/layout/AppShell';
 import { initRemoteBridge } from './core/remote/bridge';
 
@@ -25,6 +26,7 @@ export default function App() {
   const bootstrapped = useRef(false);
   const previousStreaming = useRef(false);
   const knownApprovals = useRef<Set<string> | null>(null);
+  const initScreenshot = useScreenshotStore((s) => s.init);
 
   useEffect(() => {
     // React StrictMode intentionally re-runs mount effects in development. Do
@@ -72,6 +74,10 @@ export default function App() {
     // Follow the preview dev server even while its panel is closed, so the
     // sidebar's status dot and the log stay accurate.
     subscribePreview();
+    // Re-register the stored screenshot hotkey (main forgets on quit) and
+    // answer its trigger.
+    const stopScreenshot = initScreenshot();
+    return () => stopScreenshot();
   }, []);
 
   // Project skills follow the active workspace. Keep this at app level so the

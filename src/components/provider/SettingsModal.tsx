@@ -4,6 +4,7 @@ import { useUIStore, useProviderStore, useLanguageStore, useSettingsStore, useMo
 import type { ProviderConfig, ProviderType } from '../../types';
 import MemoryPanel from '../memory/MemoryPanel';
 import SkillsPanel from '../skills/SkillsPanel';
+import ShortcutCard from '../screenshot/ShortcutCard';
 
 const MCP_PLACEHOLDER = `{
   "mcpServers": {
@@ -310,6 +311,8 @@ export default function SettingsModal() {
                     </label>
                   </div>
                 </div>
+
+                <ShortcutCard t={t} />
               </>
             )}
 

@@ -1,5 +1,4 @@
 import { create } from 'zustand';
-import { useInstallGateStore } from './installGate.store';
 import type { AIModel } from '../types';
 
 // Models that the user manually flagged as reasoning-capable (the 🧠 toggle).
@@ -137,9 +136,9 @@ export const useModelStore = create<ModelStore>((set, get) => ({
   loading: false,
 
   fetchModels: async (providerId) => {
+    // Read-only list refresh — NOT an install, so it never raises the
+    // install pill or pauses the model (that gate is for real downloads).
     set({ loading: true });
-    const jobId = `models:${providerId}`;
-    useInstallGateStore.getState().begin(jobId, providerId || 'models', 'model');
     try {
       const models = await window.electronAPI.model.list(providerId);
       set((s) => {
@@ -150,18 +149,14 @@ export const useModelStore = create<ModelStore>((set, get) => ({
       return true;
     } catch (error) {
       console.error(`Failed to fetch models for provider ${providerId}:`, error);
-      set({ loading: false });
       return false;
     } finally {
-      useInstallGateStore.getState().end(jobId);
-      void import('./chat.store').then((m) => m.useChatStore.getState().continueAfterInstall?.());
+      set({ loading: false });
     }
   },
 
   fetchAllModels: async () => {
     set({ loading: true });
-    const jobId = 'models:all';
-    useInstallGateStore.getState().begin(jobId, 'models', 'model');
     try {
       const providers = await window.electronAPI.provider.list();
       const grouped = new Map<string, AIModel[]>();
@@ -201,10 +196,8 @@ export const useModelStore = create<ModelStore>((set, get) => ({
       set({ models: grouped, favorites, recentModels, loading: false });
     } catch (error) {
       console.error('Failed to fetch all models:', error);
-      set({ loading: false });
     } finally {
-      useInstallGateStore.getState().end(jobId);
-      void import('./chat.store').then((m) => m.useChatStore.getState().continueAfterInstall?.());
+      set({ loading: false });
     }
   },
 

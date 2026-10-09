@@ -7,6 +7,28 @@ const EDITOR_WIDTH_KEY = 'conecode.editorWidthPct';
 const DEFAULT_EDITOR_WIDTH = 50;
 export const clampEditorWidth = (n: number) => Math.min(80, Math.max(20, n));
 
+// Panel sizes (px). Persisted like the editor split; clamped so nothing can be
+// dragged shut or blown out.
+const SIDEBAR_WIDTH_KEY = 'conecode.sidebarWidthPx';
+const DEFAULT_SIDEBAR_WIDTH = 260;
+export const clampSidebarWidth = (n: number) => Math.min(480, Math.max(200, n));
+
+const PREVIEW_WIDTH_KEY = 'conecode.previewWidthPx';
+const DEFAULT_PREVIEW_WIDTH = 480;
+export const clampPreviewWidth = (n: number) => Math.min(720, Math.max(280, n));
+
+const TERMINAL_HEIGHT_KEY = 'conecode.terminalHeightPx';
+const DEFAULT_TERMINAL_HEIGHT = 280;
+export const clampTerminalHeight = (n: number) => Math.min(640, Math.max(120, n));
+
+function loadNumber(key: string, fallback: number, clamp: (n: number) => number): number {
+  try {
+    const v = Number(localStorage.getItem(key));
+    if (Number.isFinite(v) && v > 0) return clamp(v);
+  } catch {}
+  return fallback;
+}
+
 function loadEditorWidth(): number {
   try {
     const v = Number(localStorage.getItem(EDITOR_WIDTH_KEY));
@@ -47,6 +69,10 @@ interface UIStore {
   editorDirty: boolean;
   inputContent: string;
   editorWidthPct: number;
+  /** Resizable panel sizes (px, persisted). */
+  sidebarWidthPx: number;
+  previewWidthPx: number;
+  terminalHeightPx: number;
   /** Sidebar file tree section expanded (persisted). */
   fileTreeOpen: boolean;
   toggleSidebar: () => void;
@@ -72,10 +98,13 @@ interface UIStore {
   setEditorDirty: (dirty: boolean) => void;
   setInputContent: (content: string) => void;
   setEditorWidthPct: (pct: number) => void;
+  setSidebarWidthPx: (px: number) => void;
+  setPreviewWidthPx: (px: number) => void;
+  setTerminalHeightPx: (px: number) => void;
 }
 
 export const useUIStore = create<UIStore>((set) => ({
-  sidebarOpen: true,
+  sidebarOpen: false,
   settingsOpen: false,
   modelSelectorOpen: false,
   terminalOpen: false,
@@ -89,6 +118,9 @@ export const useUIStore = create<UIStore>((set) => ({
   editorDirty: false,
   inputContent: '',
   editorWidthPct: loadEditorWidth(),
+  sidebarWidthPx: loadNumber(SIDEBAR_WIDTH_KEY, DEFAULT_SIDEBAR_WIDTH, clampSidebarWidth),
+  previewWidthPx: loadNumber(PREVIEW_WIDTH_KEY, DEFAULT_PREVIEW_WIDTH, clampPreviewWidth),
+  terminalHeightPx: loadNumber(TERMINAL_HEIGHT_KEY, DEFAULT_TERMINAL_HEIGHT, clampTerminalHeight),
   fileTreeOpen: loadFileTreeOpen(),
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   toggleFileTree: () => set((s) => {
@@ -124,5 +156,20 @@ export const useUIStore = create<UIStore>((set) => ({
     const clamped = clampEditorWidth(pct);
     try { localStorage.setItem(EDITOR_WIDTH_KEY, String(clamped)); } catch {}
     set({ editorWidthPct: clamped });
+  },
+  setSidebarWidthPx: (px) => {
+    const clamped = clampSidebarWidth(px);
+    try { localStorage.setItem(SIDEBAR_WIDTH_KEY, String(clamped)); } catch {}
+    set({ sidebarWidthPx: clamped });
+  },
+  setPreviewWidthPx: (px) => {
+    const clamped = clampPreviewWidth(px);
+    try { localStorage.setItem(PREVIEW_WIDTH_KEY, String(clamped)); } catch {}
+    set({ previewWidthPx: clamped });
+  },
+  setTerminalHeightPx: (px) => {
+    const clamped = clampTerminalHeight(px);
+    try { localStorage.setItem(TERMINAL_HEIGHT_KEY, String(clamped)); } catch {}
+    set({ terminalHeightPx: clamped });
   },
 }));

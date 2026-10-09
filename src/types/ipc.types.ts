@@ -236,9 +236,25 @@ export interface ElectronAPI {
     remove: (cwd: string, worktreePath: string) => Promise<{ ok: boolean; error?: string }>;
   };
   net: {
-    fetch: (url: string) => Promise<string>;
-    search: (query: string) => Promise<string>;
+    fetch: (url: string, scope?: string) => Promise<string>;
+    search: (query: string, scope?: string) => Promise<string>;
     download: (url: string, dest: string) => Promise<string>;
+  };
+  /**
+   * Headless BrowserUse — the built-in browser for the open web. Same
+   * ref-annotated driving as the preview panel's page_* tools, for any https
+   * URL with no project or panel needed. navigate hands back a snapshot; the
+   * refs it contains drive click/fill until the page changes.
+   */
+  browser: {
+    navigate: (url: string, scope?: string) => Promise<{ ok: boolean; url?: string; snapshot?: string; error?: string }>;
+    snapshot: () => Promise<string>;
+    click: (ref: string) => Promise<string>;
+    fill: (ref: string, text: string, submit: boolean) => Promise<string>;
+    eval: (expression: string) => Promise<string>;
+    history: (action: 'reload' | 'back') => Promise<string>;
+    status: () => Promise<{ active: boolean }>;
+    close: () => Promise<void>;
   };
   skill: {
     list: (rootPath?: string) => Promise<{ global: any[]; project: any[] }>;
@@ -285,6 +301,17 @@ export interface ElectronAPI {
     screenshot: () => Promise<ComputerScreenshot>;
     act: (req: ComputerRequest) => Promise<ComputerActionResult>;
     panic: () => Promise<ComputerStatus>;
+  };
+  screenshot: {
+    capture: () => Promise<
+      | { dataUrl: string; width: number; height: number }
+      | { error: string; needsPermission?: string }
+    >;
+    save: (dataUrl: string) => Promise<{ ok: boolean; path?: string }>;
+    setShortcut: (accelerator: string | null) => Promise<{ ok: boolean }>;
+    openSettings: () => Promise<{ ok: boolean }>;
+    relaunch: () => Promise<{ ok: boolean }>;
+    onTrigger: (callback: () => void) => () => void;
   };
   terminal: {
     spawn: (id: string, cwd?: string) => Promise<boolean>;

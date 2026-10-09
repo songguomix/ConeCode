@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  REWARD_FAIL, computeReward, isConverged, selectCandidate, type EpisodeResult,
+  REWARD_FAIL, computeReward, isConverged, selectCandidate,
+  dominates, paretoFront, bestOnEachMetric, combineJudgePanels,
+  type EpisodeResult, type JudgeScores,
 } from './rsiReward';
 
 function episode(partial: Partial<EpisodeResult> = {}): EpisodeResult {
@@ -88,5 +90,55 @@ describe('isConverged', () => {
 
   it('is not converged while still improving', () => {
     expect(isConverged([0.1, 0.2, 0.3, 0.4, 0.5], 3)).toBe(false);
+  });
+});
+
+describe('paretoFront (GEPA retention)', () => {
+  const cands = [
+    { id: 'fast', metrics: { speed: 0.9, mem: 0.1 } },
+    { id: 'lean', metrics: { speed: 0.2, mem: 0.8 } },
+    { id: 'mid', metrics: { speed: 0.5, mem: 0.5 } },
+    { id: 'dominated', metrics: { speed: 0.1, mem: 0.05 } },
+  ];
+
+  it('keeps non-dominated candidates and drops dominated ones', () => {
+    const ids = paretoFront(cands).map((c) => c.id);
+    expect(ids).toContain('fast');
+    expect(ids).toContain('lean');
+    expect(ids).toContain('mid');
+    expect(ids).not.toContain('dominated');
+  });
+
+  it('dominates is strict on at least one axis', () => {
+    expect(dominates(cands[0], cands[3])).toBe(true);
+    expect(dominates(cands[0], cands[1])).toBe(false);
+    expect(dominates(cands[0], cands[0])).toBe(false);
+  });
+
+  it('names outright leaders per metric', () => {
+    const best = bestOnEachMetric(cands);
+    expect(best.speed).toEqual(['fast']);
+    expect(best.mem).toEqual(['lean']);
+  });
+});
+
+describe('combineJudgePanels (calibrated judging)', () => {
+  const panel = (over: Partial<JudgeScores> = {}): JudgeScores => ({
+    alignment: 0.8, simplicity: 0.7, discipline: 0.9, ...over,
+  });
+
+  it('is the identity for a single panel', () => {
+    expect(combineJudgePanels([panel()])).toEqual(panel());
+  });
+
+  it('trims a loud outlier with 3+ panels', () => {
+    const out = combineJudgePanels([panel(), panel(), panel({ alignment: 0.0 })]);
+    // Trimmed mean of [0, 0.8, 0.8] drops min and max → 0.8.
+    expect(out.alignment).toBeCloseTo(0.8, 5);
+  });
+
+  it('any discipline veto discards, even when outvoted', () => {
+    const out = combineJudgePanels([panel(), panel(), panel({ discipline: 0 })]);
+    expect(out.discipline).toBe(0);
   });
 });

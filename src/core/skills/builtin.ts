@@ -252,6 +252,50 @@ Never trade clarity for speed without a measurement proving the trade was worth 
     tags: ['docs'],
     body: `# 文档同步\n\n1. Read the public API and the README claims.\n2. Fix the lie in docs or code — not both with hand-waving.\n3. Keep examples runnable.`,
   },
+  {
+    id: 'software-dev',
+    name: '软件开发',
+    description: 'Think through the approach first, implement minimally, deliver only after tests pass, then ask before computer-use screenshot verification. Use when building a feature, fixing a bug, or any coding task.',
+    tags: ['workflow', 'quality'],
+    body: `# 软件开发
+
+先想思路，再动手；测试全部通过，才算交付。四道关按顺序过，过不了就退回修，不许跳关：
+**G1 思路 → G2 实现 → G3 测试全绿 → G4 实机验证（征得同意）→ 交付。**
+
+## G1 先想思路（动代码之前，必须完成）
+输出一份 ≤10 行的方案，四项缺一不可：
+1. **可验证需求**：这次交付什么，用户能观察到什么行为（不猜、不脑补）。
+2. **改动面**：改哪些文件、调用方在哪、沿用哪些现有约定——先读代码再写方案。
+3. **失败路径**：空输入、越界、超时、无权限时各自的行为。
+4. **验证方式**：跑什么命令、加什么用例能证明它对。
+出口条件：能一口气讲清"为什么这样改"。讲不清，或方案与需求冲突 → 先 ask_user 确认，不动代码。
+
+## G2 实现
+- 只做方案内的最小改动；要偏离，先更新方案再改代码。
+- 一次一件事：不顺手重构、不夹带无关修改、不改方案外的文件。
+- 永不：放宽断言、跳过或注释测试、注释报错代码、改评分逻辑——那是作弊，不是修复。
+
+## G3 测试全绿（交付硬门）
+- 顺序：typecheck → 定向测试（只跑改动覆盖的）→ 全量测试。
+- 全过才进 G4。中途失败：先修原因，不改测试期望；修不好回滚到最近通过状态，如实报告卡在哪——绝不停在红灯上往下走。
+
+## G4 询问是否用 computer use 实机测试（测试全过之后，必问）
+用 ask_user 问一次，问题里带上一句话改动摘要：
+"测试已通过。本次改动：<一句话>。是否用电脑控制（computer use）对修改的界面截图实机验证？"
+选项：["是，截图验证", "否，直接交付"]。
+- 用户同意 → 第 5 步；用户拒绝或不答 → 直接交付。绝不擅自驱动用户的鼠标键盘。
+- 纯后端/无界面改动也照问；若用户同意后确实无界面可截，说明一句即可交付。
+
+## 5. 截图分析并修正
+1. 先把被改的应用跑起来并停在改动界面（dev server 或启动应用），再 computer screenshot。
+2. 逐张按清单核对：布局错位、文字截断或溢出、控件可见可点、状态与预期一致、控制台无新报错。
+3. 静态截图看不出的交互，再真实点击/输入走一遍；坐标只从截图上读，不许猜。
+4. 发现问题 → 修 → 回到 G3 重跑测试 → 再截图复验；最多 3 轮，仍不过就把问题和截图证据如实列出，不得跳过假装通过。
+5. 缺屏幕录制权限时提示用户授权后重试，不许降级成"应该没问题"。
+
+## 6. 交付（五个要素，缺项写"无"）
+思路依据 · 改动清单 · 跑过的命令与结果 · 截图验证了哪几处 · 剩余风险与未验证项。`,
+  },
 ];
 
 export function findBuiltin(id: string): CatalogSkill | undefined {

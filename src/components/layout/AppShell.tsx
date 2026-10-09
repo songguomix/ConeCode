@@ -1,6 +1,7 @@
 import { useRef, useState, useEffect } from 'react';
 import { FiMenu } from 'react-icons/fi';
-import { useUIStore, useWorkspaceStore } from '../../stores';
+import { useUIStore, useWorkspaceStore, useLanguageStore } from '../../stores';
+import { useScreenshotStore } from '../../stores/screenshot.store';
 import Sidebar from './Sidebar';
 import ChatView from '../chat/ChatView';
 import EditorPanel from '../editor/EditorPanel';
@@ -12,6 +13,7 @@ import RemotePanel from '../remote/RemotePanel';
 import ComputerPanel from '../computer/ComputerPanel';
 import CodeReviewPanel from '../review/CodeReviewPanel';
 import WorktreePanel from '../worktree/WorktreePanel';
+import ScreenshotOverlay from '../screenshot/ScreenshotOverlay';
 
 export default function AppShell() {
   const sidebarOpen = useUIStore((s) => s.sidebarOpen);
@@ -28,12 +30,35 @@ export default function AppShell() {
   const setWorkbenchTab = useUIStore((s) => s.setWorkbenchTab);
   const editorWidthPct = useUIStore((s) => s.editorWidthPct);
   const setEditorWidthPct = useUIStore((s) => s.setEditorWidthPct);
+  const sidebarWidthPx = useUIStore((s) => s.sidebarWidthPx);
+  const setSidebarWidthPx = useUIStore((s) => s.setSidebarWidthPx);
+  const previewWidthPx = useUIStore((s) => s.previewWidthPx);
+  const setPreviewWidthPx = useUIStore((s) => s.setPreviewWidthPx);
+  const terminalHeightPx = useUIStore((s) => s.terminalHeightPx);
+  const setTerminalHeightPx = useUIStore((s) => s.setTerminalHeightPx);
+  const shotOpen = useScreenshotStore((s) => s.open);
   const selectedFile = useWorkspaceStore((s) => s.selectedFile);
+  const { t } = useLanguageStore();
   const splitRef = useRef<HTMLDivElement>(null);
   // Once the terminal is first opened, keep it mounted (hidden when collapsed)
   // so its shell sessions and tab numbering survive re-opening.
   const [terminalMounted, setTerminalMounted] = useState(false);
   useEffect(() => { if (terminalOpen) setTerminalMounted(true); }, [terminalOpen]);
+
+  // VS Code-style sidebar toggle, available everywhere (the floating button is
+  // easy to miss).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b') {
+        // The screenshot overlay owns the keyboard while it is up.
+        if (useScreenshotStore.getState().open) return;
+        e.preventDefault();
+        toggleSidebar();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [toggleSidebar]);
 
   // The left column is the code editor. The browser/preview docks on the RIGHT
   // so "open what we built" sits beside the chat — click-to-annotate then lands
@@ -65,28 +90,62 @@ export default function AppShell() {
     window.addEventListener('mouseup', onUp);
   };
 
+  // Pixel drag for sidebar / preview / terminal sizes (persisted in ui.store).
+  const dragPixels = (
+    e: React.MouseEvent,
+    startPx: number,
+    sign: number,
+    apply: (px: number) => void,
+    vertical = false,
+  ) => {
+    e.preventDefault();
+    const startPos = vertical ? e.clientY : e.clientX;
+    const onMove = (ev: MouseEvent) => {
+      const delta = (vertical ? ev.clientY : ev.clientX) - startPos;
+      apply(startPx + sign * delta);
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    document.body.style.cursor = vertical ? 'row-resize' : 'col-resize';
+    document.body.style.userSelect = 'none';
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
+
   return (
-    <div className="flex h-screen">
-      {sidebarOpen && <Sidebar />}
+    <div className="flex h-screen relative">
+      {sidebarOpen && (
+        <div className="relative shrink-0 flex min-h-0" style={{ width: sidebarWidthPx }}>
+          <Sidebar />
+          <div
+            onMouseDown={(e) => dragPixels(e, sidebarWidthPx, 1, setSidebarWidthPx)}
+            onDoubleClick={() => setSidebarWidthPx(260)}
+            title="拖动调整宽度（双击复位）"
+            className="group absolute top-0 bottom-0 -right-px w-[7px] cursor-col-resize z-30 flex justify-end"
+          >
+            <div className="w-px h-full bg-[var(--border)] group-hover:bg-[var(--accent)] transition-colors" />
+            <div className="absolute inset-y-0 -left-2 -right-2" />
+          </div>
+        </div>
+      )}
+      {/* Floating sidebar reopen — no header rows anywhere, so the top blank
+          is truly zero. Mid-left edge keeps it clear of the traffic lights. */}
+      {!sidebarOpen && (
+        <button onClick={toggleSidebar} title={t('toggleSidebar')}
+          className="absolute left-2 top-1/2 -translate-y-1/2 z-40 w-10 h-10 rounded-full bg-[var(--accent-soft)] backdrop-blur border border-[var(--accent)]/50 shadow-[0_4px_16px_rgba(0,0,0,0.18)] flex items-center justify-center text-[var(--accent)] hover:bg-[var(--accent)] hover:text-white hover:border-[var(--accent)] transition-all">
+          <FiMenu size={17} strokeWidth={2.5} />
+        </button>
+      )}
       <div className="flex-1 flex flex-col min-w-0">
         <div className="flex-1 flex flex-col min-h-0">
           <div ref={splitRef} className="flex-1 flex min-h-0">
             {workbenchOpen && (
               <>
                 <div className="min-w-0 shrink-0 flex flex-col" style={{ width: `${editorWidthPct}%` }}>
-                  {/* Sidebar-closed: the workbench sits top-left, so it needs its
-                      own traffic-light clearance + menu above it. */}
-                  {!sidebarOpen && (
-                    <div className="bg-[var(--bg-0)] shrink-0" style={{ WebkitAppRegion: 'drag' } as any}>
-                      <div className="h-[58px]" />
-                      <div className="flex items-center px-3 pb-2">
-                        <button onClick={toggleSidebar} style={{ WebkitAppRegion: 'no-drag' } as any}
-                          className="w-8 h-8 rounded-xl flex items-center justify-center text-[var(--text-muted)] hover:bg-[var(--bg-3)] hover:text-[var(--text-primary)] transition-colors">
-                          <FiMenu size={16} />
-                        </button>
-                      </div>
-                    </div>
-                  )}
                   <div className="flex-1 min-h-0 relative">
                     {/* visibility (not display:none) keeps the hidden panel's box
                         alive — a collapsed <webview> comes back blank. */}
@@ -108,39 +167,49 @@ export default function AppShell() {
               </>
             )}
             <div className="flex-1 flex flex-col min-w-0">
-              {/* Top drag strip / traffic-light clearance for the chat column.
-                  Taller only when it hosts the menu button under the traffic
-                  lights (sidebar closed, nothing in the workbench on the left). */}
-              {!sidebarOpen && !workbenchOpen ? (
-                <div className="bg-[var(--bg-0)] shrink-0" style={{ WebkitAppRegion: 'drag' } as any}>
-                  <div className="h-[58px]" />
-                  <div className="flex items-center px-3 pb-2">
-                    <button onClick={toggleSidebar} style={{ WebkitAppRegion: 'no-drag' } as any}
-                      className="w-8 h-8 rounded-xl flex items-center justify-center text-[var(--text-muted)] hover:bg-[var(--bg-3)] hover:text-[var(--text-primary)] transition-colors">
-                      <FiMenu size={16} />
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="h-[52px] bg-[var(--bg-0)] shrink-0" style={{ WebkitAppRegion: 'drag' } as any} />
-              )}
+              {/* Slim window-drag strip: the chat column has no tab bar, so
+                  without this the window can only be moved from the far left. */}
+              <div className="h-7 shrink-0" style={{ WebkitAppRegion: 'drag' } as any} />
               <ChatView />
             </div>
             {/* Browser / project preview docks on the right of the chat. */}
             {previewDockOpen && (
-              <div className="w-[42%] min-w-[280px] max-w-[560px] shrink-0 flex flex-col border-l border-[var(--border)] anim-message">
+              <div className="relative shrink-0 flex flex-col min-w-0 anim-message" style={{ width: previewWidthPx }}>
+                <div
+                  onMouseDown={(e) => dragPixels(e, previewWidthPx, -1, setPreviewWidthPx)}
+                  onDoubleClick={() => setPreviewWidthPx(480)}
+                  title="拖动调整宽度（双击复位）"
+                  className="group absolute top-0 bottom-0 -left-px w-[7px] cursor-col-resize z-30 flex"
+                >
+                  <div className="w-px h-full bg-[var(--border)] group-hover:bg-[var(--accent)] transition-colors" />
+                  <div className="absolute inset-y-0 -left-2 -right-2" />
+                </div>
                 <PreviewPanel />
               </div>
             )}
           </div>
           {terminalMounted && (
-            <div className={terminalOpen ? 'h-[280px] shrink-0' : 'hidden'}>
-              <TerminalPanel />
+            <div className="relative shrink-0" style={{ height: terminalOpen ? terminalHeightPx : 0 }}>
+              {terminalOpen && (
+                <div
+                  onMouseDown={(e) => dragPixels(e, terminalHeightPx, -1, setTerminalHeightPx, true)}
+                  onDoubleClick={() => setTerminalHeightPx(280)}
+                  title="拖动调整高度（双击复位）"
+                  className="group absolute top-0 inset-x-0 h-[7px] cursor-row-resize z-30 flex flex-col items-center"
+                >
+                  <div className="h-px w-full bg-[var(--border)] group-hover:bg-[var(--accent)] transition-colors" />
+                  <div className="absolute inset-x-0 -top-1 -bottom-1" />
+                </div>
+              )}
+              <div className={terminalOpen ? 'h-full' : 'hidden'}>
+                <TerminalPanel />
+              </div>
             </div>
           )}
         </div>
       </div>
       {settingsOpen && <SettingsModal />}
+      {shotOpen && <ScreenshotOverlay />}
       {changedFilesOpen && <ChangedFilesPanel />}
       {reviewOpen && <CodeReviewPanel />}
       {worktreesOpen && <WorktreePanel />}

@@ -2,6 +2,13 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { FiFile, FiMonitor, FiX, FiPlus } from 'react-icons/fi';
 import { useUIStore, useWorkspaceStore, useLanguageStore, usePreviewStore, useAiHighlightsStore } from '../../stores';
 
+// Native traffic lights float over the top-left on macOS (Electron
+// trafficLightPosition x:14 y:12 ≈ 60px wide), so the tab strip needs a left
+// pad to keep its first tab clickable when no sidebar covers them. Other
+// platforms get a true zero.
+const IS_MAC = typeof navigator !== 'undefined' &&
+  (/Mac/.test(navigator.platform || '') || /Macintosh/.test(navigator.userAgent || ''));
+
 // The tab strip at the top of the left-hand workbench column: one tab per open
 // editor plus the preview. Tabs scroll horizontally like VS Code; each file tab
 // carries its own dirty dot and AI-changes dot.
@@ -24,6 +31,7 @@ export default function WorkbenchTabs({ active, subtitle, actions }: Props) {
   const selectFile = useWorkspaceStore((s) => s.selectFile);
   const aiLines = useAiHighlightsStore((s) => s.lines);
   const previewOpen = useUIStore((s) => s.previewOpen);
+  const sidebarOpen = useUIStore((s) => s.sidebarOpen);
   const closePreview = useUIStore((s) => s.closePreview);
   const setWorkbenchTab = useUIStore((s) => s.setWorkbenchTab);
   const previewState = usePreviewStore((s) => s.state);
@@ -57,7 +65,7 @@ export default function WorkbenchTabs({ active, subtitle, actions }: Props) {
   return (
     <div
       className="flex items-center bg-[var(--bg-1)] border-b border-[var(--border)] shrink-0 min-w-0"
-      style={{ WebkitAppRegion: 'drag' } as any}
+      style={{ WebkitAppRegion: 'drag', ...(!sidebarOpen && IS_MAC ? { paddingLeft: 74 } : null) } as any}
     >
       <div ref={stripRef} className="flex items-center shrink min-w-0 overflow-x-auto" role="tablist" style={{ WebkitAppRegion: 'no-drag' } as any}>
         {openTabs.map((path) => {

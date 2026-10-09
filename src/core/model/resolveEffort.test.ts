@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveEffort } from './resolveEffort';
+import { clampEffort, resolveEffort } from './resolveEffort';
 
 describe('resolveEffort (auto thinking intensity)', () => {
   it('passes through explicit levels', () => {
@@ -23,5 +23,31 @@ describe('resolveEffort (auto thinking intensity)', () => {
 
   it('auto is medium for ordinary work', () => {
     expect(resolveEffort('auto', 'Fix the login button styling on the home page')).toBe('medium');
+  });
+});
+
+describe('clampEffort (model-declared levels)', () => {
+  it('passes values through when the model declares no concrete levels', () => {
+    expect(clampEffort('high')).toBe('high');
+    expect(clampEffort('medium', [])).toBe('medium');
+    expect(clampEffort('medium', ['auto'])).toBe('medium');
+  });
+
+  it('keeps a level the model declares', () => {
+    expect(clampEffort('high', ['low', 'medium', 'high'])).toBe('high');
+    expect(clampEffort('medium', ['auto', 'low', 'medium'])).toBe('medium');
+  });
+
+  it('snaps to the nearest declared level, cheaper on ties', () => {
+    expect(clampEffort('medium', ['low', 'high'])).toBe('low');
+    expect(clampEffort('high', ['low', 'medium'])).toBe('medium');
+    expect(clampEffort('low', ['high'])).toBe('high');
+  });
+
+  it('resolveEffort clamps auto and explicit picks to the model levels', () => {
+    // Auto would resolve to high for a refactor ask, but this model stops at medium.
+    expect(resolveEffort('auto', '请重构认证模块并补测试', ['low', 'medium'])).toBe('medium');
+    expect(resolveEffort('high', 'ok', ['low'])).toBe('low');
+    expect(resolveEffort('low', '随便聊聊', ['low', 'medium', 'high'])).toBe('low');
   });
 });

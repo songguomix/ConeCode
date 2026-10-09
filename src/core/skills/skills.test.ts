@@ -192,6 +192,43 @@ describe('the built-in library', () => {
     expect(findBuiltin('code-review')?.name).toBe('Code Review');
     expect(findBuiltin('nope')).toBeUndefined();
   });
+
+  it('ships 软件开发: approach before code, green before delivery', () => {
+    const skill = findBuiltin('software-dev');
+    expect(skill?.name).toBe('软件开发');
+    expect(skill!.body).toMatch(/先想思路/);
+    expect(skill!.body).toMatch(/typecheck/);
+    expect(skill!.body).toMatch(/测试.*通过.*才算交付|测试通过才交付/);
+    // No greenwashing escape hatch.
+    expect(skill!.body).toMatch(/回滚/);
+    expect(skill!.body).not.toMatch(/skip(ping)? tests?/i);
+  });
+
+  it('asks the user before computer-use testing and never drives the machine unasked', () => {
+    const skill = findBuiltin('software-dev');
+    // Question comes AFTER tests pass, via ask_user, with an explicit opt-out.
+    expect(skill!.body).toMatch(/ask_user/);
+    expect(skill!.body).toMatch(/测试全过之后/);
+    expect(skill!.body).toMatch(/否，直接交付/);
+    // Consent gates the screenshot loop; refusal falls straight to delivery.
+    expect(skill!.body).toMatch(/用户同意.*第 5 步|用户拒绝.*交付/);
+    expect(skill!.body).toMatch(/绝不擅自/);
+    // Issues found on screen get fixed and re-verified, not waved through —
+    // and the loop is bounded so it cannot spin forever.
+    expect(skill!.body).toMatch(/截图复验/);
+    expect(skill!.body).toMatch(/不得跳过假装通过/);
+    expect(skill!.body).toMatch(/最多 3 轮/);
+    // Screenshots alone are not proof: console errors and a real click path count.
+    expect(skill!.body).toMatch(/控制台无新报错/);
+    expect(skill!.body).toMatch(/坐标只从截图上读/);
+  });
+
+  it('is staged as an explicit gate sequence, not loose advice', () => {
+    const skill = findBuiltin('software-dev');
+    expect(skill!.body).toMatch(/G1 思路.*G2 实现.*G3 测试全绿.*G4 实机验证/s);
+    // The delivery contract names every artifact up front.
+    expect(skill!.body).toMatch(/五个要素/);
+  });
 });
 
 describe('the on-disk contract', () => {

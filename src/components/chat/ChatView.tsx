@@ -177,11 +177,16 @@ export default function ChatView() {
   const installLabel = activeInstallLabel(installJobs);
 
   return (
-    <div className="flex-1 flex flex-col min-h-0 bg-[var(--bg-0)]">
+    <div className="flex-1 flex flex-col min-h-0 bg-[var(--bg-0)] relative">
+      <div className="h-7 shrink-0" style={{ WebkitAppRegion: 'drag' } as any} />
+      {/* Floating pill, not an in-flow bar: showing/hiding it never shifts the
+          transcript, and it clears the window top instead of hugging it. */}
       {installHolding && (
-        <div className="px-4 py-1.5 text-[11px] flex items-center gap-2 bg-[var(--accent-soft)] text-[var(--accent)] border-b border-[var(--border)]">
-          <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)] animate-pulse shrink-0" />
-          <span className="truncate">{t('installHolding')}{installLabel ? ` · ${installLabel}` : ''}</span>
+        <div className="absolute top-3 inset-x-0 z-30 flex justify-center px-4 pointer-events-none">
+          <div className="flex items-center gap-2 pl-3 pr-3.5 py-1.5 text-[11px] font-medium bg-[var(--bg-2)]/90 backdrop-blur border border-[var(--border)] shadow-lg rounded-full max-w-full">
+            <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)] animate-pulse shrink-0" />
+            <span className="truncate text-[var(--text-secondary)]">{t('installHolding')}{installLabel ? ` · ${installLabel}` : ''}</span>
+          </div>
         </div>
       )}
       <div ref={containerRef} className="flex-1 overflow-y-auto py-6">

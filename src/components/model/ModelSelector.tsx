@@ -191,7 +191,13 @@ export default function ModelSelector() {
           <FiChevronDown size={13} className="text-[var(--text-muted)] shrink-0 ml-auto" />
         </button>
 
-        {showThinking && <ThinkingSlider value={reasoningEffort} onChange={setReasoningEffort} />}
+        {showThinking && (
+          <ThinkingSlider
+            value={reasoningEffort}
+            onChange={setReasoningEffort}
+            levels={selectedModel?.reasoningEfforts}
+          />
+        )}
 
         <ContextMeter />
 

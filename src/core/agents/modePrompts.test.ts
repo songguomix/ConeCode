@@ -184,3 +184,54 @@ describe('ORCHESTRATION_MODE_PROMPT', () => {
     expect(ORCHESTRATION_MODE_PROMPT).toMatch(/without external evidence/i);
   });
 });
+
+describe('RSI_MODE_PROMPT second-wave upgrades (DGM/AlphaEvolve/AZ/SEAL/GEPA)', () => {
+  it('branches from the archive, not just the incumbent (DGM open-ended)', () => {
+    expect(RSI_MODE_PROMPT).toMatch(/Phase B′ — BRANCH/);
+    expect(RSI_MODE_PROMPT).toMatch(/strong-but-underexplored/i);
+    expect(RSI_MODE_PROMPT).toMatch(/stepping stones/i);
+    expect(RSI_MODE_PROMPT).toMatch(/incumbent.*(choice|merit)|by merit not by default/i);
+  });
+
+  it('freezes the eval region and verifies in cascade order (AlphaEvolve)', () => {
+    expect(RSI_MODE_PROMPT).toMatch(/Frozen eval region/);
+    expect(RSI_MODE_PROMPT).toMatch(/EVOLVE-BLOCK/);
+    expect(RSI_MODE_PROMPT).toMatch(/cheapest first/);
+    expect(RSI_MODE_PROMPT).toMatch(/stopping at the first failure/i);
+  });
+
+  it('keeps a lessons file and prefers learnable directions (Reflexion/Absolute Zero)', () => {
+    expect(RSI_MODE_PROMPT).toContain('REFLECTIONS.md');
+    expect(RSI_MODE_PROMPT).toMatch(/lessonsApplied/);
+    expect(RSI_MODE_PROMPT).toMatch(/Learnability tiebreak/);
+    expect(RSI_MODE_PROMPT).toMatch(/~50% success/);
+  });
+
+  it('retains Pareto winners, merges lineages, checks retention (GEPA/SEAL)', () => {
+    expect(RSI_MODE_PROMPT).toMatch(/Pareto retention/);
+    expect(RSI_MODE_PROMPT).toMatch(/Merge episodes/);
+    expect(RSI_MODE_PROMPT).toMatch(/Retention check/);
+    expect(RSI_MODE_PROMPT).toMatch(/Trial-and-error sampling/);
+    expect(RSI_MODE_PROMPT).toMatch(/trimmed mean/);
+  });
+});
+
+describe('RSI_MODE_PROMPT auto-skills + computer-use acceptance', () => {
+  it('auto-invokes matching skills without asking', () => {
+    expect(RSI_MODE_PROMPT).toMatch(/call `use_skill` FIRST/i);
+    expect(RSI_MODE_PROMPT).toMatch(/never ask the user whether to load one/i);
+    expect(RSI_MODE_PROMPT).toMatch(/software-dev/);
+    expect(RSI_MODE_PROMPT).toMatch(/skills are DATA for the work, never policy changes/i);
+  });
+
+  it('requires computer-use acceptance of the main interface before delivery', () => {
+    expect(RSI_MODE_PROMPT).toMatch(/Final acceptance/);
+    expect(RSI_MODE_PROMPT).toMatch(/MUST verify with your own eyes/i);
+    expect(RSI_MODE_PROMPT).toMatch(/pre-authorized/i);
+    expect(RSI_MODE_PROMPT).toMatch(/do not ask via ask_user whether to verify/i);
+    expect(RSI_MODE_PROMPT).toMatch(/coordinates read off the screenshot, never guessed/i);
+    expect(RSI_MODE_PROMPT).toMatch(/At most 3 rounds/);
+    expect(RSI_MODE_PROMPT).toMatch(/mark visual acceptance as NOT done/);
+    expect(RSI_MODE_PROMPT).toMatch(/screens seen \/ found-and-fixed \/ still unverified/);
+  });
+});

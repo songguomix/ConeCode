@@ -2,6 +2,19 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { FiSave, FiSearch, FiX, FiChevronUp, FiChevronDown } from 'react-icons/fi';
 import { useWorkspaceStore, useLanguageStore, useUIStore, useAiHighlightsStore } from '../../stores';
 import { highlightCode } from './highlight';
+import {
+  computeEnterEdit, autoClose, backspacePair, braceOutdent,
+  toggleComment, duplicateLines, moveLines, deleteLines,
+  selectNextOccurrence, type TextEdit,
+} from '../../core/editor/editOps';
+import {
+  suggestContext, candidates, filterCompletions, splitInsert,
+  flattenPaths, type CompletionItem,
+} from '../../core/editor/complete';
+import {
+  diagnose, matchBracket, applyQuickFixes, offsetToLineCol,
+  type Diagnostic,
+} from '../../core/editor/diagnostics';
 import WorkbenchTabs from '../layout/WorkbenchTabs';
 
 // Map a file name to a highlighter language hint. Only the language *family*
@@ -45,6 +58,30 @@ interface FindState {
   index: number;
 }
 
+interface SuggestState {
+  items: CompletionItem[];
+  index: number;
+  x: number;
+  y: number;
+  replaceStart: number;
+}
+
+// Pair characters the editor handles itself (close/skip/wrap).
+const PAIR_CHARS = '()[]{}"\'`';
+const WRAP_CLOSE: Record<string, string> = { '(': ')', '[': ']', '{': '}', '"': '"', "'": "'", '`': '`' };
+
+/** Monospace advance in px, measured once so the popup/decorations sit on the grid. */
+function measureCharWidth(): number {
+  try {
+    const ctx = document.createElement('canvas').getContext('2d');
+    if (!ctx) return 7.81;
+    ctx.font = `13px 'SF Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
+    return ctx.measureText('MMMMMMMMMM').width / 10;
+  } catch {
+    return 7.81;
+  }
+}
+
 export default function EditorPanel() {
   const { selectedFile, fileContent, selectedFileIsImage, saveFile, rootPath } = useWorkspaceStore();
   const setTabDirty = useWorkspaceStore((s) => s.setTabDirty);
@@ -65,11 +102,23 @@ export default function EditorPanel() {
   const [find, setFind] = useState<FindState>({ open: false, replaceOpen: false, query: '', replace: '', matchCase: false, index: 0 });
   const [gotoOpen, setGotoOpen] = useState(false);
   const [gotoValue, setGotoValue] = useState('');
+  const [suggest, setSuggest] = useState<SuggestState | null>(null);
+  const [problems, setProblems] = useState<Diagnostic[]>([]);
+  const [problemsOpen, setProblemsOpen] = useState(false);
+  const [bracketPair, setBracketPair] = useState<{ a: number; b: number } | null>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const preRef = useRef<HTMLPreElement>(null);
   const gutterRef = useRef<HTMLDivElement>(null);
   const bgRef = useRef<HTMLDivElement>(null);
+  const decorRef = useRef<HTMLDivElement>(null);
+  const surfaceRef = useRef<HTMLDivElement>(null);
+  const popupRef = useRef<HTMLDivElement>(null);
   const findInputRef = useRef<HTMLInputElement>(null);
+  const suggestRef = useRef<SuggestState | null>(null);
+  useEffect(() => { suggestRef.current = suggest; }, [suggest]);
+  const charW = useMemo(measureCharWidth, []);
+  const files = useWorkspaceStore((s) => s.files);
+  const extraRoots = useWorkspaceStore((s) => s.extraRoots);
 
   // Load / switch files. Unsaved buffers survive tab switches; a fresh disk
   // load (AI edit, external change) replaces the buffer only when clean.
@@ -191,7 +240,7 @@ export default function EditorPanel() {
   };
 
   // ---- editing -------------------------------------------------------------
-  const commitEdit = (value: string, cursorPos?: number) => {
+  const commitEdit = (value: string, cursorPos?: number, selEnd?: number) => {
     if (selectedFile) buffersRef.current[selectedFile] = value;
     setContent(value);
     if (selectedFile) retainAiLines(selectedFile, value);
@@ -199,9 +248,141 @@ export default function EditorPanel() {
       setCursor(cursorPos);
       requestAnimationFrame(() => {
         const ta = taRef.current;
-        if (ta) ta.selectionStart = ta.selectionEnd = cursorPos;
+        if (ta) {
+          ta.selectionStart = cursorPos;
+          ta.selectionEnd = selEnd ?? cursorPos;
+        }
       });
     }
+  };
+
+  /** Apply a pure TextEdit and optionally keep completing at the new caret. */
+  const applyTextEdit = (edit: TextEdit, keepSuggest = false) => {
+    commitEdit(edit.text, edit.cursor, edit.selEnd);
+    if (keepSuggest) refreshSuggest(edit.text, edit.selEnd ?? edit.cursor);
+    else setSuggest(null);
+  };
+
+  // ---- paths for import completion -----------------------------------------
+  const pathScopes = useMemo(() => {
+    const scopes: { root: string; paths: string[] }[] = [];
+    if (rootPath) scopes.push({ root: rootPath, paths: flattenPaths(files, rootPath) });
+    for (const r of extraRoots || []) scopes.push({ root: r.path, paths: flattenPaths(r.files, r.path) });
+    return scopes;
+  }, [files, extraRoots, rootPath]);
+
+  const pathScope = useMemo(() => {
+    if (!selectedFile) return null;
+    const hit = pathScopes.find((s) => selectedFile === s.root || selectedFile.startsWith(s.root + '/'));
+    return hit ?? pathScopes[0] ?? null;
+  }, [pathScopes, selectedFile]);
+
+  const currentDir = useMemo(() => {
+    if (!selectedFile || !pathScope) return '';
+    const rel = selectedFile.startsWith(pathScope.root + '/')
+      ? selectedFile.slice(pathScope.root.length + 1)
+      : selectedFile.split('/').pop() || '';
+    const slash = rel.lastIndexOf('/');
+    return slash === -1 ? '' : rel.slice(0, slash);
+  }, [selectedFile, pathScope]);
+
+  // ---- autocomplete ----------------------------------------------------------
+  const positionPopup = (text: string, pos: number, rows: number): { x: number; y: number } => {
+    const ta = taRef.current;
+    const before = text.slice(0, pos);
+    const line = before.split('\n').length;
+    const colChars = before.slice(before.lastIndexOf('\n') + 1).replace(/\t/g, '  ').length;
+    const boxW = surfaceRef.current?.clientWidth ?? 600;
+    const boxH = surfaceRef.current?.clientHeight ?? 400;
+    const popupW = 240;
+    const popupH = Math.min(Math.min(rows, 8) * 26 + 8, 216);
+    const x = Math.max(12, Math.min(12 + colChars * charW - (ta?.scrollLeft ?? 0), Math.max(12, boxW - popupW - 8)));
+    let y = 12 + line * LINE_H - (ta?.scrollTop ?? 0);
+    if (y + popupH > boxH - 8) y = 12 + (line - 1) * LINE_H - (ta?.scrollTop ?? 0) - popupH;
+    return { x, y };
+  };
+
+  const refreshSuggest = (next: string, pos: number, force = false) => {
+    let ctx = suggestContext(next, pos);
+    if (!ctx && force) ctx = { mode: 'word', prefix: '', replaceStart: pos };
+    if (!ctx) { setSuggest(null); return; }
+    const items = filterCompletions(
+      candidates(ctx, { lang, doc: next, files: pathScope?.paths || [], currentDir }),
+      ctx.prefix,
+    );
+    if (!items.length) { setSuggest(null); return; }
+    const { x, y } = positionPopup(next, pos, items.length);
+    setSuggest({ items, index: 0, x, y, replaceStart: ctx.replaceStart });
+  };
+
+  const acceptSuggest = (item?: CompletionItem) => {
+    const s = suggestRef.current;
+    const it = item ?? s?.items[s?.index ?? 0];
+    if (!s || !it) return;
+    const { text, cursorOffset } = splitInsert(it.insert);
+    const next = content.slice(0, s.replaceStart) + text + content.slice(cursor);
+    const pos = s.replaceStart + cursorOffset;
+    commitEdit(next, pos);
+    // Descending into a directory keeps completing inside it.
+    if (it.keepOpen) refreshSuggest(next, pos);
+    else setSuggest(null);
+  };
+
+  // ---- diagnostics -------------------------------------------------------------
+  useEffect(() => {
+    if (!selectedFile || content.length > 500_000) { setProblems([]); return; }
+    const timer = setTimeout(() => setProblems(diagnose(content, lang)), 350);
+    return () => clearTimeout(timer);
+  }, [content, lang, selectedFile]);
+
+  // Bracket pair glow while the caret touches either end. Skipped in huge
+  // files where the backwards scan would add typing latency.
+  useEffect(() => {
+    if (content.length > 200_000) { setBracketPair(null); return; }
+    const before = content[cursor - 1];
+    const at = content[cursor];
+    const pos = before && '()[]{}'.includes(before)
+      ? cursor - 1
+      : at && '()[]{}'.includes(at) ? cursor : -1;
+    if (pos < 0) { setBracketPair(null); return; }
+    const m = matchBracket(content, lang, pos);
+    setBracketPair(m === null ? null : { a: pos, b: m });
+  }, [content, cursor, lang]);
+
+  // A fresh file gets a fresh popup/problems-anchor state.
+  useEffect(() => { setSuggest(null); }, [selectedFile]);
+
+  // Keep the keyboard-cycled row visible in a long suggestion list.
+  useEffect(() => {
+    if (!suggest) return;
+    popupRef.current?.querySelector(`[data-idx="${suggest.index}"]`)?.scrollIntoView({ block: 'nearest' });
+  }, [suggest]);
+
+  const errCount = useMemo(() => problems.filter((d) => d.severity === 'error').length, [problems]);
+  const warnCount = useMemo(() => problems.length - errCount, [problems, errCount]);
+
+  const jumpToPos = (line: number, col: number) => {
+    const ta = taRef.current;
+    const arr = content.split('\n');
+    const l = Math.min(Math.max(1, line), arr.length);
+    const lineText = arr[l - 1] ?? '';
+    const c = Math.min(Math.max(1, col), lineText.length + 1);
+    const pos = arr.slice(0, l - 1).join('\n').length + (l > 1 ? 1 : 0) + (c - 1);
+    if (ta) {
+      ta.focus();
+      ta.selectionStart = ta.selectionEnd = pos;
+      ta.scrollTop = Math.max(0, (l - 1) * LINE_H - ta.clientHeight / 2);
+      syncScroll();
+    }
+    setCursor(pos);
+    setSuggest(null);
+  };
+
+  const handleFixAll = () => {
+    const r = applyQuickFixes(content, lang);
+    if (r.text === content) return;
+    commitEdit(r.text, Math.min(cursor, r.text.length));
+    setSuggest(null);
   };
 
   const handleSave = async () => {
@@ -212,7 +393,7 @@ export default function EditorPanel() {
     setTabDirty(selectedFile, false);
   };
 
-  // Keep the highlight, background and gutter layers pinned to the textarea.
+  // Keep the highlight, background, decoration and gutter layers pinned to the textarea.
   const syncScroll = () => {
     const ta = taRef.current;
     if (!ta) return;
@@ -224,7 +405,17 @@ export default function EditorPanel() {
       bgRef.current.scrollTop = ta.scrollTop;
       bgRef.current.scrollLeft = ta.scrollLeft;
     }
+    if (decorRef.current) {
+      decorRef.current.scrollTop = ta.scrollTop;
+      decorRef.current.scrollLeft = ta.scrollLeft;
+    }
     if (gutterRef.current) gutterRef.current.scrollTop = ta.scrollTop;
+  };
+
+  // Scrolling moves the text out from under the popup — dismiss it.
+  const handleSurfaceScroll = () => {
+    syncScroll();
+    if (suggestRef.current) setSuggest(null);
   };
 
   const updateCursor = () => {
@@ -254,6 +445,41 @@ export default function EditorPanel() {
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     const mod = e.metaKey || e.ctrlKey;
+    const ta = taRef.current;
+    const caret = ta?.selectionStart ?? cursor;
+    const caretEnd = ta?.selectionEnd ?? cursor;
+
+    // 0. Suggestion popup eats navigation/accept/dismiss first.
+    if (suggestRef.current) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSuggest((s) => (s ? { ...s, index: (s.index + 1) % s.items.length } : s));
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSuggest((s) => (s ? { ...s, index: (s.index - 1 + s.items.length) % s.items.length } : s));
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        acceptSuggest();
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setSuggest(null);
+        return;
+      }
+      if (['ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'].includes(e.key)) {
+        setSuggest(null);
+      }
+    }
+    if (mod && e.key === ' ') {
+      e.preventDefault();
+      refreshSuggest(content, caret, true);
+      return;
+    }
     if (mod && e.key.toLowerCase() === 's') {
       e.preventDefault();
       if (modified) void handleSave();
@@ -282,9 +508,102 @@ export default function EditorPanel() {
       setGotoOpen(false);
       return;
     }
+    // Toggle line comment.
+    if (mod && (e.key === '/' || e.code === 'Slash')) {
+      e.preventDefault();
+      if (ta) {
+        const r = toggleComment(content, caret, caretEnd, lang);
+        applyTextEdit(r);
+      }
+      return;
+    }
+    // Move / duplicate lines.
+    if (e.altKey && !mod && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+      e.preventDefault();
+      if (ta) {
+        const dir = e.key === 'ArrowUp' ? -1 : 1;
+        const r = e.shiftKey
+          ? duplicateLines(content, caret, caretEnd, dir)
+          : moveLines(content, caret, caretEnd, dir);
+        applyTextEdit(r);
+      }
+      return;
+    }
+    // Delete line.
+    if (mod && e.shiftKey && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      if (ta) applyTextEdit(deleteLines(content, caret, caretEnd));
+      return;
+    }
+    // Select next occurrence.
+    if (mod && !e.shiftKey && e.key.toLowerCase() === 'd') {
+      e.preventDefault();
+      if (ta) {
+        const r = selectNextOccurrence(content, caret, caretEnd);
+        if (r) {
+          ta.focus();
+          setCursor(r.end);
+          requestAnimationFrame(() => {
+            ta.selectionStart = r.start;
+            ta.selectionEnd = r.end;
+          });
+        }
+      }
+      return;
+    }
     if (e.key === 'Tab') {
       e.preventDefault();
       indentSelection(e.shiftKey);
+      return;
+    }
+    // Smart Enter.
+    if (e.key === 'Enter' && !mod && !e.altKey) {
+      e.preventDefault();
+      applyTextEdit(computeEnterEdit(content, caret, lang), true);
+      return;
+    }
+    // Pair handling (no modifiers — let shortcuts and pastes pass through).
+    if (!mod && !e.altKey && e.key.length === 1 && PAIR_CHARS.includes(e.key)) {
+      if (ta && caret !== caretEnd && WRAP_CLOSE[e.key]) {
+        e.preventDefault();
+        const close = WRAP_CLOSE[e.key];
+        const next = content.slice(0, caret) + e.key + content.slice(caret, caretEnd) + close + content.slice(caretEnd);
+        commitEdit(next, caret + 1, caretEnd + 1);
+        setSuggest(null);
+        return;
+      }
+      if (ta && caret === caretEnd) {
+        if (e.key === '}') {
+          const out = braceOutdent(content, caret);
+          if (out) {
+            e.preventDefault();
+            applyTextEdit(out, true);
+            return;
+          }
+        }
+        const r = autoClose(content, caret, e.key);
+        if (r) {
+          e.preventDefault();
+          if ('skip' in r) {
+            setCursor(caret + 1);
+            requestAnimationFrame(() => {
+              if (taRef.current) taRef.current.selectionStart = taRef.current.selectionEnd = caret + 1;
+            });
+          } else {
+            applyTextEdit(r, true);
+          }
+          return;
+        }
+      }
+      return;
+    }
+    // Pair-aware backspace.
+    if (e.key === 'Backspace' && !mod && !e.altKey && ta && caret === caretEnd) {
+      const r = backspacePair(content, caret);
+      if (r) {
+        e.preventDefault();
+        applyTextEdit(r, true);
+      }
     }
   };
 
@@ -452,8 +771,8 @@ export default function EditorPanel() {
             </div>
           </div>
 
-          {/* Code surface: line-background layer, highlight layer, transparent textarea */}
-          <div className="relative flex-1 min-w-0">
+          {/* Code surface: line-background layer, decoration layer, highlight layer, transparent textarea */}
+          <div ref={surfaceRef} className="relative flex-1 min-w-0">
             <div ref={bgRef} aria-hidden
               className="absolute inset-0 overflow-hidden pointer-events-none"
               style={{ ...SURFACE, padding: 0 }}>
@@ -472,16 +791,102 @@ export default function EditorPanel() {
             <pre ref={preRef} aria-hidden
               className="absolute inset-0 overflow-hidden text-[var(--text-primary)] pointer-events-none"
               style={SURFACE}><code>{highlighted}</code></pre>
+            {/* Decoration layer: error/warning squiggles + bracket-match glow. */}
+            <div ref={decorRef} aria-hidden
+              className="absolute inset-0 overflow-hidden pointer-events-none"
+              style={{ ...SURFACE, padding: 0 }}>
+              <div style={{ position: 'relative', width: 'max-content', minWidth: '100%', height: lineCount * LINE_H + 24 }}>
+                {problems.slice(0, 200).map((d, i) => (
+                  <span key={i}
+                    className={d.severity === 'error' ? 'squiggle-error' : 'squiggle-warning'}
+                    style={{
+                      left: 12 + (d.col - 1) * charW,
+                      top: 12 + (d.line - 1) * LINE_H,
+                      width: Math.max(4, (d.endCol - d.col) * charW),
+                      height: LINE_H,
+                    }} />
+                ))}
+                {bracketPair && [bracketPair.a, bracketPair.b].map((off) => {
+                  const lc = offsetToLineCol(content, off);
+                  return (
+                    <span key={off} className="bracket-match"
+                      style={{
+                        left: 12 + (lc.col - 1) * charW - 1,
+                        top: 12 + (lc.line - 1) * LINE_H + 1,
+                        width: charW + 2,
+                        height: LINE_H - 2,
+                      }} />
+                  );
+                })}
+              </div>
+            </div>
             <textarea ref={taRef} value={content}
-              onChange={(e) => commitEdit(e.target.value, e.target.selectionStart ?? undefined)}
+              onChange={(e) => {
+                const v = e.target.value;
+                const p = e.target.selectionStart ?? 0;
+                commitEdit(v, p);
+                refreshSuggest(v, p);
+              }}
               onKeyDown={handleKeyDown}
-              onScroll={syncScroll}
+              onScroll={handleSurfaceScroll}
               onSelect={updateCursor}
               onKeyUp={updateCursor}
-              onClick={updateCursor}
+              onClick={() => { updateCursor(); setSuggest(null); }}
+              onBlur={() => setSuggest(null)}
               spellCheck={false}
               className="absolute inset-0 w-full h-full overflow-auto bg-transparent text-transparent resize-none outline-none"
               style={{ ...SURFACE, caretColor: 'var(--text-primary)', border: 'none' }} />
+            {/* Autocomplete popup */}
+            {suggest && (
+              <div onMouseDown={(e) => e.preventDefault()}
+                className="absolute z-20 w-60 rounded-xl border border-[var(--border)] bg-[var(--bg-2)] shadow-xl overflow-hidden anim-menu"
+                style={{ left: suggest.x, top: suggest.y }}>
+                <div ref={popupRef} className="max-h-52 overflow-y-auto py-1">
+                  {suggest.items.map((item, i) => (
+                    <button key={`${item.kind}:${item.label}:${i}`} data-idx={i}
+                      onClick={() => acceptSuggest(item)}
+                      onMouseEnter={() => setSuggest((s) => (s ? { ...s, index: i } : s))}
+                      className={`w-full h-[26px] flex items-center gap-2 px-2.5 text-left text-[12px] ${i === suggest.index ? 'bg-[var(--accent-soft)]' : ''}`}>
+                      <span className={`w-4 h-4 rounded text-[10px] font-bold flex items-center justify-center shrink-0 ${KIND_BADGE[item.kind]}`}>
+                        {item.kind[0].toUpperCase()}
+                      </span>
+                      <span className="flex-1 truncate font-mono">{item.label}</span>
+                      {item.detail && (
+                        <span className="text-[10px] text-[var(--text-muted)] truncate max-w-[110px]">{item.detail}</span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Problems panel — diagnostics list with jump-to-error and Fix all. */}
+      {problemsOpen && problems.length > 0 && !selectedFileIsImage && (
+        <div className="border-t border-[var(--border)] bg-[var(--bg-1)] shrink-0 max-h-36 flex flex-col">
+          <div className="flex items-center gap-2 px-3 py-1 text-[11px] shrink-0">
+            <span className="font-medium text-[var(--text-primary)]">{t('problems')} · {problems.length}</span>
+            <span className="flex-1" />
+            <button onClick={handleFixAll}
+              className="px-2 py-0.5 rounded bg-[var(--bg-3)] hover:bg-[var(--bg-4)] text-[var(--text-secondary)]">
+              {t('fixAll')}
+            </button>
+            <button onClick={() => setProblemsOpen(false)}
+              className="p-1 rounded hover:bg-[var(--bg-3)] text-[var(--text-muted)]">
+              <FiX size={13} />
+            </button>
+          </div>
+          <div className="overflow-y-auto px-1 pb-1">
+            {problems.slice(0, 100).map((d, i) => (
+              <button key={i} onClick={() => jumpToPos(d.line, d.col)}
+                className="w-full flex items-center gap-2 px-2 py-0.5 rounded text-left text-[11px] hover:bg-[var(--bg-3)] text-[var(--text-secondary)]">
+                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${d.severity === 'error' ? 'bg-[var(--error)]' : 'bg-[var(--warning)]'}`} />
+                <span className="flex-1 truncate">{d.message}</span>
+                <span className="text-[var(--text-muted)] font-mono shrink-0">Ln {d.line}, Col {d.col}</span>
+              </button>
+            ))}
           </div>
         </div>
       )}
@@ -495,6 +900,21 @@ export default function EditorPanel() {
           <span className="shrink-0">UTF-8</span>
           <span className="shrink-0">{formatSize(fileSize)}</span>
           <span className="flex-1" />
+          {(errCount > 0 || warnCount > 0) && (
+            <button onClick={() => setProblemsOpen((o) => !o)}
+              className="shrink-0 inline-flex items-center gap-2 hover:opacity-80">
+              {errCount > 0 && (
+                <span className="inline-flex items-center gap-1 text-[var(--error)]">
+                  <span className="w-1.5 h-1.5 rounded-full bg-[var(--error)]" />{errCount}
+                </span>
+              )}
+              {warnCount > 0 && (
+                <span className="inline-flex items-center gap-1 text-[var(--warning)]">
+                  <span className="w-1.5 h-1.5 rounded-full bg-[var(--warning)]" />{warnCount}
+                </span>
+              )}
+            </button>
+          )}
           {modified && <span className="shrink-0 inline-flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-[var(--warning)]" />{t('unsaved')}</span>}
           {aiCount > 0 && (
             <button onClick={() => selectedFile && clearAiFile(selectedFile)}
@@ -519,3 +939,11 @@ function formatSize(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
+
+const KIND_BADGE: Record<string, string> = {
+  snippet: 'bg-[var(--accent)] text-white',
+  keyword: 'bg-[var(--syntax-keyword)]/20 text-[var(--syntax-keyword)]',
+  path: 'bg-[var(--syntax-type)]/20 text-[var(--syntax-type)]',
+  word: 'bg-[var(--bg-4)] text-[var(--text-muted)]',
+  property: 'bg-[var(--syntax-property)]/20 text-[var(--syntax-property)]',
+};

@@ -37,8 +37,8 @@ export default function ProjectBriefComposer() {
   };
 
   return (
-    <section className="mb-6 rounded-2xl border border-[var(--border)] bg-[var(--bg-2)] p-4 min-w-0" aria-label={t('briefTitle')}>
-      <div className="flex items-center gap-2 mb-1.5 min-w-0">
+    <section className="mb-8 rounded-2xl border border-[var(--border)] bg-[var(--bg-2)] p-5 min-w-0" aria-label={t('briefTitle')}>
+      <div className="flex items-center gap-2 mb-2 min-w-0">
         <FiMessageSquare size={15} className="text-[var(--accent)] shrink-0" />
         <h2 className="text-sm font-semibold text-[var(--text-primary)] truncate">{t('briefTitle')}</h2>
         <div className="ml-auto flex items-center gap-1.5 text-[10px] font-medium shrink-0" aria-hidden={!brief}>
@@ -49,8 +49,7 @@ export default function ProjectBriefComposer() {
           <Step label={t('briefStep3')} active={starting} done={false} />
         </div>
       </div>
-      <p className="text-xs text-[var(--text-muted)] mb-1 leading-relaxed">{t('briefDescription')}</p>
-      <p className="text-[11px] text-[var(--text-muted)] mb-3 leading-relaxed">{t('briefNoFolderNeeded')}</p>
+      <p className="text-xs text-[var(--text-muted)] mb-3 leading-relaxed">{t('briefDescription')} {t('briefNoFolderNeeded')}</p>
       <div className="rounded-xl bg-[var(--bg-3)] p-3 focus-within:ring-1 focus-within:ring-[var(--accent)]/50">
         <textarea
           id="conecode-project-idea"
@@ -60,9 +59,9 @@ export default function ProjectBriefComposer() {
           onKeyDown={(e) => onEnter(e, generateBrief)}
           {...compositionProps}
           disabled={busy}
-          rows={3}
+          rows={2}
           placeholder={t('briefPlaceholder')}
-          className="block w-full resize-y min-h-[76px] max-h-64 bg-transparent text-sm leading-relaxed text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)] disabled:opacity-60"
+          className="block w-full resize-y min-h-[56px] max-h-64 bg-transparent text-sm leading-relaxed text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)] disabled:opacity-60"
         />
         <div className="mt-2 flex items-center gap-2 flex-wrap">
           <span className="flex-1 min-w-[140px] text-[11px] text-[var(--text-muted)]">{model ? t('briefInputHint') : t('selectModelHint')}</span>

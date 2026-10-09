@@ -12,6 +12,10 @@ Sources consulted before redesign (2026-09-17):
 | Live-SWE-agent | arXiv:2511.13646 | Evolve scaffold **while solving real tasks**, not only offline eval loops |
 | MedRSI | arXiv:2609.24838 | **Fast discovery, slow registration** into the persistent agent |
 | The Last AI Built by Humans | arXiv:2609.11873 | Autonomy ladder: execution → strategy → experience → environment → meta. Product RSI stops before unbounded meta |
+| AlphaEvolve | arXiv:2506.13131 | **EVOLVE-BLOCK** (frozen eval region, mutable solution region); **evaluation cascade** (stages of increasing cost, early exit); MAP-Elites program database balancing exploration/exploitation; failure insights fed back |
+| Absolute Zero | arXiv:2505.03335 | Proposer+solver self-play; **learnability reward** (maximal signal where the solver sometimes passes); code executor as unified verifier; deduction/abduction/induction modes |
+| SEAL | arXiv:2506.10943 | **Trial-and-error self-edits** (sample several, keep the best by downstream utility); lightweight updates; **retention checks** vs catastrophic forgetting |
+| GEPA | arXiv:2507.19457 | Reflect on full execution traces (**ASI** as textual gradient); **Pareto retention** (best-per-instance, not global best); **system-aware merge** of complementary candidates; minibatch-then-full evaluation |
 
 ## Definition used in ConeCode
 
