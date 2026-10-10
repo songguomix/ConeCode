@@ -3,6 +3,11 @@
   "version": "2.4.2",
   "description": "AI Desktop Client",
   "author": "ConeCode",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/songguomix/ConeCode.git"
+  },
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite",

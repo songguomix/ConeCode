@@ -117,4 +117,4 @@ docs/compose/spec/    RSI design notes and product specifications
 
 Keep changes focused, run the relevant checks, and never include credentials, pairing links, private logs, or personal project data in an issue or pull request. For security concerns, use private vulnerability reporting where available.
 
-**License:** No open-source license has been selected. Public source availability alone does not grant a general license to redistribute or modify the software.
+**License:** [MIT](LICENSE) — free to use, modify, and redistribute with the copyright notice kept.
