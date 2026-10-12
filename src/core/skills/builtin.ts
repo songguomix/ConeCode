@@ -277,6 +277,7 @@ Never trade clarity for speed without a measurement proving the trade was worth 
 
 ## G3 测试全绿（交付硬门）
 - 顺序：typecheck → 定向测试（只跑改动覆盖的）→ 全量测试。
+- 做好了一版本新软件也必须进行性能巡检：调用 \`perf_snapshot\` 采样新软件版本基本性能快照（堆内存、RSS、CPU 负载、排查内存泄漏与报错），确认 Verdict 无缺陷且无异常资源飙升。
 - 全过才进 G4。中途失败：先修原因，不改测试期望；修不好回滚到最近通过状态，如实报告卡在哪——绝不停在红灯上往下走。
 
 ## G4 询问是否用 computer use 实机测试（测试全过之后，必问）
@@ -294,16 +295,16 @@ Never trade clarity for speed without a measurement proving the trade was worth 
 5. 缺屏幕录制权限时提示用户授权后重试，不许降级成"应该没问题"。
 
 ## 6. 交付（五个要素，缺项写"无"）
-思路依据 · 改动清单 · 跑过的命令与结果 · 截图验证了哪几处 · 剩余风险与未验证项。`,
+思路依据 · 改动清单 · 跑过的命令与结果（含新版本性能巡检指标） · 截图验证了哪几处 · 剩余风险与未验证项。`,
   },
   {
     id: 'perf-monitor',
     name: '性能巡检',
-    description: 'Check ConeCode itself for performance defects and report with evidence, without fixing anything. Use when asked about slowness, freezes, memory growth, or suspected performance problems.',
+    description: 'Check ConeCode itself for performance defects and report with evidence, without fixing anything. Use when asked about slowness, freezes, memory growth, suspected performance problems, or when verifying a new software version.',
     tags: ['diagnostics'],
     body: `# 性能巡检
 
-只检查、不修。结论只有两种：【有缺陷】（附证据）或【本次未见缺陷】。修不修、怎么修，由用户决定后再说。
+只检查、不修。结论只有两种：【有缺陷】（附证据）或【本次未见缺陷】。修不修、怎么修，由用户决定后再说。做好了一版本新软件也必须进行性能巡检测试基本性能。
 
 ## 1. 先采样（第一步必须是它，不许猜）
 调 \`perf_snapshot\` 拿实时快照：渲染堆、进程 RSS、空闲内存、负载/CPU、外加监视器自动读到的报错。看 Verdict 行：

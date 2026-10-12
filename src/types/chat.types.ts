@@ -30,6 +30,9 @@ export interface Message {
   modelId?: string;
   providerId?: string;
   tokensUsed?: number;
+  /** Split counts for cost math; older turns only carry the total above. */
+  promptTokens?: number;
+  completionTokens?: number;
   createdAt: number;
   isQuestion?: boolean;
   questionOptions?: string[];

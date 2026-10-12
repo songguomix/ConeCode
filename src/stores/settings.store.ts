@@ -47,6 +47,12 @@ interface Settings {
   customSkillsAcknowledged: boolean;
   /** Commands may reach the network. On by default: installs/tests need it. */
   sandboxAllowNetwork: boolean;
+  /** Lift the 256K default budget to the model's full declared window. */
+  fullContext: boolean;
+  /** RSI cost lock: trip the stop condition past the per-episode budget. */
+  costLock: boolean;
+  /** Per-episode USD budget the RSI loop measures itself against. */
+  maxEpisodeCost: number;
 }
 
 interface SettingsStore extends Settings {
@@ -72,6 +78,9 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   preventSleepWhileRunning: true,
   customSkillsAcknowledged: false,
   sandboxAllowNetwork: true,
+  fullContext: false,
+  costLock: false,
+  maxEpisodeCost: 0.5,
 
   updateSettings: (partial) => {
     set(partial);
@@ -97,14 +106,17 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
           preventSleepWhileRunning: settings.preventSleepWhileRunning ?? true,
           customSkillsAcknowledged: settings.customSkillsAcknowledged ?? false,
           sandboxAllowNetwork: settings.sandboxAllowNetwork ?? true,
+          fullContext: settings.fullContext ?? false,
+          costLock: settings.costLock ?? false,
+          maxEpisodeCost: settings.maxEpisodeCost ?? 0.5,
         }));
       }
     } catch {}
   },
 
   saveSettings: async () => {
-    const { theme, language, sendWithEnter, streamEnabled, defaultProviderId, defaultModelId, autoIncludeFileContext, maxContextFileSize, approvalMode, toolCallMode, sandboxMode, notificationMode, notifyApprovals, preventSleepWhileRunning, sandboxAllowNetwork, customSkillsAcknowledged } = get();
-    const snapshot = { theme, language, sendWithEnter, streamEnabled, defaultProviderId, defaultModelId, autoIncludeFileContext, maxContextFileSize, approvalMode, toolCallMode, sandboxMode, notificationMode, notifyApprovals, preventSleepWhileRunning, sandboxAllowNetwork, customSkillsAcknowledged };
+    const { theme, language, sendWithEnter, streamEnabled, defaultProviderId, defaultModelId, autoIncludeFileContext, maxContextFileSize, approvalMode, toolCallMode, sandboxMode, notificationMode, notifyApprovals, preventSleepWhileRunning, sandboxAllowNetwork, customSkillsAcknowledged, fullContext, costLock, maxEpisodeCost } = get();
+    const snapshot = { theme, language, sendWithEnter, streamEnabled, defaultProviderId, defaultModelId, autoIncludeFileContext, maxContextFileSize, approvalMode, toolCallMode, sandboxMode, notificationMode, notifyApprovals, preventSleepWhileRunning, sandboxAllowNetwork, customSkillsAcknowledged, fullContext, costLock, maxEpisodeCost };
     const save = settingsSaveQueue.then(() => window.electronAPI.settings.update(snapshot));
     // Keep the queue alive after a failed write while still rejecting this call
     // to any explicit caller that wants to surface the error.

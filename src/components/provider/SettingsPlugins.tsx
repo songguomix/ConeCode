@@ -34,6 +34,17 @@ const TILE_BG: Record<string, string> = {
 
 type View = { kind: 'list' } | { kind: 'detail'; id: string } | { kind: 'sync' } | { kind: 'create' };
 type Chip = 'all' | 'builtin' | 'market' | 'custom';
+type T = (k: string) => string;
+
+/**
+ * Builtins ship fixed zh metadata; the library reads through i18n so names
+ * and descriptions follow the current locale. Market/custom entries keep
+ * their own (user or remote) strings — those are data, not UI copy.
+ */
+export const pluginDisplayName = (p: PluginEntry, t: T): string =>
+  (p.kind === 'builtin' ? t(`pluginName_${p.id}`) : p.name);
+export const pluginDisplayDesc = (p: PluginEntry, t: T): string =>
+  (p.kind === 'builtin' ? t(`pluginDesc_${p.id}`) : p.description);
 
 function IconTile({ icon, size = 'w-10 h-10' }: { icon: string; size?: string }) {
   return (
@@ -60,13 +71,21 @@ export default function SettingsPlugins({ t }: { t: (k: string) => string }) {
   const disabled = usePluginStore((s) => s.disabled);
   const origins = useMarketStore((s) => s.origins);
   const installedSkills = useSkillsStore((s) => s.installed);
+  const skillsLoaded = useSkillsStore((s) => s.loaded);
+  const loadSkills = useSkillsStore((s) => s.load);
   void custom; void disabled; void origins; void installedSkills;
+
+  useEffect(() => {
+    if (!skillsLoaded) void loadSkills();
+  }, [skillsLoaded, loadSkills]);
 
   const plugins = useMemo(() => selectPlugins(), [custom, disabled, origins, installedSkills]);
   const q = query.trim().toLowerCase();
   const matches = (p: PluginEntry) =>
-    !q || p.name.toLowerCase().includes(q) || p.description.toLowerCase().includes(q);
-  const installed = plugins.filter((p) => matches(p) && (chip === 'all' || p.kind === chip));
+    !q || pluginDisplayName(p, t).toLowerCase().includes(q) || pluginDisplayDesc(p, t).toLowerCase().includes(q);
+  const installed = plugins.filter(
+    (p) => matches(p) && (chip === 'all' || p.kind === chip) && p.skillInstalled !== false,
+  );
   // Hot = our six builtins, always present, two-column cards like the mock.
   const hot = plugins.filter((p) => p.kind === 'builtin' && matches(p));
 
@@ -162,10 +181,15 @@ export default function SettingsPlugins({ t }: { t: (k: string) => string }) {
                 <IconTile icon={p.icon} />
                 <span className="flex-1 min-w-0">
                   <span className="block text-[14px] font-medium text-[var(--text-primary)] truncate group-hover:text-[var(--accent)] transition-colors">
-                    {p.name}
+                    {pluginDisplayName(p, t)}
                   </span>
-                  <span className="block text-[12px] text-[var(--text-muted)] truncate">{p.description}</span>
+                  <span className="block text-[12px] text-[var(--text-muted)] truncate">{pluginDisplayDesc(p, t)}</span>
                 </span>
+                {p.skillInstalled && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--accent-soft)] text-[var(--accent)] font-medium shrink-0">
+                    {t('pluginInstalled')}
+                  </span>
+                )}
               </button>
             ))}
           </div>
@@ -200,8 +224,8 @@ function InstalledRow({ plugin: p, t, onOpen }: { plugin: PluginEntry; t: (k: st
     <div className="flex items-center gap-2.5 py-2.5 min-w-0">
       <IconTile icon={p.icon} size="w-9 h-9" />
       <div className="flex-1 min-w-0">
-        <p className="text-[14px] font-medium text-[var(--text-primary)] truncate">{p.name}</p>
-        <p className="text-[12px] text-[var(--text-muted)] truncate">{p.description}</p>
+        <p className="text-[14px] font-medium text-[var(--text-primary)] truncate">{pluginDisplayName(p, t)}</p>
+        <p className="text-[12px] text-[var(--text-muted)] truncate">{pluginDisplayDesc(p, t)}</p>
       </div>
       <span className={`text-[10px] px-1.5 py-0.5 rounded-md shrink-0 ${KIND_BADGE[p.kind]}`}>
         {t(`pluginChip_${p.kind}`)}
@@ -230,6 +254,12 @@ function InstalledRow({ plugin: p, t, onOpen }: { plugin: PluginEntry; t: (k: st
 }
 
 function DetailView({ id, t }: { id: string; t: (k: string) => string }) {
+  const custom = usePluginStore((s) => s.custom);
+  const disabled = usePluginStore((s) => s.disabled);
+  const origins = useMarketStore((s) => s.origins);
+  const installedSkills = useSkillsStore((s) => s.installed);
+  void custom; void disabled; void origins; void installedSkills;
+
   const plugins = selectPlugins();
   const p = plugins.find((x) => x.id === id);
   if (!p) return <p className="text-[13px] text-[var(--text-muted)]">{t('pluginEmpty')}</p>;
@@ -238,8 +268,8 @@ function DetailView({ id, t }: { id: string; t: (k: string) => string }) {
       <div className="flex items-center gap-2.5 mb-3">
         <IconTile icon={p.icon} />
         <div className="min-w-0">
-          <p className="text-[15px] font-semibold text-[var(--text-primary)]">{p.name}</p>
-          <p className="text-[12px] text-[var(--text-muted)]">{p.description}</p>
+          <p className="text-[15px] font-semibold text-[var(--text-primary)]">{pluginDisplayName(p, t)}</p>
+          <p className="text-[12px] text-[var(--text-muted)]">{pluginDisplayDesc(p, t)}</p>
         </div>
       </div>
       {p.view === 'sync' && <SyncView />}
@@ -267,7 +297,7 @@ function CreateView({ t, onDone }: { t: (k: string) => string; onDone: (id: stri
   const aiCreate = async () => {
     if (!model) return;
     toggleSettings();
-    await sendMessage(buildCreatePluginPrompt(), model.providerId, model.id);
+    await sendMessage(buildCreatePluginPrompt(t), model.providerId, model.id);
   };
 
   return (

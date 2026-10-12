@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { ProviderConfig, ProviderAdapter, SendMessageParams, ChatMessage, StreamChunk, AIModel } from '../../types';
 import { detectReasoningEfforts } from '../model/reasoningEfforts';
+import { DEFAULT_CONTEXT_TOKENS } from '../model/context';
 
 // Known reasoning/thinking-capable model families. Provider /models endpoints
 // almost never advertise a reasoning flag, so without these patterns every
@@ -298,6 +299,7 @@ export abstract class BaseAdapter implements ProviderAdapter {
     // Levels the model declares in its metadata; undefined (most /models
     // endpoints say nothing) leaves the UI showing the full ladder.
     const reasoningEfforts = capabilities.reasoningEfforts ?? detectReasoningEfforts(raw);
+    const pricing = capabilities.pricing ?? this.detectPricing(raw);
 
     return {
       id: modelId,
@@ -311,10 +313,29 @@ export abstract class BaseAdapter implements ProviderAdapter {
       supportsFunctionCalling: capabilities.supportsFunctionCalling ?? this.detectFunctionCalling(modelId, raw),
       supportsReasoning,
       ...(reasoningEfforts?.length ? { reasoningEfforts } : {}),
-      contextWindow: capabilities.contextWindow ?? detectedContextWindow ?? 128000,
+      contextWindow: capabilities.contextWindow ?? detectedContextWindow ?? DEFAULT_CONTEXT_TOKENS,
       maxOutputTokens: capabilities.maxOutputTokens ?? detectedMaxOutput ?? (supportsReasoning ? 128000 : 8192),
       enabled: true,
+      ...(pricing ? { pricing } : {}),
     };
+  }
+
+  /**
+   * Read per-1M-token USD pricing from provider metadata. OpenRouter reports
+   * per-token decimal strings (`pricing.prompt/completion`); most other
+   * /models endpoints say nothing, and then pricing stays unknown.
+   */
+  protected detectPricing(raw: any): { input: number; output: number } | undefined {
+    const p = raw?.pricing;
+    if (!p) return undefined;
+    const perToken = (v: any): number | undefined => {
+      const n = typeof v === 'string' ? parseFloat(v) : typeof v === 'number' ? v : NaN;
+      return Number.isFinite(n) && n >= 0 ? n : undefined;
+    };
+    const input = perToken(p.prompt ?? p.input);
+    const output = perToken(p.completion ?? p.output);
+    if (input == null || output == null) return undefined;
+    return { input: input * 1e6, output: output * 1e6 };
   }
 
   /**

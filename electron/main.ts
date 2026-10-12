@@ -136,7 +136,9 @@ function createShotOverlay(): void {
   shotOverlay.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   shotOverlay.setAlwaysOnTop(true, 'screen-saver');
   const distPath = path.join(__dirname, '../dist/index.html');
-  if (fs.existsSync(distPath)) {
+  if (process.env.VITE_DEV_SERVER_URL) {
+    void shotOverlay.loadURL(`${process.env.VITE_DEV_SERVER_URL}#screenshot`);
+  } else if (fs.existsSync(distPath)) {
     void shotOverlay.loadFile(distPath, { hash: 'screenshot' });
   } else {
     void shotOverlay.loadURL('http://localhost:5173/#screenshot');
@@ -581,7 +583,11 @@ function createWindow() {
   });
 
   const distPath = path.join(__dirname, '../dist/index.html');
-  if (fs.existsSync(distPath)) {
+  // vite-plugin-electron sets this in dev: the dev server always wins when it
+  // is up, otherwise a stale dist/ would shadow live source edits.
+  if (process.env.VITE_DEV_SERVER_URL) {
+    mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
+  } else if (fs.existsSync(distPath)) {
     mainWindow.loadFile(distPath);
   } else {
     mainWindow.loadURL('http://localhost:5173');
@@ -1222,6 +1228,15 @@ function registerIPC() {
     } catch {
       return false;
     }
+  });
+
+  // Renderer needs a user-visible folder for handoff files (drag out of the
+  // Finder). Allow-listed: no arbitrary path reads, just OS known folders.
+  ipcMain.handle('app:getPath', async (_, name: string) => {
+    if (!['downloads', 'temp', 'desktop', 'documents'].includes(name)) {
+      throw new Error('blocked path');
+    }
+    return app.getPath(name as 'downloads' | 'temp' | 'desktop' | 'documents');
   });
 
   ipcMain.handle('app:getSystemInfo', async () => {

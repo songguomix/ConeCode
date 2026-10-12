@@ -3,6 +3,7 @@ import {
   DEFAULT_THRESHOLDS,
   checkBreaches,
   describeBreach,
+  formatBytes,
   toSample,
   type BreachId,
   type PerfSample,
@@ -20,7 +21,34 @@ export interface MonitorAnomaly {
   id: string;
   t: number;
   breaches: BreachId[];
+  /** Frozen English evidence line (notification fallback, logs). */
   summary: string;
+  /** Raw numbers; the view renders labels in the current locale from these. */
+  sample: PerfSample;
+}
+
+/**
+ * Display-time rendering of an anomaly: metric labels follow the current
+ * locale, numbers stay raw. Call at render so a locale switch re-reads.
+ */
+export function formatAnomaly(
+  a: Pick<MonitorAnomaly, 'breaches' | 'sample' | 'summary'>,
+  t: (key: string) => string,
+): string {
+  if (!a.sample) return a.summary;
+  const th = DEFAULT_THRESHOLDS;
+  return a.breaches.map((id) => {
+    switch (id) {
+      case 'heap':
+        return `${t('monitorHeap')} ${formatBytes(a.sample.jsHeapBytes)} > ${formatBytes(th.maxHeapBytes)}`;
+      case 'mainRSS':
+        return `${t('monitorMain')} ${formatBytes(a.sample.mainRSSBytes)} > ${formatBytes(th.maxMainRSSBytes)}`;
+      case 'freeMem':
+        return `${t('monitorFree')} ${formatBytes(a.sample.freeMemBytes)} < ${formatBytes(th.minFreeMemBytes)}`;
+      case 'load':
+        return `${t('monitorLoad')} ${a.sample.loadPerCpu.toFixed(1)} > ${th.maxLoadPerCpu}`;
+    }
+  }).join('; ');
 }
 
 export interface MonitorError {
@@ -115,11 +143,14 @@ export const useMonitorStore = create<MonitorStore>((set, get) => ({
       t: Date.now(),
       breaches: confirmed,
       summary,
+      sample,
     };
     set((s) => ({ anomalies: [anomaly, ...s.anomalies].slice(0, ANOMALY_CAP) }));
     // Check-only monitor: record + notify. Diagnosis and any fix always go
     // through the perf-monitor skill on demand (any mode), never auto-run.
-    notifyAnomaly(summary);
+    // The notification reads in the locale active right now; the list view
+    // re-renders through formatAnomaly on every locale switch.
+    notifyAnomaly(formatAnomaly(anomaly, useLanguageStore.getState().t));
   },
 
   captureError: (message, source) => {

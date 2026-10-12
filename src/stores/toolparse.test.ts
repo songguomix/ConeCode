@@ -24,6 +24,9 @@ describe('extractFileActions', () => {
     expect(extractFileActions(fence({ action: 'mcp_call', server: 's', tool: 't' }))).toHaveLength(1);
     expect(extractFileActions(fence({ action: 'spawn_agent', task: 'go' }))).toHaveLength(1);
     expect(extractFileActions(fence({ action: 'download', url: 'https://example.com/a', path: '/tmp/a' }))).toHaveLength(1);
+    expect(extractFileActions(fence({ action: 'perf_snapshot' }))).toHaveLength(1);
+    expect(extractFileActions(fence({ action: 'perf_monitor' }))).toHaveLength(1);
+    expect(extractFileActions(fence({ action: 'perf_inspect' }))).toHaveLength(1);
   });
   it('parses multiple fenced actions in one message', () => {
     const c = fence({ action: 'list_dir', path: '/a' }) + '\nsome prose\n' + fence({ action: 'read_file', path: '/b' });
@@ -73,6 +76,8 @@ describe('normalizeBareJsonActions', () => {
     const out = normalizeBareJsonActions('{"action":"list_dir","path":"/x"}');
     expect(out).toContain('```json');
     expect(extractFileActions(out)).toHaveLength(1);
+    expect(normalizeBareJsonActions('{"action":"perf_snapshot"}')).toContain('```json');
+    expect(normalizeBareJsonActions('{"action":"perf_monitor"}')).toContain('```json');
   });
   it('does not double-wrap an already-fenced block', () => {
     const out = normalizeBareJsonActions(fence({ action: 'read_file', path: '/a' }));
@@ -156,6 +161,13 @@ describe('the computer tool survives the action-name collision', () => {
 
   it('ignores a computer block with no inner action rather than firing a blank one', () => {
     expect(extractFileActions(fence({ action: 'computer' }))).toEqual([]);
+  });
+
+  it('maps perf aliases to perf_snapshot', () => {
+    const a1 = unwrap(toolCallToAction({ name: 'perf_monitor', arguments: {} }));
+    expect(a1).toEqual({ action: 'perf_snapshot' });
+    const a2 = unwrap(toolCallToAction({ name: 'perf_inspect', arguments: {} }));
+    expect(a2).toEqual({ action: 'perf_snapshot' });
   });
 
   it('leaves every other tool mapping alone', () => {

@@ -9,10 +9,25 @@
 export interface MetricDelta {
   /** Stable metric id (e.g. "test.passRate", "typecheck.errors"). */
   id: string;
-  /** Signed improvement after the change; positive = better. */
+  /**
+   * Signed improvement in natural units; positive = better. NOT comparable
+   * across metrics until divided by `scale` — seconds, MB, and error counts
+   * must never share one tanh.
+   */
   delta: number;
   /** Relative weight in the composite metric term (default 1). */
   weight?: number;
+  /**
+   * Normalizer: what counts as "one unit" of improvement on this metric
+   * (e.g. 10 for seconds, 0.01 for a ratio). Default 1 (backward compatible).
+   */
+  scale?: number;
+  /**
+   * Hard floor in SCALED units: fall below and the candidate fails outright,
+   * no matter what else improved. This is how a no-regression metric
+   * (error count, failing tests) refuses to be bought off by a faster clock.
+   */
+  minDelta?: number;
 }
 
 export interface JudgeScores {
@@ -44,16 +59,20 @@ function clamp01(n: number): number {
 /**
  * Composite scalar reward in roughly [-2, 2].
  * externalPass is a hard gate: false → REWARD_FAIL regardless of judges.
+ * So is any hard-floor breach: a no-regression metric cannot be averaged away.
  */
 export function computeReward(r: EpisodeResult): number {
   if (!r.externalPass) return REWARD_FAIL;
+  if (breachesHardFloor(r).length > 0) return REWARD_FAIL;
 
   let metricTerm = 0;
   let weightSum = 0;
   for (const m of r.metrics) {
     const w = m.weight ?? 1;
-    // tanh-bounds a single metric so one huge delta cannot dominate forever.
-    metricTerm += w * Math.tanh(m.delta);
+    // tanh-bounds a single NORMALIZED metric so one huge delta cannot
+    // dominate forever. Normalization is per-metric: scale lives on the
+    // MetricDelta because only the metric owner knows its units.
+    metricTerm += w * Math.tanh(scaledDelta(m));
     weightSum += w;
   }
   const metricMean = weightSum > 0 ? metricTerm / weightSum : 0;
@@ -73,14 +92,34 @@ export function computeReward(r: EpisodeResult): number {
 /** Sentinel for a hard fail — never selected over a real score. */
 export const REWARD_FAIL = -999;
 
+/** delta in comparable units: raw improvement divided by the metric's scale. */
+export function scaledDelta(m: MetricDelta): number {
+  const scale = m.scale ?? 1;
+  return m.delta / Math.max(scale, 1e-9);
+}
+
+/** Ids of metrics sitting below their hard floor (no-regression violated). */
+export function breachesHardFloor(r: EpisodeResult): string[] {
+  return r.metrics
+    .filter((m) => m.minDelta != null && scaledDelta(m) < m.minDelta)
+    .map((m) => m.id);
+}
+
 export type SelectDecision =
   | { accept: true; reason: 'improves-best' | 'first-passing' }
-  | { accept: false; reason: 'external-fail' | 'not-better-than-best' | 'not-better-than-baseline' };
+  | { accept: false; reason: 'external-fail' | 'discipline-veto' | 'hard-floor-breach' | 'not-better-than-best' | 'not-better-than-baseline' };
 
 /**
  * Greedy policy improvement: accept only if the candidate is strictly better
  * than the incumbent (baseline at episode 0). RL-style hill-climb without
  * letting a lucky judge panel override the external gate.
+ *
+ * Two vetoes short-circuit before any reward comparison, and NEITHER can be
+ * averaged away:
+ * - external-fail: the oracle did not pass.
+ * - discipline-veto: ANY safety/blast-radius risk (discipline 0, NaN, or
+ *   missing). A 1.0 alignment plus a 1.0 simplicity still lose to a veto.
+ * - hard-floor-breach: a no-regression metric regressed.
  */
 export function selectCandidate(
   candidate: EpisodeResult,
@@ -90,6 +129,8 @@ export function selectCandidate(
   epsilon = 1e-3,
 ): SelectDecision {
   if (!candidate.externalPass) return { accept: false, reason: 'external-fail' };
+  if (clamp01(candidate.judges.discipline) <= 0) return { accept: false, reason: 'discipline-veto' };
+  if (breachesHardFloor(candidate).length > 0) return { accept: false, reason: 'hard-floor-breach' };
   const reward = computeReward(candidate);
   if (best == null) {
     if (reward > baseline.reward + epsilon) return { accept: true, reason: 'first-passing' };
@@ -97,6 +138,40 @@ export function selectCandidate(
   }
   if (reward > best.reward + epsilon) return { accept: true, reason: 'improves-best' };
   return { accept: false, reason: 'not-better-than-best' };
+}
+
+/**
+ * One decision covering all four fates, so the Pareto front actually steers
+ * the loop instead of sitting beside it:
+ * 1. hard violation (external fail, discipline veto, hard floor) → reject.
+ * 2. strictly better than best → replace the incumbent.
+ * 3. not better overall, but non-dominated vs the archive → keep as frontier.
+ * 4. dominated everywhere → reject.
+ */
+export type ArchiveVerdict =
+  | { action: 'replace-best'; reason: 'improves-best' | 'first-passing' }
+  | { action: 'retain-frontier'; reason: 'pareto-nondominated' }
+  | { action: 'reject'; reason: 'external-fail' | 'discipline-veto' | 'hard-floor-breach' | 'not-better-than-best' | 'not-better-than-baseline' };
+
+export function selectForArchive(
+  candidate: EpisodeResult,
+  candidateId: string,
+  best: { reward: number } | null,
+  baseline: { reward: number },
+  archive: ParetoCandidate[],
+  epsilon = 1e-3,
+): ArchiveVerdict {
+  const d = selectCandidate(candidate, best, baseline, epsilon);
+  if (d.accept) return { action: 'replace-best', reason: d.reason };
+  if (d.reason !== 'not-better-than-best' && d.reason !== 'not-better-than-baseline') {
+    return { action: 'reject', reason: d.reason };
+  }
+  const metrics: Record<string, number> = {};
+  for (const m of candidate.metrics) metrics[m.id] = scaledDelta(m);
+  const node: ParetoCandidate = { id: candidateId, metrics };
+  const dominated = archive.some((o) => o.id !== candidateId && dominates(o, node));
+  if (!dominated) return { action: 'retain-frontier', reason: 'pareto-nondominated' };
+  return { action: 'reject', reason: d.reason };
 }
 
 /**

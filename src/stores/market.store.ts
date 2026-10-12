@@ -52,6 +52,13 @@ interface MarketStore {
   hasLocalChanges: (skillId: string) => boolean;
   /** Push the local SKILL.md back to its repo (one click, fixed message). */
   pushSkill: (skillId: string) => Promise<boolean>;
+  /**
+   * Push every locally-modified skill back. Runs automatically at the end of
+   * a successful sync — fixed skills flow back to GitHub on their own.
+   * No token → no-op (never sets an error). A conflict stops that skill only;
+   * the baseline stays so the user can resolve it by hand.
+   */
+  autoPush: () => Promise<string[]>;
 }
 
 function loadOrigins(): Record<string, SkillOrigin> {
@@ -194,6 +201,7 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
         }
       }
       set({ syncing: false, remote: out, fetchedAt: Date.now(), error: out.length === 0 ? 'empty-repo' : null });
+      if (out.length > 0) await get().autoPush();
       return out.length > 0;
     } catch {
       set({ syncing: false, error: 'network-error' });
@@ -202,12 +210,10 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
   },
 
   installRemote: async (skill, scope) => {
-    const installed = useSkillsStore.getState().installed;
-    const existing = installed.find((s) => s.id === skill.id && s.scope === scope);
     const ok = await useSkillsStore.getState().saveCustom(
       { name: skill.name, description: skill.description, tags: ['market'], body: skill.body },
       scope,
-      existing ? skill.id : undefined,
+      skill.id,
     );
     if (ok) {
       // Baseline for one-click push-back: the exact bytes we wrote.
@@ -297,5 +303,19 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
       set({ pushing: null, error: 'network-error' });
       return false;
     }
+  },
+
+  autoPush: async () => {
+    if (!loadToken()) return [];
+    const pushed: string[] = [];
+    for (const id of Object.keys(get().origins)) {
+      if (!get().hasLocalChanges(id)) continue;
+      try {
+        if (await get().pushSkill(id)) pushed.push(id);
+      } catch {
+        continue;
+      }
+    }
+    return pushed;
   },
 }));

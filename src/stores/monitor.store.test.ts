@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { useMonitorStore } from './monitor.store';
+import { formatAnomaly, useMonitorStore } from './monitor.store';
+import { useLanguageStore } from './language.store';
 
 const MB = 1024 * 1024;
 
@@ -90,5 +91,23 @@ describe('monitor sampling', () => {
     expect(useMonitorStore.getState().errors).toHaveLength(1);
     cap('different', 'unhandledrejection');
     expect(useMonitorStore.getState().errors).toHaveLength(2);
+  });
+
+  it('renders anomalies in the active locale with raw numbers', () => {
+    const a = {
+      breaches: ['heap', 'load'] as const,
+      sample: { jsHeapBytes: 500 * MB, mainRSSBytes: null, freeMemBytes: 8 * 1024 * MB, loadPerCpu: 5.5 },
+      summary: 'renderer heap 500M > 400M; load/cpu 5.5 > 4',
+    };
+    useLanguageStore.setState({ locale: 'en' });
+    let t = useLanguageStore.getState().t;
+    expect(formatAnomaly(a as any, t)).toBe('JS heap 500M > 400M; Load / CPU 5.5 > 4');
+    useLanguageStore.setState({ locale: 'zh' });
+    t = useLanguageStore.getState().t;
+    expect(formatAnomaly(a as any, t)).toBe('JS 堆 500M > 400M; 负载 / CPU 5.5 > 4');
+    useLanguageStore.setState({ locale: 'ja' });
+    t = useLanguageStore.getState().t;
+    expect(formatAnomaly(a as any, t)).toContain('JSヒープ');
+    useLanguageStore.setState({ locale: 'zh' });
   });
 });

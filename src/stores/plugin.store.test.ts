@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BUILTIN_PLUGINS, buildCreatePluginPrompt, findBuiltinPlugin } from '../core/plugins/plugins';
 import { selectPlugins, usePluginStore } from './plugin.store';
+import { useLanguageStore } from './language.store';
 import { useMarketStore } from './market.store';
 import { useSkillsStore } from './skills.store';
 
@@ -35,9 +36,33 @@ describe('builtin catalog', () => {
   });
 
   it('scaffolds creation through the AI chat without mixing concerns', () => {
-    const prompt = buildCreatePluginPrompt();
+    useLanguageStore.setState({ locale: 'zh' });
+    const prompt = buildCreatePluginPrompt(useLanguageStore.getState().t);
     expect(prompt).toContain('SKILL.md');
     expect(prompt).toMatch(/插件是插件/);
+  });
+
+  it('renders the prompt in the active locale', () => {
+    useLanguageStore.setState({ locale: 'en' });
+    const t = useLanguageStore.getState().t;
+    expect(buildCreatePluginPrompt(t)).toMatch(/Plugins are plugins/);
+    useLanguageStore.setState({ locale: 'zh' });
+  });
+
+  it('covers every builtin with name/description keys in all locales', () => {
+    for (const loc of ['en', 'zh', 'zhHant', 'ja'] as const) {
+      useLanguageStore.setState({ locale: loc });
+      const t = useLanguageStore.getState().t;
+      for (const p of BUILTIN_PLUGINS) {
+        expect(t(`pluginName_${p.id}`), `${loc}/${p.id} name`).not.toBe(`pluginName_${p.id}`);
+        expect(t(`pluginDesc_${p.id}`), `${loc}/${p.id} desc`).not.toBe(`pluginDesc_${p.id}`);
+      }
+      for (const id of ['perf-monitor', 'security-review', 'todo-scan', 'commit-msg', 'repo-map']) {
+        expect(t(`pluginSkillName_${id}`), `${loc}/${id}`).not.toBe(`pluginSkillName_${id}`);
+        expect(t(`pluginSkillDesc_${id}`), `${loc}/${id}`).not.toBe(`pluginSkillDesc_${id}`);
+      }
+    }
+    useLanguageStore.setState({ locale: 'zh' });
   });
 });
 
@@ -66,6 +91,10 @@ describe('plugin registry', () => {
     expect(all.filter((p) => p.kind === 'builtin')).toHaveLength(6);
     expect(all.some((p) => p.id === 'market:alpha' && p.skillId === 'alpha')).toBe(true);
     expect(all.some((p) => p.kind === 'custom' && p.view === 'skill')).toBe(true);
+    expect(all.find((p) => p.id === 'github-sync')?.skillInstalled).toBe(true);
+    expect(all.find((p) => p.id === 'todo-scan')?.skillInstalled).toBe(false);
+    expect(all.find((p) => p.id === 'market:alpha')?.skillInstalled).toBe(true);
+    expect(all.find((p) => p.kind === 'custom')?.skillInstalled).toBe(true);
     // Disabling a plugin never touches the skill side.
     usePluginStore.getState().setEnabled('market:alpha', false);
     expect(selectPlugins().find((p) => p.id === 'market:alpha')?.enabled).toBe(false);

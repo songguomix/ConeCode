@@ -1,4 +1,4 @@
-import { useMonitorStore } from '../../stores/monitor.store';
+import { formatAnomaly, useMonitorStore } from '../../stores/monitor.store';
 import { useLanguageStore } from '../../stores';
 import { formatBytes } from '../../core/monitor/perf';
 
@@ -54,7 +54,7 @@ export default function PerfView() {
       {anomalies.slice(0, 5).map((a) => (
         <div key={a.id} className="mb-1.5 px-3 py-2 rounded-xl bg-[var(--error)]/10 text-[12px] text-[var(--text-secondary)]">
           <span className="text-[var(--text-muted)]">{timeAgo(a.t)} · </span>
-          {a.summary}
+          {formatAnomaly(a, t)}
         </div>
       ))}
 

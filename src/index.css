@@ -23,6 +23,17 @@
   --glass-border: rgba(0, 0, 0, 0.05);
   --font-mono: 'SF Mono', 'JetBrains Mono', 'Menlo', 'Cascadia Code', ui-monospace, monospace;
 
+  /* Opaque semantic background variables for cards (command approval, question prompt) */
+  --warning-bg: #FFF4E6;
+  --warning-border: #F0D8A8;
+  --warning-text: #8A5A00;
+  --error-bg: #FEF0F0;
+  --error-border: #F5C6C6;
+  --success-bg: #EAF7EF;
+  --success-border: #B8E5C8;
+  --accent-bg: #FDF2EF;
+  --accent-border: #F0D8D0;
+
   /* Syntax palette — warm light */
   --syntax-keyword: #9D4EDD;
   --syntax-string: #C96442;
@@ -53,6 +64,17 @@
   --warning: #D4993E;
   --glass: rgba(26, 25, 21, 0.82);
   --glass-border: rgba(255, 255, 255, 0.05);
+
+  /* Opaque semantic background variables for cards (command approval, question prompt) */
+  --warning-bg: #3D2F1A;
+  --warning-border: #5C4A2E;
+  --warning-text: #F5D48A;
+  --error-bg: #3D1A1A;
+  --error-border: #5C2E2E;
+  --success-bg: #1A3D2A;
+  --success-border: #2E5C4A;
+  --accent-bg: #3D261F;
+  --accent-border: #5C3D30;
 
   /* Syntax palette — warm dark */
   --syntax-keyword: #C9A0DC;
@@ -155,6 +177,11 @@ input, textarea, select, button { font-family: inherit; }
   to   { opacity: 1; transform: translate3d(0, 0, 0); }
 }
 
+@keyframes anim-slide-up {
+  from { opacity: 0; transform: translate3d(0, 16px, 0); }
+  to   { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
 @keyframes anim-fade-in {
   from { opacity: 0; }
   to   { opacity: 1; }
@@ -226,6 +253,12 @@ input, textarea, select, button { font-family: inherit; }
 /* Chat message mount (new bubble / conversation open). */
 .anim-message {
   animation: anim-message-in var(--dur-enter) var(--ease-emphasized) both;
+}
+
+/* Pinned cards (command approval, question prompt): stronger slide-up entrance. */
+.anim-slide-up {
+  animation: anim-slide-up var(--dur-enter) var(--ease-spring) both;
+  will-change: opacity, transform;
 }
 
 /* Streaming caret — opacity-only blink. */
@@ -369,6 +402,7 @@ input, textarea, select, button { font-family: inherit; }
   .anim-scrim,
   .anim-menu,
   .anim-message,
+  .anim-slide-up,
   .anim-caret,
   .anim-shimmer,
   .anim-pop,
@@ -386,7 +420,7 @@ input, textarea, select, button { font-family: inherit; }
   .effort-thumb, .effort-fill { transition: none !important; }
   .effort-thumb.dragging { transform: none !important; }
   .effort-fill::after { animation: none !important; }
-  .anim-modal, .anim-menu, .anim-scrim, .anim-message {
+  .anim-modal, .anim-menu, .anim-scrim, .anim-message, .anim-slide-up {
     opacity: 1 !important;
     transform: none !important;
   }

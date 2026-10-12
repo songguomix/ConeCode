@@ -2,6 +2,7 @@ import { memo, useState, useRef, useEffect } from 'react';
 import type { Message } from '../../types';
 import { FiCopy, FiCheck, FiRotateCcw, FiChevronDown, FiChevronRight, FiHelpCircle, FiClock, FiZap } from 'react-icons/fi';
 import { useChatStore, useModelStore, useLanguageStore, useSettingsStore } from '../../stores';
+import { formatCount, formatUSD, messageCost } from '../../core/pricing/cost';
 import MessageContent from './MessageContent';
 
 /**
@@ -41,6 +42,12 @@ function MessageBubble({
   const compositionEndAtRef = useRef(0);
   const getSelectedModel = useModelStore((s) => s.getSelectedModel);
   const { t } = useLanguageStore();
+  // Cost needs live pricing (models load after mount), so subscribe — the
+  // memo still holds because models rarely change identity.
+  const pricing = useModelStore((s) =>
+    message.providerId ? s.models.get(message.providerId)?.find((m) => m.id === message.modelId)?.pricing : undefined,
+  );
+  const cost = messageCost(message.promptTokens, message.completionTokens, pricing);
 
   useEffect(() => {
     if (!editing) return;
@@ -211,8 +218,13 @@ function MessageBubble({
                   {message.thinkingTime != null && (
                     <span className="flex items-center gap-1"><FiClock size={11} />{formatThinkingTime(message.thinkingTime)}</span>
                   )}
-                  {message.tokensUsed != null && (
+                  {message.tokensUsed != null && cost == null && (
                     <span className="flex items-center gap-1"><FiZap size={11} />{message.tokensUsed} {t('tokens')}</span>
+                  )}
+                  {cost != null && (
+                    <span className="flex items-center gap-1" title={`${message.promptTokens} ${t('costTokensIn')} · ${message.completionTokens} ${t('costTokensOut')}`}>
+                      <FiZap size={11} />{formatCount(message.promptTokens!)} {t('costTokensIn')} · {formatCount(message.completionTokens!)} {t('costTokensOut')} · {formatUSD(cost)}
+                    </span>
                   )}
                 </div>
               )}

@@ -87,6 +87,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   app: {
     open: (appName: string) => ipcRenderer.invoke('app:open', appName),
     openPath: (path: string) => ipcRenderer.invoke('app:openPath', path),
+    getPath: (name: string) => ipcRenderer.invoke('app:getPath', name),
     getSystemInfo: () => ipcRenderer.invoke('app:getSystemInfo'),
     getAppMetrics: () => ipcRenderer.invoke('app:getAppMetrics'),
   },

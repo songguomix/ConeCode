@@ -1,9 +1,10 @@
 import { useRef, useState, useEffect } from 'react';
 import { FiMenu } from 'react-icons/fi';
-import { useUIStore, useWorkspaceStore, useLanguageStore } from '../../stores';
+import { useUIStore, useWorkspaceStore, useLanguageStore, useChatStore } from '../../stores';
 import { useScreenshotStore } from '../../stores/screenshot.store';
 import Sidebar from './Sidebar';
 import ChatView from '../chat/ChatView';
+import RsiView from '../rsi/RsiView';
 import EditorPanel from '../editor/EditorPanel';
 import PreviewPanel from '../preview/PreviewPanel';
 import SettingsModal from '../provider/SettingsModal';
@@ -38,6 +39,9 @@ export default function AppShell() {
   const setPreviewWidthPx = useUIStore((s) => s.setPreviewWidthPx);
   const terminalHeightPx = useUIStore((s) => s.terminalHeightPx);
   const setTerminalHeightPx = useUIStore((s) => s.setTerminalHeightPx);
+  // RSI owns the center column while its mode is armed: no transcript, no
+  // composer — a dedicated console instead of the chat.
+  const agentMode = useChatStore((s) => s.agentMode);
   const shotOpen = useScreenshotStore((s) => s.open);
   const selectedFile = useWorkspaceStore((s) => s.selectedFile);
   const { t } = useLanguageStore();
@@ -172,7 +176,7 @@ export default function AppShell() {
               {/* Slim window-drag strip: the chat column has no tab bar, so
                   without this the window can only be moved from the far left. */}
               <div className="h-7 shrink-0" style={{ WebkitAppRegion: 'drag' } as any} />
-              <ChatView />
+              {agentMode === 'rsi' ? <RsiView /> : <ChatView />}
             </div>
             {/* Browser / project preview docks on the right of the chat. */}
             {previewDockOpen && (

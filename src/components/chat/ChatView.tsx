@@ -6,13 +6,15 @@ import ChatInput from './ChatInput';
 import MessageBubble from './MessageBubble';
 import MessageContent from './MessageContent';
 import MessageChanges from './InlineChanges';
-import CommandApprovalModal from './CommandApprovalModal';
+import CommandApprovalCard from './CommandApprovalCard';
+import QuestionPromptCard from './QuestionPromptCard';
 import TodoList from './TodoList';
 import DiffStatPill from './DiffStatPill';
 import GoalProgressRow from './GoalProgressRow';
 import { useInstallGateStore, activeInstallLabel, isHolding } from '../../stores/installGate.store';
 import AgentHome from '../home/AgentHome';
 import { commandsForConversation } from './approvalPresentation';
+import { formatUSD, messageCost } from '../../core/pricing/cost';
 
 export default function ChatView() {
   const rawMessages = useChatStore((s) => s.messages);
@@ -53,6 +55,20 @@ export default function ChatView() {
       ? new Set<string>()
       : new Set(messages.slice(0, lastSummaryIdx).map((m) => m.id));
   }, [messages]);
+  const modelTable = useModelStore((s) => s.models);
+  // Running conversation cost: only turns with split counts AND known live
+  // pricing count in — anything else renders nothing, never a guess.
+  const convCost = useMemo(() => {
+    let total = 0;
+    let known = false;
+    for (const m of messages) {
+      if (m.role !== 'assistant') continue;
+      const pricing = m.providerId ? modelTable.get(m.providerId)?.find((x) => x.id === m.modelId)?.pricing : undefined;
+      const c = messageCost(m.promptTokens, m.completionTokens, pricing);
+      if (c != null) { total += c; known = true; }
+    }
+    return known ? total : null;
+  }, [messages, modelTable]);
   // A folded message whose approval card is still unresolved must stay visible:
   // hiding it left the agent waiting on an approval the user could not reach.
   const changes = useCodeChangesStore((s) => s.changes);
@@ -76,6 +92,18 @@ export default function ChatView() {
     .join(',');
   const reviewCommand = conversationCommands.find((change) => change.id === reviewCommandId) || null;
 
+  // Find the latest unanswered question message for the question prompt card
+  // A question is "unanswered" if it's the most recent question in the conversation
+  // and there is no user reply after it in chronological order.
+  const latestQuestionMessage = useMemo(() => {
+    const lastQuestionIndex = rawMessages.map((m) => !!m.isQuestion).lastIndexOf(true);
+    if (lastQuestionIndex === -1) return null;
+    const msg = rawMessages[lastQuestionIndex];
+    const hasUserReply = rawMessages.slice(lastQuestionIndex + 1).some((m) => m.role === 'user' && !m.isToolResult);
+    if (!hasUserReply) return msg;
+    return null;
+  }, [rawMessages]);
+
   // Auto-open only when the pending queue changes. Closing a still-pending
   // dialog leaves it closed until the user clicks its compact transcript row.
   useEffect(() => {
@@ -84,17 +112,19 @@ export default function ChatView() {
     lastPendingCommandsRef.current = scopedSignature;
 
     // Full-auto commands execute immediately. The change briefly enters the
-    // pending store state before autoApply marks it applied, so opening a modal
-    // here would flash an approval dialog for an action already being executed.
+    // pending store state before autoApply marks it applied, so opening a card
+    // here would flash an approval card for an action already being executed.
     if (approvalMode === 'fullAuto') {
       if (reviewCommand) setReviewCommandId(null);
       return;
     }
 
     const firstPending = conversationCommands.find((change) => change.status === 'pending');
-    const selectedStillPending = reviewCommand?.status === 'pending';
-    if (firstPending && !selectedStillPending) setReviewCommandId(firstPending.id);
-    else if (!firstPending && !reviewCommand) setReviewCommandId(null);
+    if (firstPending && !reviewCommand) {
+      setReviewCommandId(firstPending.id);
+    } else if (!firstPending && reviewCommand?.status === 'pending') {
+      setReviewCommandId(null);
+    }
   }, [activeConversationId, pendingCommandSignature, conversationCommands, reviewCommand, approvalMode]);
 
   const checkNearBottom = () => {
@@ -229,6 +259,12 @@ export default function ChatView() {
           );
         })}
 
+        {convCost != null && (
+          <div className="mt-4 text-center text-[11px] text-[var(--text-muted)]">
+            {t('convCostTotal')} {formatUSD(convCost)}
+          </div>
+        )}
+
         {/* opencode-style queue: typed mid-run, sent when this turn ends. */}
         {queued.map((q) => (
           <div key={q.id} className="mt-3 ml-auto max-w-[85%] min-w-0">
@@ -299,13 +335,44 @@ export default function ChatView() {
 
       <DiffStatPill />
 
+      {/* Pinned Command Approval Card - appears above ChatInput when reviewing a command */}
+      {reviewCommand && approvalMode !== 'fullAuto' && (
+        <div className="max-w-[900px] mx-auto w-full px-4 mb-2">
+          <CommandApprovalCard
+            key={reviewCommand.id}
+            change={reviewCommand}
+            onClose={() => setReviewCommandId(null)}
+            onComplete={() => {
+              const nextPending = conversationCommands.find(
+                (c) => c.status === 'pending' && c.id !== reviewCommand.id,
+              );
+              setReviewCommandId(nextPending ? nextPending.id : null);
+            }}
+            pendingIndex={
+              reviewCommand.status === 'pending'
+                ? conversationCommands
+                    .filter((c) => c.status === 'pending')
+                    .findIndex((c) => c.id === reviewCommand.id)
+                : undefined
+            }
+            totalPending={conversationCommands.filter((c) => c.status === 'pending').length}
+          />
+        </div>
+      )}
+
+      {/* Pinned Question Prompt Card - appears above ChatInput when there's an unanswered question */}
+      {latestQuestionMessage && (
+        <div className="max-w-[900px] mx-auto w-full px-4 mb-2">
+          <QuestionPromptCard
+            key={latestQuestionMessage.id}
+            message={latestQuestionMessage}
+          />
+        </div>
+      )}
+
       <div hidden={isEditing}>
         <ChatInput />
       </div>
-
-      {reviewCommand && approvalMode !== 'fullAuto' && (
-        <CommandApprovalModal key={reviewCommand.id} change={reviewCommand} onClose={() => setReviewCommandId(null)} />
-      )}
     </div>
   );
 }

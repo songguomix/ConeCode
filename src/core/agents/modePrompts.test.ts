@@ -76,6 +76,9 @@ describe('RSI_MODE_PROMPT is anchored recursive self-improvement + RL', () => {
     expect(RSI_MODE_PROMPT).toContain('"external": true');
     expect(RSI_MODE_PROMPT).toContain('blastRadius');
     expect(RSI_MODE_PROMPT).toContain('editBudget');
+    expect(RSI_MODE_PROMPT).toContain('costBudgetUsd');
+    expect(RSI_MODE_PROMPT).toContain('cost_snapshot');
+    expect(RSI_MODE_PROMPT).toMatch(/Cost lock/i);
     expect(RSI_MODE_PROMPT).toContain('reusable');
     expect(RSI_MODE_PROMPT).toMatch(/before mutating/i);
     expect(RSI_MODE_PROMPT).toMatch(/Hard gate/);
@@ -198,6 +201,10 @@ describe('RSI_MODE_PROMPT second-wave upgrades (DGM/AlphaEvolve/AZ/SEAL/GEPA)', 
     expect(RSI_MODE_PROMPT).toMatch(/EVOLVE-BLOCK/);
     expect(RSI_MODE_PROMPT).toMatch(/cheapest first/);
     expect(RSI_MODE_PROMPT).toMatch(/stopping at the first failure/i);
+    expect(RSI_MODE_PROMPT).toContain('perf_snapshot');
+    expect(RSI_MODE_PROMPT).toMatch(/性能巡检/);
+    expect(RSI_MODE_PROMPT).toMatch(/基本性能/);
+    expect(RSI_MODE_PROMPT).toMatch(/做好了一版本新软件/);
   });
 
   it('keeps a lessons file and prefers learnable directions (Reflexion/Absolute Zero)', () => {

@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
-import { FiSquare, FiPaperclip, FiX, FiFile, FiArrowUp, FiPlus, FiTarget, FiList, FiLayers, FiZap, FiTool, FiChevronRight, FiCamera, FiClock } from 'react-icons/fi';
+import { FiSquare, FiPaperclip, FiX, FiFile, FiArrowUp, FiPlus, FiTool, FiChevronRight, FiCamera, FiClock } from 'react-icons/fi';
 import { AGENT_MODES, type AgentMode } from '../../core/agents/modePrompts';
 import { useMemoryStore, useChatStore, useModelStore, useLanguageStore, useWorkspaceStore, useSettingsStore, useUIStore, useGoalStore, useSkillsStore } from '../../stores';
 import { useScreenshotStore } from '../../stores/screenshot.store';
@@ -580,31 +580,6 @@ export default function ChatInput() {
                       <span className="flex-1 text-left">{t('backgroundSend')}</span>
                     </button>
                     <div className="my-1 border-t border-[var(--border)]" />
-                    <div className="px-3 pb-1 text-[10px] uppercase tracking-wider text-[var(--text-muted)]">
-                      {t('modeMenu')}
-                    </div>
-                    {([
-                      // Standard is the default working mode.
-                      { key: 'std', label: t('agentModeStandard'), icon: <FiLayers size={14} />, mode: 'standard' as AgentMode },
-                      { key: 'task', label: t('modeTask'), icon: <FiTarget size={14} />, mode: 'goal' as AgentMode },
-                      { key: 'orch', label: t('modeOrchestrate'), icon: <FiList size={14} />, mode: 'orchestrate' as AgentMode },
-                      { key: 'rsi', label: t('modeRsi'), icon: <FiZap size={14} />, mode: 'rsi' as AgentMode },
-                    ] as const).map((item) => (
-                      <button
-                        key={item.key}
-                        onClick={() => { setAgentMode(item.mode); setPlusOpen(false); }}
-                        className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-[13px] transition-colors ${
-                          agentMode === item.mode
-                            ? 'text-[var(--accent)] bg-[var(--accent-soft)]'
-                            : 'text-[var(--text-secondary)] hover:bg-[var(--bg-3)]'
-                        }`}
-                      >
-                        {item.icon}
-                        <span className="flex-1 text-left">{item.label}</span>
-                        {agentMode === item.mode && <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)]" />}
-                      </button>
-                    ))}
-                    <div className="my-1 border-t border-[var(--border)]" />
                     {/* One row → popup with the full skill list. */}
                     <button
                       onClick={() => setSkillPickerOpen((v) => !v)}
@@ -676,7 +651,7 @@ export default function ChatInput() {
                 isStreaming
                   ? t('queueHint')
                   : agentMode !== 'standard'
-                    ? `${t(agentMode === 'goal' ? 'modeTask' : agentMode === 'orchestrate' ? 'modeOrchestrate' : agentMode === 'rsi' ? 'modeRsi' : 'agentModeStandard')} · ${t('typeMessage')}`
+                    ? `${t(agentMode === 'goal' ? 'agentModeGoal' : agentMode === 'orchestrate' ? 'modeOrchestrate' : agentMode === 'rsi' ? 'modeRsi' : 'agentModeStandard')} · ${t('typeMessage')}`
                     : t('typeMessage')
               }
               rows={1}

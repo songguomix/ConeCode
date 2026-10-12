@@ -212,6 +212,7 @@ describe('the built-in library', () => {
     // Check-only: report with evidence, no fixing without being asked.
     expect(skill!.body).toMatch(/只检查、不修/);
     expect(skill!.body).toMatch(/不要直接改代码/);
+    expect(skill!.body).toMatch(/做好了一版本新软件/);
   });
 
   it('ships read-only project plugins: todo-scan, commit-msg, repo-map', () => {

@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useMemo } from 'react';
 import { useChatStore, useModelStore, useWorkspaceStore, useSettingsStore, useLanguageStore } from '../../stores';
 import { contextMessagesForUsage } from '../../stores/chat.store';
 import { estimateTokens, SYSTEM_PROMPT_TOKENS } from '../../core/tokens';
+import { effectiveContextWindow } from '../../core/model/context';
 
 // Donut geometry. Drawn in a 36x36 viewBox, rendered small in the control bar.
 const RADIUS = 15;
@@ -74,7 +75,8 @@ export default function ContextMeter() {
 
   const convoTokens = messageTokens + liveTokens;
   const used = convoTokens + fileTokens + SYSTEM_PROMPT_TOKENS;
-  const window = selectedModel?.contextWindow ?? 0;
+  const fullContext = useSettingsStore((s) => s.fullContext);
+  const window = effectiveContextWindow(selectedModel?.contextWindow, fullContext);
   const pct = window > 0 ? Math.min(used / window, 1) : 0;
   const remaining = Math.max(0, window - used);
   const remainingPct = window > 0 ? Math.round((1 - pct) * 100) : 0;

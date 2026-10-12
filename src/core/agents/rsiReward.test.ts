@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  REWARD_FAIL, computeReward, isConverged, selectCandidate,
-  dominates, paretoFront, bestOnEachMetric, combineJudgePanels,
+  REWARD_FAIL, breachesHardFloor, computeReward, isConverged, scaledDelta, selectCandidate,
+  selectForArchive, dominates, paretoFront, bestOnEachMetric, combineJudgePanels,
   type EpisodeResult, type JudgeScores,
 } from './rsiReward';
 
@@ -43,6 +43,28 @@ describe('computeReward', () => {
     const fat = computeReward(episode({ filesTouched: 20, linesChanged: 2000 }));
     expect(lean).toBeGreaterThan(fat);
   });
+
+  it('normalizes deltas by scale: seconds and error counts stop sharing one tanh', () => {
+    // 10 seconds on a scale-10 metric == 0.01 on a scale-0.01 metric.
+    const seconds = computeReward(episode({ metrics: [{ id: 'time', delta: 10, scale: 10 }] }));
+    const ratio = computeReward(episode({ metrics: [{ id: 'rate', delta: 0.01, scale: 0.01 }] }));
+    expect(seconds).toBeCloseTo(ratio, 10);
+    // Same raw delta, different units → different rewards.
+    const raw = computeReward(episode({ metrics: [{ id: 'x', delta: 10 }] }));
+    expect(seconds).not.toBeCloseTo(raw, 2);
+  });
+
+  it('hard-fails a no-regression breach no matter what else improved', () => {
+    const bad = episode({
+      metrics: [
+        { id: 'errors', delta: -5, minDelta: 0 },
+        { id: 'speed', delta: 100, scale: 10 },
+      ],
+    });
+    expect(breachesHardFloor(bad)).toEqual(['errors']);
+    expect(computeReward(bad)).toBe(REWARD_FAIL);
+    expect(scaledDelta({ id: 'x', delta: 10, scale: 4 })).toBe(2.5);
+  });
 });
 
 describe('selectCandidate', () => {
@@ -76,6 +98,84 @@ describe('selectCandidate', () => {
     });
     const d = selectCandidate(stronger, best, baseline);
     expect(d).toMatchObject({ accept: true, reason: 'improves-best' });
+  });
+
+  it('vetoes on discipline 0 even with perfect other scores', () => {
+    const risky = episode({
+      metrics: [{ id: 'm', delta: 5 }],
+      judges: { alignment: 1, simplicity: 1, discipline: 0 },
+    });
+    // Positive composite reward — but the veto fires before any comparison.
+    expect(computeReward(risky)).toBeGreaterThan(0);
+    expect(selectCandidate(risky, null, baseline)).toEqual({ accept: false, reason: 'discipline-veto' });
+    expect(selectCandidate(risky, { reward: -100 }, baseline)).toEqual({ accept: false, reason: 'discipline-veto' });
+  });
+
+  it('fails closed on NaN or missing discipline', () => {
+    const nan = episode({ judges: { alignment: 1, simplicity: 1, discipline: NaN } });
+    expect(selectCandidate(nan, null, baseline)).toEqual({ accept: false, reason: 'discipline-veto' });
+  });
+
+  it('rejects hard-floor breaches with their own reason', () => {
+    const bad = episode({ metrics: [{ id: 'errors', delta: -1, minDelta: 0 }] });
+    expect(selectCandidate(bad, null, baseline)).toEqual({ accept: false, reason: 'hard-floor-breach' });
+  });
+
+  it('a vetoed panel combination cannot sneak through selection', () => {
+    const combined = combineJudgePanels([
+      { alignment: 1, simplicity: 1, discipline: 1 },
+      { alignment: 1, simplicity: 1, discipline: 0 },
+    ]);
+    const d = selectCandidate(episode({ metrics: [{ id: 'm', delta: 2 }], judges: combined }), null, baseline);
+    expect(d).toEqual({ accept: false, reason: 'discipline-veto' });
+  });
+});
+
+describe('selectForArchive (one decision, four fates)', () => {
+  const baseline = { reward: 0 };
+
+  it('replaces best when strictly better', () => {
+    const v = selectForArchive(
+      { ...episode({ metrics: [{ id: 'm', delta: 0.9 }] }), externalPass: true },
+      'c1', null, baseline, [],
+    );
+    expect(v).toEqual({ action: 'replace-best', reason: 'first-passing' });
+  });
+
+  it('retains a pareto-nondominated candidate that trails overall', () => {
+    // Archive leads on speed; candidate is slower overall but best on memory.
+    const archive = [{ id: 'fast', metrics: { speed: 0.9, mem: 0.0 } }];
+    const best = { reward: 5 };
+    const candidate = episode({
+      metrics: [
+        { id: 'speed', delta: 0.1 },
+        { id: 'mem', delta: 0.8 },
+      ],
+    });
+    const v = selectForArchive(candidate, 'lean', best, baseline, archive);
+    expect(v).toEqual({ action: 'retain-frontier', reason: 'pareto-nondominated' });
+  });
+
+  it('rejects vetoes without consulting the archive', () => {
+    const vetoed = episode({ judges: { alignment: 1, simplicity: 1, discipline: 0 } });
+    expect(selectForArchive(vetoed, 'bad', null, baseline, []).action).toBe('reject');
+    const failed = episode({ externalPass: false });
+    expect(selectForArchive(failed, 'red', null, baseline, [])).toEqual({
+      action: 'reject', reason: 'external-fail',
+    });
+  });
+
+  it('rejects dominated candidates everywhere', () => {
+    const archive = [{ id: 'fast', metrics: { speed: 0.9, mem: 0.8 } }];
+    const best = { reward: 5 };
+    const weak = episode({
+      metrics: [
+        { id: 'speed', delta: 0.1 },
+        { id: 'mem', delta: 0.1 },
+      ],
+    });
+    const v = selectForArchive(weak, 'mid', best, baseline, archive);
+    expect(v.action).toBe('reject');
   });
 });
 

@@ -18,6 +18,12 @@ export interface AIModel {
   contextWindow: number;
   maxOutputTokens: number;
   enabled: boolean;
+  /**
+   * USD per 1M tokens, read live from providers that expose it (OpenRouter
+   * `pricing`). Absent = unknown — the UI shows nothing rather than a
+   * stale hardcoded number.
+   */
+  pricing?: { input: number; output: number };
   userEnabledReasoning?: boolean;
   // The API-derived / auto-detected limits, preserved so a manual override can
   // be reset back to "auto". Only set once the model has passed through the

@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   FiRefreshCw, FiFolder, FiGitBranch, FiArrowRight, FiZap,
-  FiAlertCircle, FiTool, FiFileText, FiCheckSquare, FiPackage, FiPlay,
+  FiAlertCircle, FiTool, FiFileText, FiCheckSquare, FiPackage,
 } from 'react-icons/fi';
 import {
   useAgendaStore, useChatStore, useLanguageStore, useModelStore, useWorkspaceStore,
 } from '../../stores';
-import { type SuggestedTask, type TaskKind, buildLocalTasks } from '../../core/agenda/agenda';
+import { type SuggestedTask, type TaskKind } from '../../core/agenda/agenda';
 import ProjectIdeas from './ProjectIdeas';
 import ProjectBriefComposer from './ProjectBriefComposer';
 
@@ -77,9 +77,6 @@ export default function AgentHome() {
     void scanWorkspace();
   }, [rootPath, scanWorkspace, loadCached]);
 
-  // Deterministic one-click tasks from the free scan — no tokens involved.
-  const localTasks = useMemo(() => (scan ? buildLocalTasks(scan, t) : []), [scan, t]);
-
   const start = async (prompt: string) => {
     if (!model) return;
     await sendMessage(prompt, model.providerId, model.id);
@@ -124,33 +121,6 @@ export default function AgentHome() {
       )}
 
       <ProjectBriefComposer />
-
-      {/* ---- One click to start: local tasks + scripts, no tokens ---- */}
-      {rootPath && (localTasks.length > 0 || (scan && scan.scripts.length > 0) || (scanning && !scan)) && (
-        <section className="mb-5 min-w-0">
-          <h2 className="text-sm font-semibold text-[var(--text-primary)] truncate mb-3">{t('homeQuickTasks')}</h2>
-          {scanning && !scan ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-              {[0, 1].map((i) => <SkeletonCard key={i} />)}
-            </div>
-          ) : (
-            <>
-              {localTasks.length > 0 && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 mb-2.5">
-                  {localTasks.map((task) => <TaskCard key={task.id} task={task} onStart={() => start(task.prompt)} t={t} />)}
-                </div>
-              )}
-              {scan && scan.scripts.length > 0 && (
-                <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-2)] divide-y divide-[var(--border)] overflow-hidden">
-                  {scan.scripts.map((s) => (
-                    <ScriptRow key={s} name={s} rootPath={scan.rootPath} t={t} />
-                  ))}
-                </div>
-              )}
-            </>
-          )}
-        </section>
-      )}
 
       {/* ---- The main event: work the agent found ---- */}
       <section className="mb-5 min-w-0">
@@ -260,57 +230,8 @@ function TaskCard({ task, onStart, t }: { task: SuggestedTask; onStart: () => vo
 }
 
 /**
- * One npm script as one click: runs it in the project root via exec and shows
- * the tail inline. Finite commands (test/lint/build) belong here; a `dev`
- * server gets killed by the exec timeout with an explanatory note, by design.
+ * Skeleton while suggestions load.
  */
-function ScriptRow({ name, rootPath, t }: { name: string; rootPath: string; t: (k: string) => string }) {
-  const [run, setRun] = useState<{ state: 'idle' } | { state: 'running' } | { state: 'done'; ok: boolean; output: string }>(
-    { state: 'idle' },
-  );
-
-  const start = async () => {
-    if (run.state === 'running') return;
-    setRun({ state: 'running' });
-    try {
-      const res = await (window as any).electronAPI?.exec?.run?.(`npm run "${name}"`, rootPath);
-      const text = `${res?.stdout || ''}\n${res?.stderr || ''}`.trim().split('\n').slice(-20).join('\n');
-      setRun({ state: 'done', ok: !!res?.success, output: text || `(exit ${res?.exitCode ?? '?'})` });
-    } catch (e: any) {
-      setRun({ state: 'done', ok: false, output: e?.message || String(e) });
-    }
-  };
-
-  return (
-    <div className="px-4 py-2.5 min-w-0">
-      <div className="flex items-center gap-2 min-w-0">
-        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-          run.state === 'done' ? (run.ok ? 'bg-[var(--success)]' : 'bg-[var(--error)]') : 'bg-[var(--border)]'
-        }`} />
-        <code className="flex-1 min-w-0 truncate text-xs text-[var(--text-secondary)]">npm run {name}</code>
-        {run.state === 'done' && (
-          <span className={`text-[11px] shrink-0 ${run.ok ? 'text-[var(--success)]' : 'text-[var(--error)]'}`}>
-            {run.ok ? t('homePassed') : t('homeFailed')}
-          </span>
-        )}
-        <button
-          onClick={() => void start()}
-          disabled={run.state === 'running'}
-          className="shrink-0 inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium bg-[var(--bg-3)] text-[var(--text-secondary)] hover:text-[var(--accent)] hover:border-[var(--accent)] border border-transparent transition-colors disabled:opacity-50"
-        >
-          <FiPlay size={10} className={run.state === 'running' ? 'animate-pulse' : ''} />
-          {run.state === 'running' ? t('homeRunning') : t('homeRun')}
-        </button>
-      </div>
-      {run.state === 'done' && run.output && (
-        <pre className="mt-1.5 max-h-40 overflow-auto rounded-lg bg-[var(--bg-1)] p-2 text-[11px] leading-relaxed text-[var(--text-secondary)] whitespace-pre-wrap break-words">
-          {run.output}
-        </pre>
-      )}
-    </div>
-  );
-}
-
 function SkeletonCard() {  return (
     <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-2)] p-3 anim-shimmer">
       <div className="flex items-center gap-2">

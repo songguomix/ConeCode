@@ -2,7 +2,9 @@ import { useState, useRef, useEffect, useMemo } from 'react';
 import { FiChevronDown, FiSearch, FiStar, FiSun, FiMoon, FiRefreshCw, FiCpu, FiSliders } from 'react-icons/fi';
 import { useModelStore, useProviderStore, useUIStore, useLanguageStore, useThemeStore, useChatStore } from '../../stores';
 import { modelLimitKey } from '../../stores/model.store';
+import { formatPrice } from '../../core/pricing/cost';
 import ThinkingSlider from './ThinkingSlider';
+import ModeSwitch from './ModeSwitch';
 import ContextMeter from './ContextMeter';
 import type { AIModel } from '../../types';
 
@@ -42,6 +44,8 @@ export default function ModelSelector() {
   const { resolved, toggle: toggleTheme } = useThemeStore();
   const reasoningEffort = useChatStore((s) => s.reasoningEffort);
   const setReasoningEffort = useChatStore((s) => s.setReasoningEffort);
+  const agentMode = useChatStore((s) => s.agentMode);
+  const setAgentMode = useChatStore((s) => s.setAgentMode);
 
   const selectedModel = useModelStore((s) => s.getSelectedModel());
   const showThinking = selectedModel?.supportsReasoning || selectedModel?.userEnabledReasoning || false;
@@ -109,12 +113,6 @@ export default function ModelSelector() {
     if (m.supportsFunctionCalling) caps.push('functionCalling');
     if (m.supportsReasoning) caps.push('reasoning');
     return caps;
-  };
-
-  const formatLimit = (value: number) => {
-    if (value >= 1_000_000) return `${(value / 1_000_000).toLocaleString(undefined, { maximumFractionDigits: 1 })}M`;
-    if (value >= 1_000) return `${(value / 1_000).toLocaleString(undefined, { maximumFractionDigits: 1 })}K`;
-    return value.toLocaleString();
   };
 
   const openLimitEditor = (model: AIModel) => {
@@ -199,6 +197,8 @@ export default function ModelSelector() {
           />
         )}
 
+        <ModeSwitch value={agentMode} onChange={setAgentMode} />
+
         <ContextMeter />
 
         <button onClick={toggleTheme}
@@ -253,10 +253,12 @@ export default function ModelSelector() {
                           <FiStar size={12} fill={favorites.includes(model.id) ? 'currentColor' : 'none'} />
                         </button>
                         <span className="flex-1 truncate">{model.name}</span>
-                        <span className={`text-[11px] tabular-nums shrink-0 ${hasLimitOverride ? 'text-[var(--accent)]' : 'text-[var(--text-muted)]'}`}
-                          title={`${t('contextWindow')}: ${model.contextWindow.toLocaleString()}`}>
-                          {formatLimit(model.contextWindow)}
-                        </span>
+                        {model.pricing && (
+                          <span className="text-[10.5px] tabular-nums text-[var(--text-muted)] shrink-0"
+                            title={`${t('costTokensIn')} $${model.pricing.input} · ${t('costTokensOut')} $${model.pricing.output} / 1M`}>
+                            ${formatPrice(model.pricing.input)}/${formatPrice(model.pricing.output)}/1M
+                          </span>
+                        )}
                         <span className="flex gap-1 items-center text-xs shrink-0">
                           <button onClick={(e) => { e.stopPropagation(); openLimitEditor(model); }}
                             className={`p-0.5 rounded ${isEditing || hasLimitOverride ? 'text-[var(--accent)] bg-[var(--accent-soft)]' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}`}

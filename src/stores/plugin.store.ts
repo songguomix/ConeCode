@@ -19,6 +19,8 @@ export interface PluginEntry extends PluginDef {
   enabled: boolean;
   /** Scope of the linked skill, when there is one. */
   skillScope?: string;
+  /** True when the underlying skill (if needed) is installed. */
+  skillInstalled?: boolean;
 }
 
 function loadJSON<T>(key: string, fallback: T): T {
@@ -98,10 +100,17 @@ export function selectPlugins(): PluginEntry[] {
   const { custom, disabled } = usePluginStore.getState();
   const origins = useMarketStore.getState().origins;
   const installed = useSkillsStore.getState().installed;
-  const out: PluginEntry[] = BUILTIN_PLUGINS.map((p) => ({
-    ...p,
-    enabled: !disabled.includes(p.id),
-  }));
+  const out: PluginEntry[] = BUILTIN_PLUGINS.map((p) => {
+    const needsSkill = p.view === 'skill' || p.view === 'security';
+    const skill = p.skillId ? installed.find((s) => s.id === p.skillId) : undefined;
+    const isSkillInstalled = !needsSkill || !!skill;
+    return {
+      ...p,
+      enabled: !disabled.includes(p.id),
+      skillScope: skill?.scope,
+      skillInstalled: isSkillInstalled,
+    };
+  });
   for (const [skillId, origin] of Object.entries(origins)) {
     const skill = installed.find((s) => s.id === skillId);
     if (!skill) continue;
@@ -115,6 +124,7 @@ export function selectPlugins(): PluginEntry[] {
       view: 'skill',
       enabled: !disabled.includes(`market:${skillId}`),
       skillScope: skill.scope,
+      skillInstalled: true,
     });
   }
   for (const c of custom) {
@@ -129,6 +139,7 @@ export function selectPlugins(): PluginEntry[] {
       view: skill ? 'skill' : undefined,
       enabled: !disabled.includes(c.id),
       skillScope: skill?.scope,
+      skillInstalled: !c.skillId || !!skill,
     });
   }
   return out;

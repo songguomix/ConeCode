@@ -25,6 +25,26 @@ export function modelReasoningKey(providerId: string, modelId: string): string {
   return JSON.stringify([providerId, modelId]);
 }
 
+// The last model the user picked, so a restart (or a fresh fetch that drops
+// nothing) lands back on it instead of an empty selector.
+const LAST_MODEL_KEY = 'conecode.lastModel';
+
+function loadLastModel(): { providerId: string; modelId: string } | null {
+  try {
+    const raw = JSON.parse(localStorage.getItem(LAST_MODEL_KEY) || 'null');
+    if (raw && typeof raw.providerId === 'string' && typeof raw.modelId === 'string') return raw;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function saveLastModel(providerId: string, modelId: string): void {
+  try {
+    localStorage.setItem(LAST_MODEL_KEY, JSON.stringify({ providerId, modelId }));
+  } catch {}
+}
+
 function hasReasoningOverride(overrides: string[], model: AIModel): boolean {
   // The plain model-id form is the legacy format. Read it until the next edit,
   // then migrate to provider-scoped keys so duplicate ids no longer leak.
@@ -194,6 +214,14 @@ export const useModelStore = create<ModelStore>((set, get) => ({
       }
 
       set({ models: grouped, favorites, recentModels, loading: false });
+      // Back on the last model after a restart/refresh — but never steal a
+      // selection something else already made (e.g. a conversation restore).
+      if (!get().selectedModelId) {
+        const last = loadLastModel();
+        if (last && grouped.get(last.providerId)?.some((m) => m.id === last.modelId)) {
+          get().selectModel(last.modelId, last.providerId, false);
+        }
+      }
     } catch (error) {
       console.error('Failed to fetch all models:', error);
     } finally {
@@ -206,6 +234,7 @@ export const useModelStore = create<ModelStore>((set, get) => ({
       .find(([, list]) => list.some((m) => m.id === modelId))?.[0] ?? null;
     if (!resolvedProviderId || !get().models.get(resolvedProviderId)?.some((model) => model.id === modelId)) return;
     set({ selectedModelId: modelId, selectedProviderId: resolvedProviderId });
+    saveLastModel(resolvedProviderId, modelId);
     if (recordRecent) void get().addToRecent(modelId).catch(() => {});
   },
 

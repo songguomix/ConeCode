@@ -92,13 +92,8 @@ export function findBuiltinPlugin(id: string): PluginDef | undefined {
  * The prompt sent to the AI chat when the user picks "创建插件": the agent
  * interviews for name/purpose, drafts the SKILL.md when skill work is needed,
  * and explains the two manual steps (paste into 设置→技能, then link it here).
+ * Rendered in the current locale — it becomes the user's own message.
  */
-export function buildCreatePluginPrompt(): string {
-  return `帮我创建一个 ConeCode 插件。先问清三件事再动手：插件叫什么、解决什么具体问题、需不需要 AI 执行能力（需要的话才写技能）。
-
-规则：
-1. 插件是插件，技能是技能：插件 = 元信息（名字、描述）+ 可选的界面；技能 = 给 AI 的指令（SKILL.md）。不要混在一起。
-2. 如果需要 AI 执行：按 SKILL.md 格式写出 name、description（必须含一句英文 Use when…）、body（先讲触发条件，再讲只读步骤，最后讲报告格式；只检查不修，除非我明确说修），把全文贴出来让我复制。
-3. 然后告诉我两步手动操作：在「设置 → 技能」里新建粘贴保存，再回「设置 → 插件」用添加表单把技能链上。
-4. 不需要 AI 执行的插件（如纯展示、纯跳转）：直接给我名字和一句话描述，我自己在插件库添加表单里建。`;
+export function buildCreatePluginPrompt(t: (key: string) => string): string {
+  return t('pluginCreatePrompt');
 }

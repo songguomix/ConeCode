@@ -288,7 +288,7 @@ function CheckpointRollbackButton({ onClick }: { onClick: () => void }) {
 }
 
 // The transcript keeps a one-line command record; the actual decision happens
-// in CommandApprovalModal so long commands no longer consume the chat viewport.
+// in CommandApprovalCard so long commands no longer consume the chat viewport.
 function CommandStatusRow({ change, onReview }: { change: CodeChange; onReview: () => void }) {
   const { t } = useLanguageStore();
   const [confirmingCheckpoint, setConfirmingCheckpoint] = useState(false);

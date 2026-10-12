@@ -266,6 +266,20 @@ describe('a deployed skill reaches the agent', () => {
     expect(streamCalls).toHaveLength(2); // not a dead end
   });
 
+  it('returns instructions for builtin skills even if not explicitly installed to disk', async () => {
+    installed = { global: [], project: [] };
+    await useSkillsStore.getState().load();
+    expect(useSkillsStore.getState().body('perf-monitor')).toContain('性能巡检');
+
+    queued = [toolCall('use_skill', { id: 'perf-monitor' }), textResponse('Inspecting performance now.')];
+    await useChatStore.getState().sendMessage('inspect performance', 'p1', 'm1');
+
+    const toolResult = useChatStore.getState().messages.find((m) => m.role === 'tool');
+    expect(toolResult).toBeDefined();
+    expect(toolResult!.content).toContain('性能巡检');
+    expect(toolResult!.content).toContain('perf_snapshot');
+  });
+
   it('offers use_skill as a real tool to the model', async () => {
     queued = [textResponse('ok')];
     await useChatStore.getState().sendMessage('hi', 'p1', 'm1');

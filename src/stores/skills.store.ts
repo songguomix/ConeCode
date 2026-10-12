@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { useInstallGateStore } from './installGate.store';
 import { useChatStore } from './chat.store';
-import { BUILTIN_SKILLS, type CatalogSkill } from '../core/skills/builtin';
+import { BUILTIN_SKILLS, findBuiltin, type CatalogSkill } from '../core/skills/builtin';
 import {
   formatSkillsPrompt,
   mergeSkills,
@@ -240,9 +240,9 @@ export const useSkillsStore = create<SkillsStore>((set, get) => ({
 
   body: (id) => {
     const skill = get().effective.find((s) => s.id === id);
-    if (!skill) return null;
+    if (!skill) return findBuiltin(id)?.body || null;
     // Project skills shadow global ones in the effective list.
-    return skill.body || null;
+    return skill.body || findBuiltin(id)?.body || null;
   },
 
   isInstalled: (id) => get().installed.some((s) => s.id === id),

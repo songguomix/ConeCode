@@ -343,9 +343,27 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
   },
   {
     name: 'perf_snapshot',
-    description: 'Check ConeCode itself for performance defects: live renderer heap, process memory, load, plus the monitor auto-read errors. Use when asked about slowness, freezes, or suspected performance problems.',
+    description: 'Check ConeCode itself for performance defects / 性能巡检 (live renderer heap, process memory RSS, load, anomalies). 做好了一版本新软件时必须调用测试基本性能。Use whenever checking software basic performance, verifying a new software version, slowness, memory leaks, or as required in RSI verification cascade.',
     parameters: { type: 'object', properties: {} },
     promptExample: '{"action": "perf_snapshot"}',
+  },
+  {
+    name: 'perf_monitor',
+    description: 'Alias for perf_snapshot / 性能巡检. 做好了一版本新软件时必须调用测试基本性能。Inspect current memory, CPU load, and detect performance defects or leaks.',
+    parameters: { type: 'object', properties: {} },
+    promptExample: '{"action": "perf_monitor"}',
+  },
+  {
+    name: 'perf_inspect',
+    description: 'Alias for perf_snapshot / 性能巡检. 做好了一版本新软件时必须调用测试基本性能。Inspect current memory, CPU load, and detect performance defects or leaks.',
+    parameters: { type: 'object', properties: {} },
+    promptExample: '{"action": "perf_inspect"}',
+  },
+  {
+    name: 'cost_snapshot',
+    description: 'Read this conversation\'s spend so far, the per-episode budget, and cost-lock state. Call it at the start and end of every RSI episode to measure that episode\'s cost against its budget.',
+    parameters: { type: 'object', properties: {} },
+    promptExample: '{"action": "cost_snapshot"}',
   },
   {
     name: 'run_background',
@@ -487,7 +505,7 @@ export const MUTATING_TOOLS = new Set(BUILTIN_TOOLS.filter((tl) => tl.mutating).
 
 /** Exact Plan Mode allowlist, shared by schema filtering and the executor gate. */
 export const PLAN_MODE_TOOLS = new Set([
-  'read_file', 'list_dir', 'search', 'glob', 'system_info', 'perf_snapshot', 'background_status', 'git_status', 'git_diff',
+  'read_file', 'list_dir', 'search', 'glob', 'system_info', 'perf_snapshot', 'perf_monitor', 'perf_inspect', 'cost_snapshot', 'background_status', 'git_status', 'git_diff',
   'web_fetch', 'web_search', 'use_skill', 'spawn_agent', 'ask_user',
 ]);
 

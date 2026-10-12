@@ -1,9 +1,11 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { ReactNode } from 'react';
-import { FiPlus, FiSettings, FiTrash2, FiGlobe, FiEdit3, FiMenu, FiTerminal, FiFileText, FiSmartphone, FiMonitor, FiCpu, FiGrid, FiShield, FiGitBranch, FiLoader, FiFolder, FiMessageSquare, FiChevronDown, FiChevronRight, FiClock } from 'react-icons/fi';
+import { FiPlus, FiSettings, FiTrash2, FiGlobe, FiEdit3, FiMenu, FiTerminal, FiFileText, FiSmartphone, FiMonitor, FiCpu, FiGrid, FiShield, FiGitBranch, FiLoader, FiFolder, FiMessageSquare, FiChevronDown, FiChevronRight, FiClock, FiShare2 } from 'react-icons/fi';
 import { useChatStore, useUIStore, useLanguageStore, usePreviewStore, useComputerStore, useModelStore, useCodeChangesStore, useWorkspaceStore, useAiHighlightsStore } from '../../stores';
 import { useBackgroundStore } from '../../stores/background.store';
 import { groupConversationsByFolder } from '../../core/workspace/conversations';
+import HandoffPanel from '../handoff/HandoffPanel';
 import { mostUrgentDot, type DotKind } from './panelDot';
 import FileTree from './FileTree';
 import type { Locale } from '../../stores/language.store';
@@ -38,8 +40,33 @@ const LOCALES: { value: Locale; label: string }[] = [
 export default function Sidebar() {
   const [langOpen, setLangOpen] = useState(false);
   const [panelsOpen, setPanelsOpen] = useState(false);
+  // The panels menu lives in body coordinates (portal): sidebar width,
+  // overflow, or backdrop-blur must never clip or squeeze it. Right-aligned
+  // to the button, but clamped into the viewport — at the narrowest sidebar
+  // the button sits too far left for a blind right-align (menu would run off
+  // the screen's left edge), so it slides right instead of clipping.
+  const panelsBtnRef = useRef<HTMLDivElement>(null);
+  const [panelsPos, setPanelsPos] = useState<{ top: number; left: number } | null>(null);
+  const sidebarWidthPx = useUIStore((s) => s.sidebarWidthPx);
+  useEffect(() => {
+    if (!panelsOpen) return;
+    const place = () => {
+      const r = panelsBtnRef.current?.getBoundingClientRect();
+      if (!r) return;
+      const W = 176; // w-44
+      setPanelsPos({
+        top: r.bottom + 4,
+        left: Math.max(8, Math.min(r.right - W, window.innerWidth - W - 8)),
+      });
+    };
+    place();
+    window.addEventListener('resize', place);
+    return () => window.removeEventListener('resize', place);
+    // sidebarWidthPx: re-anchor while the user drags the sidebar under the menu.
+  }, [panelsOpen, sidebarWidthPx]);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState('');
+  const [handoffOpen, setHandoffOpen] = useState(false);
   // Collapsed group keys. Default expanded — Codex shows the chats under each
   // mother folder without requiring a click first.
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => new Set());
@@ -163,7 +190,7 @@ export default function Sidebar() {
         </button>
         <div className="flex-1" />
 
-        <div className="relative" style={{ WebkitAppRegion: 'no-drag' } as any}>
+        <div ref={panelsBtnRef} className="relative" style={{ WebkitAppRegion: 'no-drag' } as any}>
           <button onClick={() => setPanelsOpen(!panelsOpen)}
             className={`relative w-8 h-8 rounded-xl flex items-center justify-center transition-colors ${
               panelsOpen || anyPanelOpen
@@ -176,11 +203,12 @@ export default function Sidebar() {
             <FiGrid size={15} />
             {triggerDot && <StatusDot kind={triggerDot} className="absolute top-1 right-1" />}
           </button>
-          {panelsOpen && (
+          {panelsOpen && panelsPos && createPortal(
             <>
               <div className="fixed inset-0 z-40" onClick={() => setPanelsOpen(false)} />
               <div role="menu"
-                className="absolute top-full right-0 mt-1 w-44 bg-[var(--bg-2)] border border-[var(--border)] rounded-xl shadow-xl z-50 overflow-hidden py-1 anim-menu">
+                className="fixed w-44 bg-[var(--bg-2)] border border-[var(--border)] rounded-xl shadow-xl z-50 overflow-hidden py-1 anim-menu"
+                style={{ top: panelsPos.top, left: panelsPos.left }}>
                 {primaryPanels.map((p) => (
                   <button key={p.key} role="menuitem" aria-pressed={p.open}
                     onClick={() => p.toggle()}
@@ -208,7 +236,8 @@ export default function Sidebar() {
                   </button>
                 ))}
               </div>
-            </>
+            </>,
+            document.body,
           )}
         </div>
 
@@ -217,6 +246,12 @@ export default function Sidebar() {
           className="w-8 h-8 rounded-xl flex items-center justify-center text-[var(--text-muted)] hover:bg-[var(--bg-3)] hover:text-[var(--text-primary)] transition-colors"
           title={t('newChat')}>
           <FiPlus size={16} />
+        </button>
+        <button onClick={() => setHandoffOpen(true)}
+          style={{ WebkitAppRegion: 'no-drag' } as any}
+          className="w-8 h-8 rounded-xl flex items-center justify-center text-[var(--text-muted)] hover:bg-[var(--bg-3)] hover:text-[var(--text-primary)] transition-colors"
+          title={t('handoffButton')}>
+          <FiShare2 size={15} />
         </button>
       </div>
 
@@ -378,6 +413,7 @@ export default function Sidebar() {
           </div>
         </div>
       </div>
+      {handoffOpen && <HandoffPanel onClose={() => setHandoffOpen(false)} />}
     </div>
   );
 }

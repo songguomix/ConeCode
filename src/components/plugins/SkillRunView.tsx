@@ -5,18 +5,32 @@ import { useSkillsStore, useLanguageStore } from '../../stores';
 import { findBuiltin } from '../../core/skills/builtin';
 
 const TRIGGERS: Record<string, string> = {
-  'todo-scan': 'Run it now on the open project.',
-  'commit-msg': 'Run it now on the current working tree.',
-  'repo-map': 'Run it now on the open project.',
+  'todo-scan': 'pluginTrigger_todo-scan',
+  'commit-msg': 'pluginTrigger_commit-msg',
+  'repo-map': 'pluginTrigger_repo-map',
 };
+
+/** Plugin-view display copy for a linked skill; falls back to catalog data. */
+export function skillDisplayName(skillId: string, t: (k: string) => string, fallback: string): string {
+  const key = `pluginSkillName_${skillId}`;
+  const v = t(key);
+  return v === key ? fallback : v;
+}
+export function skillDisplayDesc(skillId: string, t: (k: string) => string, fallback: string): string {
+  const key = `pluginSkillDesc_${skillId}`;
+  const v = t(key);
+  return v === key ? fallback : v;
+}
 
 /**
  * Generic view for read-only project plugins: install if missing, run in the
  * background with the skill instructions prefixed, jump to recent runs.
  */
 export default function SkillRunView({ skillId }: { skillId: string }) {
-  const body = useSkillsStore((s) => s.body);
+  const effective = useSkillsStore((s) => s.effective);
+  const installedSkills = useSkillsStore((s) => s.installed);
   const install = useSkillsStore((s) => s.install);
+  const setSkillEnabled = useSkillsStore((s) => s.setEnabled);
   const launch = useBackgroundStore((s) => s.launch);
   const jump = useBackgroundStore((s) => s.jump);
   const tasks = useBackgroundStore((s) => s.tasks);
@@ -24,7 +38,12 @@ export default function SkillRunView({ skillId }: { skillId: string }) {
   const [busy, setBusy] = useState(false);
 
   const catalog = findBuiltin(skillId);
-  const skillBody = body(skillId);
+  const effectiveSkill = effective.find((s) => s.id === skillId);
+  const installedSkill = installedSkills.find((s) => s.id === skillId);
+  const skillBody = effectiveSkill?.body || null;
+  const isInstalled = !!installedSkill;
+  const isEnabled = installedSkill ? installedSkill.enabled !== false : false;
+
   const runs = useMemo(
     () => Object.values(tasks).filter((task) => task.source === skillId).sort((a, b) => b.startedAt - a.startedAt),
     [tasks, skillId],
@@ -34,26 +53,61 @@ export default function SkillRunView({ skillId }: { skillId: string }) {
     if (!skillBody || busy) return;
     setBusy(true);
     try {
+      const triggerKey = TRIGGERS[skillId] || 'pluginTriggerDefault';
       await launch(
-        `Skill "${skillId}" — follow these instructions for this task:\n\n${skillBody}\n\n${TRIGGERS[skillId] || 'Run it now.'}`,
-        { title: catalog?.name || skillId, source: skillId },
+        `Skill "${skillId}" — follow these instructions for this task:\n\n${skillBody}\n\n${t(triggerKey)}`,
+        { title: skillDisplayName(skillId, t, catalog?.name || skillId), source: skillId },
       );
     } finally {
       setBusy(false);
     }
   };
 
+  if (isInstalled && !isEnabled && installedSkill) {
+    return (
+      <div className="px-3 py-4 text-center">
+        <FiTool size={20} className="mx-auto mb-2 text-[var(--text-muted)]" />
+        <p className="text-[13px] text-[var(--text-secondary)] mb-1">{skillDisplayDesc(skillId, t, catalog?.description || '')}</p>
+        <p className="text-[13px] text-[var(--text-secondary)] mb-3">{t('skillDisabled')}</p>
+        <button
+          onClick={async () => {
+            setBusy(true);
+            try {
+              await setSkillEnabled(installedSkill, true);
+            } finally {
+              setBusy(false);
+            }
+          }}
+          disabled={busy}
+          className="px-3 py-1.5 rounded-lg bg-[var(--accent)] text-white text-[12px] font-medium hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50 inline-flex items-center gap-1.5"
+        >
+          {busy ? <FiLoader size={12} className="animate-spin" /> : null}
+          {t('skillEnable')}
+        </button>
+      </div>
+    );
+  }
+
   if (!skillBody) {
     return (
       <div className="px-3 py-4 text-center">
         <FiTool size={20} className="mx-auto mb-2 text-[var(--text-muted)]" />
-        <p className="text-[13px] text-[var(--text-secondary)] mb-1">{catalog?.description}</p>
+        <p className="text-[13px] text-[var(--text-secondary)] mb-1">{skillDisplayDesc(skillId, t, catalog?.description || '')}</p>
         <p className="text-[13px] text-[var(--text-secondary)] mb-3">{t('pluginNeedInstall')}</p>
         {catalog && (
           <button
-            onClick={() => void install(catalog, 'global')}
-            className="px-3 py-1.5 rounded-lg bg-[var(--accent)] text-white text-[12px] font-medium hover:bg-[var(--accent-hover)] transition-colors"
+            onClick={async () => {
+              setBusy(true);
+              try {
+                await install(catalog, 'global');
+              } finally {
+                setBusy(false);
+              }
+            }}
+            disabled={busy}
+            className="px-3 py-1.5 rounded-lg bg-[var(--accent)] text-white text-[12px] font-medium hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50 inline-flex items-center gap-1.5"
           >
+            {busy ? <FiLoader size={12} className="animate-spin" /> : null}
             {t('pluginInstall')}
           </button>
         )}
@@ -63,7 +117,7 @@ export default function SkillRunView({ skillId }: { skillId: string }) {
 
   return (
     <div className="px-2 py-1">
-      <p className="px-1 mb-2 text-[13px] text-[var(--text-secondary)]">{catalog?.description}</p>
+      <p className="px-1 mb-2 text-[13px] text-[var(--text-secondary)]">{skillDisplayDesc(skillId, t, catalog?.description || '')}</p>
       <button
         onClick={() => void run()}
         disabled={busy}

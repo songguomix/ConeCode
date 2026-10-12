@@ -92,6 +92,9 @@ export default function SettingsModal() {
   const toggleProvider = useProviderStore((s) => s.toggleProvider);
   const approvalMode = useSettingsStore((s) => s.approvalMode);
   const toolCallMode = useSettingsStore((s) => s.toolCallMode);
+  const fullContext = useSettingsStore((s) => s.fullContext);
+  const costLock = useSettingsStore((s) => s.costLock);
+  const maxEpisodeCost = useSettingsStore((s) => s.maxEpisodeCost);
   const notificationMode = useSettingsStore((s) => s.notificationMode);
   const notifyApprovals = useSettingsStore((s) => s.notifyApprovals);
   const preventSleepWhileRunning = useSettingsStore((s) => s.preventSleepWhileRunning);
@@ -278,6 +281,43 @@ export default function SettingsModal() {
                       </span>
                     </p>
                   )}
+                </div>
+
+                <div className="bg-[var(--bg-2)] border border-[var(--border)] rounded-xl p-4">
+                  <div className="font-medium text-sm mb-2">{t('contextTitle')}</div>
+                  <div className="grid grid-cols-2 gap-2">
+                    {([{ value: false, label: 'contextCapped' }, { value: true, label: 'contextFull' }] as const).map((m) => (
+                      <button key={m.label} onClick={() => updateSettings({ fullContext: m.value })}
+                        className={`px-2 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+                          fullContext === m.value
+                            ? 'bg-[var(--accent-soft)] text-[var(--accent)] border-[var(--accent)]'
+                            : 'bg-[var(--bg-3)] text-[var(--text-secondary)] border-[var(--border)] hover:border-[var(--accent)]'
+                        }`}>
+                        {t(m.label)}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="mt-2 text-xs text-[var(--text-muted)]">
+                    {t(fullContext ? 'contextFullDesc' : 'contextCappedDesc')}
+                  </p>
+                </div>
+
+                <div className="bg-[var(--bg-2)] border border-[var(--border)] rounded-xl p-4">
+                  <div className="font-medium text-sm mb-2">{t('costTitle')}</div>
+                  <label className="flex items-center gap-2 text-xs text-[var(--text-secondary)] cursor-pointer mb-2">
+                    <input type="checkbox" checked={costLock}
+                      onChange={(e) => updateSettings({ costLock: e.target.checked })}
+                      className="accent-[var(--accent)]" />
+                    {t('costLock')}
+                  </label>
+                  <label className="block text-xs text-[var(--text-muted)] mb-1">{t('costBudget')}</label>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs text-[var(--text-muted)]">$</span>
+                    <input type="number" min={0} step={0.1} value={maxEpisodeCost}
+                      onChange={(e) => updateSettings({ maxEpisodeCost: Math.max(0, Number(e.target.value) || 0) })}
+                      className="w-24 px-2 py-1.5 rounded-lg bg-[var(--bg-3)] border border-[var(--border)] text-xs outline-none focus:border-[var(--accent)]/50" />
+                  </div>
+                  <p className="mt-2 text-xs text-[var(--text-muted)]">{t('costDesc')}</p>
                 </div>
 
                 <div className="bg-[var(--bg-2)] border border-[var(--border)] rounded-xl p-4">

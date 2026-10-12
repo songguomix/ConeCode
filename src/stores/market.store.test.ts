@@ -78,6 +78,45 @@ describe('market sync', () => {
     expect(useMarketStore.getState().error).toBe('empty-repo');
   });
 
+  it('auto-pushes local fixes at the end of a successful sync', async () => {
+    const { useSkillsStore } = await import('./skills.store');
+    useSkillsStore.setState({
+      installed: [{
+        id: 'alpha', name: 'Alpha', scope: 'global', source: 'custom',
+        description: 'd', tags: ['market'], body: 'FIXED locally',
+      }],
+      effective: [],
+      loaded: true,
+    } as any);
+    useMarketStore.setState({
+      origins: { alpha: { repo: 'o/r', path: 'alpha/SKILL.md', content: 'baseline' } },
+    });
+    localStorage.setItem('conecode.pluginToken', 'tok');
+    const puts: any[] = [];
+    (globalThis as any).fetch = vi.fn(async (url: string, opts: any) => {
+      if (String(url).includes('/git/trees/')) {
+        return json({ tree: [{ type: 'blob', path: 'alpha/SKILL.md' }] });
+      }
+      if (String(url).includes('/contents/')) {
+        if ((opts?.method || 'GET') === 'PUT') {
+          puts.push(JSON.parse(opts.body));
+          return new Response('{}', { status: 200 });
+        }
+        if (opts?.headers?.Accept === 'application/vnd.github.raw') {
+          return new Response(SKILL_A, { status: 200 });
+        }
+        return new Response(JSON.stringify({ sha: 'abc' }), { status: 200 });
+      }
+      return new Response('x', { status: 404 });
+    });
+    expect(await useMarketStore.getState().sync()).toBe(true);
+    expect(puts).toHaveLength(1);
+    expect(Buffer.from(puts[0].content, 'base64').toString('utf-8')).toContain('FIXED locally');
+    expect(useMarketStore.getState().hasLocalChanges('alpha')).toBe(false);
+    expect(useMarketStore.getState().error).toBeNull();
+    localStorage.removeItem('conecode.pluginToken');
+  });
+
   it('installs through the custom (unreviewed) path', async () => {
     const { useSkillsStore } = await import('./skills.store');
     const alpha = {
@@ -100,6 +139,24 @@ describe('market sync', () => {
     expect(origins.alpha.repo).toBe('o/r');
     expect(origins.alpha.path).toBe('alpha/SKILL.md');
     expect(useMarketStore.getState().hasLocalChanges('alpha')).toBe(false);
+  });
+
+  it('preserves remote skill.id even when name produces a different slug', async () => {
+    const { useSkillsStore } = await import('./skills.store');
+    const customTool = {
+      id: 'tool-xyz', name: 'My Custom Tool Pro', scope: 'global', source: 'custom',
+      description: 'Test', tags: ['market'], body: 'Body with enough length for validation.',
+    };
+    (window as any).electronAPI.skill.list = vi.fn(async () => ({ global: [customTool], project: [] }));
+    useSkillsStore.setState({ installed: [], effective: [], loaded: true } as any);
+    const ok = await useMarketStore.getState().installRemote(
+      { id: 'tool-xyz', name: 'My Custom Tool Pro', description: 'Test', path: 'tools/tool-xyz/SKILL.md', body: 'Body with enough length for validation.' },
+      'global',
+    );
+    expect(ok).toBe(true);
+    const install = (window as any).electronAPI.skill.install;
+    expect(install.mock.calls.some((c: any) => c[0].id === 'tool-xyz')).toBe(true);
+    expect(useMarketStore.getState().origins['tool-xyz']).toBeDefined();
   });
 
   it('pushes local edits back and reports conflicts', async () => {

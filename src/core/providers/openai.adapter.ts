@@ -55,17 +55,23 @@ export class OpenAIAdapter extends BaseAdapter {
     body.tool_choice = params.toolChoice || 'auto';
   }
 
-  async listModels(): Promise<AIModel[]> {
-    const response = await this.fetchWithTimeout(
-      this.buildUrl('/models'),
-      { headers: this.buildHeaders() }
-    );
+  /** Map one raw /models entry. Subclasses override only this to inject defaults. */
+  protected mapListModel(m: any): AIModel {
+    return this.mapModel(m);
+  }
+
+  protected async fetchModels(url: string, headers: Record<string, string>): Promise<AIModel[]> {
+    const response = await this.fetchWithTimeout(url, { headers });
     if (!response.ok) {
       const error = await response.text().catch(() => 'Unknown error');
       throw new Error(`Failed to fetch models: ${response.status} ${error}`);
     }
     const data = await response.json();
-    return (data.data || []).map((m: any) => this.mapModel(m));
+    return (data.data || []).map((m: any) => this.mapListModel(m));
+  }
+
+  async listModels(): Promise<AIModel[]> {
+    return this.fetchModels(this.buildUrl('/models'), this.buildHeaders());
   }
 
   async sendMessage(params: SendMessageParams) {

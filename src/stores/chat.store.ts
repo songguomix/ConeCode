@@ -13,6 +13,8 @@ import { useSkillsStore } from './skills.store';
 import { useComputerStore } from './computer.store';
 import { useGoalStore, type ConversationGoal } from './goal.store';
 import { resolveEffort } from '../core/model/resolveEffort';
+import { effectiveContextWindow } from '../core/model/context';
+import { buildCostSnapshot } from '../core/pricing/cost';
 import { useInstallGateStore, isHolding } from './installGate.store';
 import type { ChangeKind } from './codeChanges.store';
 import {
@@ -262,7 +264,7 @@ function screenshotParts(images: string[]): any[] {
 }
 
 interface FileAction {
-  action: 'read_file' | 'list_dir' | 'ask_user' | 'edit_file' | 'create_file' | 'create_dir' | 'delete' | 'rename' | 'copy' | 'exec' | 'open_app' | 'open_path' | 'system_info' | 'perf_snapshot' | 'run_background' | 'background_status' | 'search' | 'glob' | 'update_todos' | 'git_status' | 'git_diff' | 'web_fetch' | 'web_search' | 'download' | 'mcp_call' | 'spawn_agent' | 'use_skill' | 'computer'
+  action: 'read_file' | 'list_dir' | 'ask_user' | 'edit_file' | 'create_file' | 'create_dir' | 'delete' | 'rename' | 'copy' | 'exec' | 'open_app' | 'open_path' | 'system_info' | 'perf_snapshot' | 'perf_monitor' | 'perf_inspect' | 'cost_snapshot' | 'run_background' | 'background_status' | 'search' | 'glob' | 'update_todos' | 'git_status' | 'git_diff' | 'web_fetch' | 'web_search' | 'download' | 'mcp_call' | 'spawn_agent' | 'use_skill' | 'computer'
     | 'page_navigate' | 'page_snapshot' | 'page_click' | 'page_fill' | 'page_eval' | 'page_console' | 'remember';
   /** The `computer` tool's own request, nested so its `action` field survives. */
   computer?: ComputerRequest;
@@ -307,7 +309,7 @@ interface FileAction {
 // react to (so the agent loop should run another turn). Everything else is
 // either deferred for user confirmation or terminal.
 const INFO_ACTIONS = new Set([
-  'read_file', 'list_dir', 'create_file', 'create_dir', 'open_app', 'open_path', 'system_info', 'perf_snapshot', 'background_status', 'search', 'glob', 'update_todos', 'git_status', 'git_diff', 'web_fetch', 'web_search', 'download', 'mcp_call', 'spawn_agent', 'use_skill',
+  'read_file', 'list_dir', 'create_file', 'create_dir', 'open_app', 'open_path', 'system_info', 'perf_snapshot', 'perf_monitor', 'perf_inspect', 'cost_snapshot', 'background_status', 'search', 'glob', 'update_todos', 'git_status', 'git_diff', 'web_fetch', 'web_search', 'download', 'mcp_call', 'spawn_agent', 'use_skill',
   'page_navigate', 'page_snapshot', 'page_click', 'page_fill', 'page_eval', 'page_console', 'remember',
 ]);
 
@@ -315,7 +317,7 @@ const INFO_ACTIONS = new Set([
 // turn, they can safely run together. Mixed read/write batches stay sequential
 // because a later call may depend on an earlier mutation.
 const INDEPENDENT_READ_ACTIONS = new Set([
-  'read_file', 'list_dir', 'search', 'glob', 'system_info', 'perf_snapshot', 'background_status', 'git_status', 'git_diff',
+  'read_file', 'list_dir', 'search', 'glob', 'system_info', 'perf_snapshot', 'perf_monitor', 'perf_inspect', 'cost_snapshot', 'background_status', 'git_status', 'git_diff',
   'web_fetch', 'web_search', 'use_skill',
 ]);
 
@@ -323,7 +325,7 @@ const INDEPENDENT_READ_ACTIONS = new Set([
 // recognize BARE JSON action objects without mistakenly wrapping unrelated JSON.
 const KNOWN_ACTIONS = new Set([
   'read_file', 'list_dir', 'ask_user', 'edit_file', 'create_file', 'create_dir',
-  'delete', 'rename', 'copy', 'exec', 'open_app', 'open_path', 'system_info', 'perf_snapshot', 'run_background', 'background_status', 'search', 'glob', 'update_todos', 'git_status', 'git_diff', 'web_fetch', 'web_search', 'download', 'mcp_call', 'spawn_agent', 'use_skill', 'computer',
+  'delete', 'rename', 'copy', 'exec', 'open_app', 'open_path', 'system_info', 'perf_snapshot', 'perf_monitor', 'perf_inspect', 'cost_snapshot', 'run_background', 'background_status', 'search', 'glob', 'update_todos', 'git_status', 'git_diff', 'web_fetch', 'web_search', 'download', 'mcp_call', 'spawn_agent', 'use_skill', 'computer',
   'page_navigate', 'page_snapshot', 'page_click', 'page_fill', 'page_eval', 'page_console', 'remember',
 ]);
 
@@ -368,6 +370,28 @@ async function runPerfSnapshot(): Promise<string> {
     }
   }
   return lines.join('\n');
+}
+
+// Spend ledger backing the cost_snapshot tool (and the RSI cost lock):
+// what this conversation burned, the per-episode budget, lock state.
+// Read-only — it never changes anything, it only reports.
+async function runCostSnapshot(convId?: string): Promise<string> {
+  const { useModelStore } = await import('./model.store');
+  const modelTable = useModelStore.getState().models;
+  const settings = useSettingsStore.getState();
+  const activeId = useChatStore.getState().activeConversationId;
+  const target = convId || activeId;
+  const turns = target && target === activeId
+    ? useChatStore.getState().messages
+    : target
+      ? await window.electronAPI.message.list(target).catch(() => [])
+      : [];
+  return buildCostSnapshot(
+    turns,
+    (providerId, modelId) => modelTable.get(providerId || '')?.find((m) => m.id === modelId)?.pricing,
+    settings.maxEpisodeCost ?? 0.5,
+    !!settings.costLock,
+  );
 }
 
 /**
@@ -548,7 +572,11 @@ async function executeIndependentRead(
     case 'background_status':
       return backgroundStatusText();
     case 'perf_snapshot':
+    case 'perf_monitor':
+    case 'perf_inspect':
       return runPerfSnapshot();
+    case 'cost_snapshot':
+      return runCostSnapshot();
     case 'git_status': {
       const out = await window.electronAPI.git.status(action.cwd || action.path || ws.rootPath || undefined);
       return out?.trim() ? out : 'Not a git repository, or working tree is clean.';
@@ -662,7 +690,9 @@ export function toolCallToAction(
     return { action: { action: 'mcp_call', server: decoded.server, tool: decoded.tool, args } };
   }
 
-  if (!KNOWN_ACTIONS.has(call.name)) {
+  const resolvedName = (call.name === 'perf_monitor' || call.name === 'perf_inspect') ? 'perf_snapshot' : call.name;
+
+  if (!KNOWN_ACTIONS.has(resolvedName)) {
     return { error: `Error: unknown tool "${call.name}". Use one of the tools you were given.` };
   }
   // `computer` carries its own `action` ("left_click", "type", …), which the
@@ -670,7 +700,7 @@ export function toolCallToAction(
   // before the generic schema check because that one would reject `command`,
   // the synonym prompt mode uses; the nested request has its own validator
   // (validateComputerRequest) which the executor applies.
-  if (call.name === 'computer') {
+  if (resolvedName === 'computer') {
     const { action: inner, command, computer, ...rest } = args;
     const nested = computer && typeof computer === 'object' && !Array.isArray(computer)
       ? computer
@@ -679,10 +709,10 @@ export function toolCallToAction(
     return { action: { action: 'computer', computer: nested as ComputerRequest } };
   }
 
-  const invalid = validateToolArgs(call.name, args);
+  const invalid = validateToolArgs(resolvedName, args);
   if (invalid) return { error: invalid };
 
-  return { action: { ...args, action: call.name as FileAction['action'] } };
+  return { action: { ...args, action: resolvedName as FileAction['action'] } };
 }
 
 /**
@@ -1124,7 +1154,7 @@ export function extractThink(text: string): { content: string; reasoning: string
 // truncate the saved message ("output suddenly cuts off"). Normalize the three
 // provider return shapes into { content, reasoning } so runAgentLoop can use the
 // return value as the source of truth.
-function extractStreamResult(result: any): { content: string; reasoning: string; finishReason: string | null; tokens: number; toolCalls: ToolCall[]; thinkingBlocks?: ThinkingBlock[] } {
+function extractStreamResult(result: any): { content: string; reasoning: string; finishReason: string | null; tokens: number; promptTokens: number; completionTokens: number; toolCalls: ToolCall[]; thinkingBlocks?: ThinkingBlock[] } {
   const base = extractStreamText(result);
   return {
     ...base,
@@ -1134,12 +1164,18 @@ function extractStreamResult(result: any): { content: string; reasoning: string;
   };
 }
 
-function extractStreamText(result: any): { content: string; reasoning: string; finishReason: string | null; tokens: number } {
-  if (!result || typeof result !== 'object') return { content: '', reasoning: '', finishReason: null, tokens: 0 };
+function extractStreamText(result: any): { content: string; reasoning: string; finishReason: string | null; tokens: number; promptTokens: number; completionTokens: number } {
+  if (!result || typeof result !== 'object') return { content: '', reasoning: '', finishReason: null, tokens: 0, promptTokens: 0, completionTokens: 0 };
   // Token usage (OpenAI-style `usage`, Anthropic `usage.input/output_tokens`, Gemini `usageMetadata`).
   const u = result.usage || result.usageMetadata;
+  const promptTokens = u
+    ? (u.prompt_tokens ?? u.input_tokens ?? u.promptTokenCount ?? 0)
+    : 0;
+  const completionTokens = u
+    ? (u.completion_tokens ?? u.output_tokens ?? u.candidatesTokenCount ?? 0)
+    : 0;
   const tokens = u
-    ? (u.total_tokens ?? u.totalTokenCount ?? ((u.input_tokens || u.prompt_tokens || u.promptTokenCount || 0) + (u.output_tokens || u.completion_tokens || u.candidatesTokenCount || 0)))
+    ? (u.total_tokens ?? u.totalTokenCount ?? (promptTokens + completionTokens))
     : 0;
   // OpenAI / custom / deepseek / openrouter: { choices: [{ message: {...}, finish_reason }] }
   const choice = result.choices?.[0];
@@ -1150,6 +1186,8 @@ function extractStreamText(result: any): { content: string; reasoning: string; f
       reasoning: typeof msg.reasoning_content === 'string' ? msg.reasoning_content : '',
       finishReason: typeof choice.finish_reason === 'string' ? choice.finish_reason : null,
       tokens,
+      promptTokens,
+      completionTokens,
     };
   }
   // Anthropic: { content: [{ type: 'text', text }] }
@@ -1159,6 +1197,8 @@ function extractStreamText(result: any): { content: string; reasoning: string; f
       reasoning: typeof result.reasoning_content === 'string' ? result.reasoning_content : '',
       finishReason: typeof result.finish_reason === 'string' ? result.finish_reason : null,
       tokens,
+      promptTokens,
+      completionTokens,
     };
   }
   // Gemini: { candidates: [{ content: { parts: [{ text }] } }] }
@@ -1169,9 +1209,11 @@ function extractStreamText(result: any): { content: string; reasoning: string; f
       reasoning: typeof result.reasoning_content === 'string' ? result.reasoning_content : '',
       finishReason: typeof result.finish_reason === 'string' ? result.finish_reason : null,
       tokens,
+      promptTokens,
+      completionTokens,
     };
   }
-  return { content: '', reasoning: '', finishReason: null, tokens };
+  return { content: '', reasoning: '', finishReason: null, tokens, promptTokens, completionTokens };
 }
 
 /** Coarse OS label so the agent picks platform-appropriate commands unprompted. */
@@ -1313,7 +1355,7 @@ Within these rules, follow the user's current request first, then project instru
 1. UNDERSTAND. Inspect relevant code, conventions, types, and libraries. Confirm files, symbols, and APIs; form an evidence-backed hypothesis before editing.
 2. PLAN. For two or more meaningful steps, call update_todos with a short ordered checklist and keep it current.
 3. ACT. Make the smallest complete, idiomatic change. Match local style, preserve unrelated user work, prefer precise edit_file replacements, and comment on why—not the diff.
-4. VERIFY. For changes, prove it RUNS with relevant tests, build, type-checker, or linter. Fix caused failures and rerun; report unrelated or blocked failures with exact evidence.
+4. VERIFY. For changes, prove it RUNS with relevant tests, build, type-checker, or linter. Fix caused failures and rerun; report unrelated or blocked failures with exact evidence. 做好了一版本新软件时，必须进行性能巡检（调用 perf_snapshot 测试软件基本性能：堆内存、RSS、CPU 负载与排查内存泄漏），确认新软件版本性能达标。
 5. REVIEW FROM THE TOP. Re-read the original request, check each requirement against the code as it NOW STANDS, and read changed files end to end. Do this every time. Fix gaps and repeat until a review finds nothing; only then report done.
 
 # Rules
@@ -1485,7 +1527,7 @@ Open file: ${ws.selectedFile || 'None'}`,
 
 // Read-only tools a research sub-agent is allowed to use.
 const SUB_AGENT_ACTIONS = new Set([
-  'read_file', 'list_dir', 'search', 'glob', 'git_status', 'git_diff', 'web_fetch', 'web_search', 'perf_snapshot',
+  'read_file', 'list_dir', 'search', 'glob', 'git_status', 'git_diff', 'web_fetch', 'web_search', 'perf_snapshot', 'perf_monitor', 'perf_inspect',
 ]);
 
 // Run a self-contained, READ-ONLY research sub-agent: it investigates `task`
@@ -1615,7 +1657,11 @@ async function autoCompactIfNeeded(convId: string, providerId: string, modelId: 
   if (get().streamingRuns[convId]) return false;
 
   const { useModelStore } = await import('./model.store');
-  const contextWindow = useModelStore.getState().getSelectedModel()?.contextWindow || 128000;
+  const { useSettingsStore } = await import('./settings.store');
+  const contextWindow = effectiveContextWindow(
+    useModelStore.getState().getSelectedModel()?.contextWindow,
+    useSettingsStore.getState().fullContext,
+  );
   // Only what is actually SENT counts toward the window: messages an earlier
   // compaction already folded into a summary are no longer part of the request,
   // so counting them would re-compact forever.
@@ -1929,6 +1975,8 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
         createdAt: Date.now(),
         thinkingTime: Date.now() - turnStartTime,
         tokensUsed: authoritative.tokens || undefined,
+        promptTokens: authoritative.promptTokens || undefined,
+        completionTokens: authoritative.completionTokens || undefined,
         toolCalls: nativeCalls.length ? nativeCalls : undefined,
         thinkingBlocks: authoritative.thinkingBlocks,
       };
@@ -2211,8 +2259,14 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
             // Terminal on purpose: not in INFO_ACTIONS, so this turn ends here.
             break;
           }
-          case 'perf_snapshot': {
+          case 'perf_snapshot':
+          case 'perf_monitor':
+          case 'perf_inspect': {
             result = await runPerfSnapshot();
+            break;
+          }
+          case 'cost_snapshot': {
+            result = await runCostSnapshot(convId);
             break;
           }
           case 'update_todos': {

@@ -3,6 +3,7 @@ import { FiChevronRight, FiLoader, FiCheck, FiShield } from 'react-icons/fi';
 import { useBackgroundStore } from '../../stores/background.store';
 import { useChatStore, useCodeChangesStore, useSkillsStore, useLanguageStore } from '../../stores';
 import { findBuiltin } from '../../core/skills/builtin';
+import { skillDisplayName } from './SkillRunView';
 
 /**
  * Security review plugin view: pick the whole project or just the changed
@@ -11,8 +12,10 @@ import { findBuiltin } from '../../core/skills/builtin';
 export default function SecurityView() {
   const changes = useCodeChangesStore((s) => s.changes);
   const activeConversationId = useChatStore((s) => s.activeConversationId);
-  const body = useSkillsStore((s) => s.body);
+  const effectiveSkills = useSkillsStore((s) => s.effective);
+  const installedSkills = useSkillsStore((s) => s.installed);
   const install = useSkillsStore((s) => s.install);
+  const setSkillEnabled = useSkillsStore((s) => s.setEnabled);
   const launch = useBackgroundStore((s) => s.launch);
   const jump = useBackgroundStore((s) => s.jump);
   const tasks = useBackgroundStore((s) => s.tasks);
@@ -22,7 +25,12 @@ export default function SecurityView() {
   const [busy, setBusy] = useState(false);
 
   const catalog = findBuiltin('security-review');
-  const skillBody = body('security-review');
+  const effectiveSkill = effectiveSkills.find((s) => s.id === 'security-review');
+  const installedSkill = installedSkills.find((s) => s.id === 'security-review');
+  const skillBody = effectiveSkill?.body || null;
+  const isInstalled = !!installedSkill;
+  const isEnabled = installedSkill ? installedSkill.enabled !== false : false;
+
   const files = useMemo(() => {
     const seen = new Set<string>();
     for (const c of changes) {
@@ -44,16 +52,40 @@ export default function SecurityView() {
     setBusy(true);
     try {
       const target = mode === 'project' || !effective
-        ? 'Scope: the whole open project.'
-        : `Scope: these files only:\n${effective.map((f) => `- ${f}`).join('\n')}`;
+        ? t('pluginScopeProject')
+        : `${t('pluginScopeFiles')}\n${effective.map((f) => `- ${f}`).join('\n')}`;
       await launch(
         `Skill "security-review" — follow these instructions for this task:\n\n${skillBody}\n\n${target}`,
-        { title: catalog?.name || 'Security Review', source: 'security-review' },
+        { title: skillDisplayName('security-review', t, catalog?.name || 'Security Review'), source: 'security-review' },
       );
     } finally {
       setBusy(false);
     }
   };
+
+  if (isInstalled && !isEnabled && installedSkill) {
+    return (
+      <div className="px-3 py-4 text-center">
+        <FiShield size={20} className="mx-auto mb-2 text-[var(--text-muted)]" />
+        <p className="text-[13px] text-[var(--text-secondary)] mb-3">{t('skillDisabled')}</p>
+        <button
+          onClick={async () => {
+            setBusy(true);
+            try {
+              await setSkillEnabled(installedSkill, true);
+            } finally {
+              setBusy(false);
+            }
+          }}
+          disabled={busy}
+          className="px-3 py-1.5 rounded-lg bg-[var(--accent)] text-white text-[12px] font-medium hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50 inline-flex items-center gap-1.5"
+        >
+          {busy ? <FiLoader size={12} className="animate-spin" /> : null}
+          {t('skillEnable')}
+        </button>
+      </div>
+    );
+  }
 
   if (!skillBody) {
     return (
@@ -62,9 +94,18 @@ export default function SecurityView() {
         <p className="text-[13px] text-[var(--text-secondary)] mb-3">{t('pluginNeedInstall')}</p>
         {catalog && (
           <button
-            onClick={() => void install(catalog, 'global')}
-            className="px-3 py-1.5 rounded-lg bg-[var(--accent)] text-white text-[12px] font-medium hover:bg-[var(--accent-hover)] transition-colors"
+            onClick={async () => {
+              setBusy(true);
+              try {
+                await install(catalog, 'global');
+              } finally {
+                setBusy(false);
+              }
+            }}
+            disabled={busy}
+            className="px-3 py-1.5 rounded-lg bg-[var(--accent)] text-white text-[12px] font-medium hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50 inline-flex items-center gap-1.5"
           >
+            {busy ? <FiLoader size={12} className="animate-spin" /> : null}
             {t('pluginInstall')}
           </button>
         )}
