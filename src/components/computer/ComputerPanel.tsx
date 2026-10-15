@@ -31,7 +31,7 @@ function PermissionRow({ granted, label, hint, action }: {
 export default function ComputerPanel() {
   const closeComputer = useUIStore((s) => s.closeComputer);
   const { t } = useLanguageStore();
-  const approvalMode = useSettingsStore((s) => s.approvalMode);
+  const approvalMode = useSettingsStore((s) => s.approvalOverride ?? s.approvalMode);
   const {
     enabled, supported, platform, accessibility, screenRecording, geometry,
     activity, lastShot, refresh, setEnabled, requestPermissions, panic, clearActivity,

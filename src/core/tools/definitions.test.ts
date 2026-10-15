@@ -47,6 +47,22 @@ describe('buildToolset', () => {
     expect(names).not.toContain('remember');
   });
 
+  it('advertises the GitHub plugin tools in normal mode, never in Plan Mode', () => {
+    const names = buildToolset({}).map((tl) => tl.name);
+    expect(names).toContain('github_sync');
+    expect(names).toContain('github_push');
+    const planNames = buildToolset({ planMode: true }).map((tl) => tl.name);
+    expect(planNames).not.toContain('github_sync');
+    expect(planNames).not.toContain('github_push');
+  });
+
+  it('accepts github_push with or without a skill id, and rejects a mistyped one', () => {
+    expect(validateToolArgs('github_push', {})).toBeNull();
+    expect(validateToolArgs('github_push', { skillId: 'my-skill' })).toBeNull();
+    expect(validateToolArgs('github_push', { skillId: 42 } as any)).toContain('skillId');
+    expect(validateToolArgs('github_sync', {})).toBeNull();
+  });
+
   it('exposes MCP tools as their own functions', () => {
     const tools = buildToolset({
       mcpTools: [{ server: 'files', name: 'read_text', description: 'read', inputSchema: { type: 'object', properties: { p: { type: 'string' } }, required: ['p'] } }],

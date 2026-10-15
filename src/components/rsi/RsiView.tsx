@@ -25,6 +25,11 @@ import { useLanguageStore } from '../../stores/language.store';
 import { useModelStore } from '../../stores/model.store';
 import { useProviderStore } from '../../stores/provider.store';
 import { usePluginStore } from '../../stores/plugin.store';
+import { useSettingsStore } from '../../stores/settings.store';
+import { useCodeChangesStore } from '../../stores/codeChanges.store';
+import CommandApprovalCard from '../chat/CommandApprovalCard';
+import QuestionPromptCard from '../chat/QuestionPromptCard';
+import { commandsForConversation } from '../chat/approvalPresentation';
 import { useUIStore } from '../../stores/ui.store';
 import SyncView from '../plugins/SyncView';
 import { rsiCanStart } from '../../core/agents/rsiStart';
@@ -130,8 +135,9 @@ export default function RsiView() {
   const setAgentMode = useChatStore((s) => s.setAgentMode);
   const sendMessage = useChatStore((s) => s.sendMessage);
   const stopGeneration = useChatStore((s) => s.stopGeneration);
-  const activeConversationId = useChatStore((s) => s.activeConversationId);
-  const streamingRuns = useChatStore((s) => s.streamingRuns);
+  const continuableConvId = useChatStore((s) => s.continuableConvId);
+  const continueGeneration = useChatStore((s) => s.continueGeneration);
+  const activeConversationId = useChatStore((s) => s.activeConversationId);  const streamingRuns = useChatStore((s) => s.streamingRuns);
   const rawMessages = useChatStore((s) => s.messages);
 
   const modelsMap = useModelStore((s) => s.models);
@@ -260,10 +266,36 @@ export default function RsiView() {
     return list;
   }, [modelsMap, providers, modelSearch]);
 
+  // This conversation's pending command approvals (exec runs waiting for a
+  // decision) and the latest unanswered model question. The RSI view hides the
+  // chat transcript where these cards normally live — without them a run that
+  // stops for approval looks like it "突然中断" with no way forward in place.
+  const changes = useCodeChangesStore((s) => s.changes);
+  const pendingCommands = useMemo(() => {
+    const ids = new Set(rawMessages.map((m) => m.id));
+    return commandsForConversation(changes, activeConversationId, ids)
+      .filter((c) => c.status === 'pending');
+  }, [changes, activeConversationId, rawMessages]);
+  const pendingCommand = pendingCommands[0] ?? null;
+
+  const latestQuestionMessage = useMemo(() => {
+    const lastQuestionIndex = rawMessages.map((m) => !!m.isQuestion).lastIndexOf(true);
+    if (lastQuestionIndex === -1) return null;
+    const msg = rawMessages[lastQuestionIndex];
+    const hasUserReply = rawMessages.slice(lastQuestionIndex + 1).some((m) => m.role === 'user' && !m.isToolResult);
+    if (!hasUserReply) return msg;
+    return null;
+  }, [rawMessages]);
+
   const start = async () => {
     if (!model || busy || running) return;
     setBusy(true);
     setElapsedSeconds(0);
+    // RSI always runs fully automatically, independent of Settings: a
+    // session-only override (never persisted, never shown in Settings) drives
+    // execution while the user's own approvalMode stays exactly as left.
+    // The approval/question cards below remain as the visible safety net for
+    // anything that still pauses (e.g. an ask_user question).
     try {
       await refresh();
       const st = useComputerStore.getState();
@@ -278,8 +310,10 @@ export default function RsiView() {
       )
         return;
       await st.setEnabled(true);
+      useSettingsStore.setState({ approvalOverride: 'fullAuto' });
       await sendMessage(t('rsiKickoff'), model.providerId, model.id);
     } finally {
+      useSettingsStore.setState({ approvalOverride: null });
       setBusy(false);
     }
   };
@@ -574,6 +608,38 @@ export default function RsiView() {
                 {t('rsiStartHint')}
               </p>
             </div>
+          )}
+
+          {/* Stalled-run gates, in place: a command approval or model question
+              stops the loop, and this view hides the chat cards that would
+              otherwise resolve it — so show them here instead of leaving the
+              run silently parked. Visibility is driven by pending status, so a
+              resolved card unmounts on its own. */}
+          {pendingCommand && (
+            <CommandApprovalCard
+              key={pendingCommand.id}
+              change={pendingCommand}
+              onClose={() => {}}
+              onComplete={() => {}}
+              pendingIndex={0}
+              totalPending={pendingCommands.length}
+            />
+          )}
+          {latestQuestionMessage && (
+            <QuestionPromptCard
+              key={latestQuestionMessage.id}
+              message={latestQuestionMessage}
+            />
+          )}
+          {/* One-click resume for an interrupted turn. */}
+          {continuableConvId === activeConversationId && !running && (
+            <button
+              onClick={() => void continueGeneration()}
+              className="w-full flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-[var(--accent)] text-white text-[13px] font-medium hover:bg-[var(--accent-hover)] active:scale-[0.99] transition-all"
+            >
+              <FiZap size={14} />
+              <span>{t('continueOutput')}</span>
+            </button>
           )}
         </div>
 

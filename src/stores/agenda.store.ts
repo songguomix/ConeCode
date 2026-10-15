@@ -171,12 +171,20 @@ export const useAgendaStore = create<AgendaStore>((set, get) => ({
 
     set({ suggesting: true, error: null });
     try {
+      // Same reasoning-model budget rule as the other single-shot calls:
+      // 2000 tokens truncates a thinking model into an empty reply.
+      let maxTokens = 4000;
+      try {
+        const { useModelStore } = await import('./model.store');
+        const m = useModelStore.getState().models.get(providerId)?.find((x) => x.id === modelId);
+        if (m && (m.supportsReasoning || (m as any).userEnabledReasoning)) maxTokens = 16000;
+      } catch {}
       const result = await window.electronAPI.chat.stream({
         providerId,
         modelId,
         // Silent: this must not appear in the transcript's streaming view.
         silent: true,
-        maxTokens: 2000,
+        maxTokens,
         messages: [
           { role: 'system', content: SUGGEST_SYSTEM_PROMPT },
           { role: 'user', content: buildScanBriefing(scan) },
@@ -248,7 +256,9 @@ function detectLanguages(files: string[]): string[] {
 function extractText(result: any): string {
   if (!result || typeof result !== 'object') return '';
   const msg = result.choices?.[0]?.message;
-  if (msg && typeof msg.content === 'string') return msg.content;
+  if (msg && typeof msg.content === 'string' && msg.content.trim()) return msg.content;
+  if (msg && typeof msg.reasoning_content === 'string' && msg.reasoning_content.trim()) return msg.reasoning_content;
+  if (typeof result?.reasoning_content === 'string' && result.reasoning_content.trim()) return result.reasoning_content;
   if (Array.isArray(result.content)) {
     return result.content.map((b: any) => (typeof b?.text === 'string' ? b.text : '')).join('');
   }

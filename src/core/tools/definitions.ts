@@ -498,6 +498,30 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
     },
     promptExample: '{"action": "spawn_agent", "task": "what to investigate and report back"}',
   },
+  {
+    name: 'github_sync',
+    description:
+      'Sync skills from the GitHub repo configured in the GitHub sync plugin (Settings → Plugins). Returns the skills found and installs nothing by itself — ask before installing anything. Do NOT read SKILL.md files yourself for this; the plugin is the source of truth. Fails when no repo is configured or the plugin is disabled.',
+    parameters: {
+      type: 'object',
+      properties: {},
+    },
+    mutating: true,
+    promptExample: '{"action": "github_sync"}',
+  },
+  {
+    name: 'github_push',
+    description:
+      'Push locally-modified skills back to their GitHub repo through the GitHub sync plugin — this is how a repository push gets done. Omit skillId to push every skill with local changes; pass one skillId to push just that skill. Do NOT write SKILL.md bytes or call the GitHub API yourself; the plugin owns the push. The repo and token come from the plugin configuration.',
+    parameters: {
+      type: 'object',
+      properties: {
+        skillId: str('Optional skill id to push; omit to push all locally-modified skills'),
+      },
+    },
+    mutating: true,
+    promptExample: '{"action": "github_push", "skillId": "my-skill"}',
+  },
 ];
 
 /** Tools withheld in Plan Mode (read-only investigation). */

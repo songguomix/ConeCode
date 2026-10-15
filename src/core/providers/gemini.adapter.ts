@@ -188,6 +188,14 @@ export class GeminiAdapter extends BaseAdapter {
     }, signal);
     if (buffer.trim()) handleLine(buffer);
 
+    // A provider that closes without a finishReason has dropped the response
+    // mid-turn. Returning the partial text as success makes the agent loop stop
+    // silently ("输出突然中断" with no error); surface it as a retryable
+    // failure instead — same contract as the OpenAI adapter's [DONE] check.
+    if (!finishReason && !signal?.aborted) {
+      throw new Error('Incomplete model stream: missing finishReason marker');
+    }
+
     onChunk({
       type: 'done',
       content: '',

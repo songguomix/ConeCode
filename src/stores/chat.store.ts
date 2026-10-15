@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { v4 as uuidv4 } from 'uuid';
 import type { Conversation, Message, ReasoningEffort, ChatMessage, ToolCall, ThinkingBlock } from '../types';
 import { useWorkspaceStore } from './workspace.store';
-import { useSettingsStore } from './settings.store';
+import { useSettingsStore, effectiveApprovalMode } from './settings.store';
 import { useLanguageStore } from './language.store';
 import { useTodosStore, type TodoStatus } from './todos.store';
 import { useMemoryStore } from './memory.store';
@@ -158,6 +158,8 @@ function startRun(convId: string): AbortController {
   useChatStore.setState((s) => ({
     streamingRuns: { ...s.streamingRuns, [convId]: { ...EMPTY_RUN, status: 'thinking' } },
     isStreaming: true,
+    // A fresh turn supersedes the stalled one.
+    continuableConvId: s.continuableConvId === convId ? null : s.continuableConvId,
   }));
   return controller;
 }
@@ -264,7 +266,7 @@ function screenshotParts(images: string[]): any[] {
 }
 
 interface FileAction {
-  action: 'read_file' | 'list_dir' | 'ask_user' | 'edit_file' | 'create_file' | 'create_dir' | 'delete' | 'rename' | 'copy' | 'exec' | 'open_app' | 'open_path' | 'system_info' | 'perf_snapshot' | 'perf_monitor' | 'perf_inspect' | 'cost_snapshot' | 'run_background' | 'background_status' | 'search' | 'glob' | 'update_todos' | 'git_status' | 'git_diff' | 'web_fetch' | 'web_search' | 'download' | 'mcp_call' | 'spawn_agent' | 'use_skill' | 'computer'
+  action: 'read_file' | 'list_dir' | 'ask_user' | 'edit_file' | 'create_file' | 'create_dir' | 'delete' | 'rename' | 'copy' | 'exec' | 'open_app' | 'open_path' | 'system_info' | 'perf_snapshot' | 'perf_monitor' | 'perf_inspect' | 'cost_snapshot' | 'run_background' | 'background_status' | 'search' | 'glob' | 'update_todos' | 'git_status' | 'git_diff' | 'web_fetch' | 'web_search' | 'download' | 'mcp_call' | 'spawn_agent' | 'use_skill' | 'computer' | 'github_sync' | 'github_push'
     | 'page_navigate' | 'page_snapshot' | 'page_click' | 'page_fill' | 'page_eval' | 'page_console' | 'remember';
   /** The `computer` tool's own request, nested so its `action` field survives. */
   computer?: ComputerRequest;
@@ -277,6 +279,8 @@ interface FileAction {
   /** remember: which drawer of memory this belongs in, and the evidence for it. */
   kind?: string;
   why?: string;
+  /** github_push: push just this skill; omit to push all locally-modified skills. */
+  skillId?: string;
   path?: string;
   todos?: { content: string; status?: string }[];
   url?: string;
@@ -309,7 +313,7 @@ interface FileAction {
 // react to (so the agent loop should run another turn). Everything else is
 // either deferred for user confirmation or terminal.
 const INFO_ACTIONS = new Set([
-  'read_file', 'list_dir', 'create_file', 'create_dir', 'open_app', 'open_path', 'system_info', 'perf_snapshot', 'perf_monitor', 'perf_inspect', 'cost_snapshot', 'background_status', 'search', 'glob', 'update_todos', 'git_status', 'git_diff', 'web_fetch', 'web_search', 'download', 'mcp_call', 'spawn_agent', 'use_skill',
+  'read_file', 'list_dir', 'create_file', 'create_dir', 'open_app', 'open_path', 'system_info', 'perf_snapshot', 'perf_monitor', 'perf_inspect', 'cost_snapshot', 'background_status', 'search', 'glob', 'update_todos', 'git_status', 'git_diff', 'web_fetch', 'web_search', 'download', 'mcp_call', 'spawn_agent', 'use_skill', 'github_sync', 'github_push',
   'page_navigate', 'page_snapshot', 'page_click', 'page_fill', 'page_eval', 'page_console', 'remember',
 ]);
 
@@ -325,7 +329,7 @@ const INDEPENDENT_READ_ACTIONS = new Set([
 // recognize BARE JSON action objects without mistakenly wrapping unrelated JSON.
 const KNOWN_ACTIONS = new Set([
   'read_file', 'list_dir', 'ask_user', 'edit_file', 'create_file', 'create_dir',
-  'delete', 'rename', 'copy', 'exec', 'open_app', 'open_path', 'system_info', 'perf_snapshot', 'perf_monitor', 'perf_inspect', 'cost_snapshot', 'run_background', 'background_status', 'search', 'glob', 'update_todos', 'git_status', 'git_diff', 'web_fetch', 'web_search', 'download', 'mcp_call', 'spawn_agent', 'use_skill', 'computer',
+  'delete', 'rename', 'copy', 'exec', 'open_app', 'open_path', 'system_info', 'perf_snapshot', 'perf_monitor', 'perf_inspect', 'cost_snapshot', 'run_background', 'background_status', 'search', 'glob', 'update_todos', 'git_status', 'git_diff', 'web_fetch', 'web_search', 'download', 'mcp_call', 'spawn_agent', 'use_skill', 'computer', 'github_sync', 'github_push',
   'page_navigate', 'page_snapshot', 'page_click', 'page_fill', 'page_eval', 'page_console', 'remember',
 ]);
 
@@ -450,6 +454,65 @@ async function backgroundStatusText(parentConversationId?: string): Promise<stri
   ).join('\n');
 }
 
+// ---------------------------------------------------------------------------
+// GitHub plugin tools (github_sync / github_push).
+//
+// The model must NEVER read SKILL.md bytes or call the GitHub API itself for
+// repo work — the GitHub sync plugin owns both. These helpers are the single
+// entry point the executor uses, so UI buttons and model tool calls share one
+// implementation (market.store) and one gate (plugin enabled).
+// ---------------------------------------------------------------------------
+
+/** Null when the model may use the GitHub tools, otherwise the refusal text. */
+async function githubPluginGate(): Promise<string | null> {
+  const { usePluginStore } = await import('./plugin.store');
+  if (usePluginStore.getState().disabled.includes('github-sync')) {
+    return 'Error: the GitHub sync plugin is disabled. Enable it in Settings → Plugins first, then call again.';
+  }
+  return null;
+}
+
+export async function runGithubSyncText(): Promise<string> {
+  const blocked = await githubPluginGate();
+  if (blocked) return blocked;
+  const { useMarketStore } = await import('./market.store');
+  if (!useMarketStore.getState().repo.trim()) {
+    return 'Error: no GitHub repo is configured in the GitHub sync plugin. Ask the user for an "owner/repo" first.';
+  }
+  const ok = await useMarketStore.getState().sync();
+  const st = useMarketStore.getState();
+  if (!ok) {
+    return `Error: GitHub sync failed (${st.error || 'unknown error'}). Check the repo name and token in the GitHub sync plugin.`;
+  }
+  const names = st.remote.map((r) => `- ${r.name} (${r.path})`).join('\n');
+  return `Synced ${st.remote.length} skill(s) from ${st.repo}:\n${names}\nNothing was installed — ask before installing anything.`;
+}
+
+export async function runGithubPushText(skillId?: string): Promise<string> {
+  const blocked = await githubPluginGate();
+  if (blocked) return blocked;
+  const { useMarketStore } = await import('./market.store');
+  const st = useMarketStore.getState();
+  if (skillId) {
+    const origin = st.origins[skillId];
+    if (!origin) {
+      return `Error: skill "${skillId}" was not installed from a GitHub repo (no push origin). Sync it first with github_sync.`;
+    }
+    const ok = await st.pushSkill(skillId);
+    if (ok) return `Pushed "${skillId}" to ${origin.repo} (${origin.path}).`;
+    const err = useMarketStore.getState().error;
+    return `Error: pushing "${skillId}" failed (${err || 'unknown error'}). Check the token in the GitHub sync plugin, then retry.`;
+  }
+  const pushed = await st.autoPush();
+  if (pushed.length) return `Pushed ${pushed.length} skill(s) to GitHub: ${pushed.join(', ')}.`;
+  const after = useMarketStore.getState();
+  if (after.error) return `Error: GitHub push failed (${after.error}). Check the token in the GitHub sync plugin.`;
+  if (!Object.keys(after.origins).length) {
+    return 'Error: nothing has been installed from a GitHub repo yet, so there is nothing to push. Sync first with github_sync.';
+  }
+  return 'No local changes to push — everything is already in sync.';
+}
+
 const MAX_ITERATIONS = 200;
 const MAX_STREAM_RETRIES = 2;
 
@@ -526,7 +589,7 @@ function isTransientStreamError(error: any): boolean {
 
 function toolActionLabel(action: FileAction): string {
   const raw = action.path || action.oldPath || action.srcPath || action.command || action.name
-    || action.url || action.query || action.id || action.tool || action.action;
+    || action.url || action.query || action.id || action.skillId || action.tool || action.action;
   return raw.length > 160 ? `${raw.slice(0, 157)}...` : raw;
 }
 
@@ -1658,8 +1721,14 @@ async function autoCompactIfNeeded(convId: string, providerId: string, modelId: 
 
   const { useModelStore } = await import('./model.store');
   const { useSettingsStore } = await import('./settings.store');
+  // The run's own model — NOT the globally selected one. The user may have
+  // switched models (or edited another model's limits) since this conversation
+  // started; compacting against the wrong window either squeezes too early or
+  // overflows the real one.
+  const runModel = useModelStore.getState().models.get(providerId)?.find((m) => m.id === modelId)
+    ?? useModelStore.getState().getSelectedModel();
   const contextWindow = effectiveContextWindow(
-    useModelStore.getState().getSelectedModel()?.contextWindow,
+    runModel?.contextWindow,
     useSettingsStore.getState().fullContext,
   );
   // Only what is actually SENT counts toward the window: messages an earlier
@@ -1781,13 +1850,42 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
 
   const { useCodeChangesStore } = await import('./codeChanges.store');
   const { useModelStore } = await import('./model.store');
-  const selectedModel = useModelStore.getState().models
+  // Resolved per iteration inside the loop (not once here): a limit edit,
+  // reasoning toggle, or model-list refresh mid-run must apply to the NEXT
+  // turn without waiting for the user to send another message.
+  const resolveModel = () => useModelStore.getState().models
     .get(providerId)?.find((model) => model.id === modelId);
 
+  // Stitched continuation state for the CURRENT turn. A turn whose segments
+  // arrive truncated (length cap) or drop mid-stream resumes from what it
+  // already produced instead of restarting or stopping — the transcript only
+  // ever sees the final stitched message. Tagged by outer iteration so state
+  // can never leak from one turn into the next.
+  interface StitchState {
+    active: boolean;
+    forIteration: number;
+    /** Raw accumulated segment texts (normalized once, on the totals). */
+    rawContent: string;
+    rawReasoning: string;
+    promptTokens: number;
+    completionTokens: number;
+    tokens: number;
+    thinkingBlocks?: ThinkingBlock[];
+    /** Successful segments accumulated (bounds auto-continuation). */
+    segments: number;
+  }
+  const freshStitch = (): StitchState => ({
+    active: false, forIteration: -1, rawContent: '', rawReasoning: '',
+    promptTokens: 0, completionTokens: 0, tokens: 0, thinkingBlocks: undefined, segments: 0,
+  });
+  let stitch = freshStitch();
+  /** Extra segments allowed after the first before a turn must finalize. */
+  const MAX_CONTINUATIONS = 3;
   try {
     for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
       if (abortController.signal.aborted || !ownsRun()) break;
 
+      const selectedModel = resolveModel();
       const modelName = selectedModel?.name || modelId;
       const sessionKey = `${providerId}:${modelId}`;
       const toolset = shouldUseNativeTools(selectedModel, sessionKey)
@@ -1821,8 +1919,27 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
         // calls and their results are re-linked into a protocol-valid exchange.
         ...buildApiMessages(conversationMessages),
       ];
+      const baseMessages = allMessages;
 
-      if (ownsRun()) patchRun(convId, { content: '', toolName: null });
+      // A stitched turn resumes where the previous segment stopped: the
+      // accumulated text rides along as a transient assistant turn (never
+      // persisted as scaffolding) plus a continue prompt. Fresh turns use the
+      // base transcript untouched.
+      const continuing = stitch.active && stitch.forIteration === iteration;
+      if (!continuing) stitch = freshStitch();
+      const requestMessages = (): ChatMessage[] => {
+        if (!(stitch.active && stitch.forIteration === iteration)) return baseMessages;
+        const tail: ChatMessage[] = [];
+        // Adapters tolerate an empty assistant turn (dropped/merged), so no
+        // placeholder is needed when only reasoning accumulated so far.
+        tail.push({ role: 'assistant', content: stitch.rawContent });
+        tail.push({ role: 'user', content: useLanguageStore.getState().t('continuePrompt') });
+        return [...baseMessages, ...tail];
+      };
+
+      // On a continuation the live buffer already holds the stitched text the
+      // user is watching — clearing it would flicker the transcript backwards.
+      if (ownsRun() && !continuing) patchRun(convId, { content: '', toolName: null });
 
       // Reasoning models spend output tokens "thinking" before they answer, so a
       // low cap truncates them mid-thought and yields an empty reply. Give them a
@@ -1840,14 +1957,17 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
       let streamResult: any;
       let fallbackToPrompt = false;
       for (let streamAttempt = 0; streamAttempt <= MAX_STREAM_RETRIES; streamAttempt++) {
+        // Rebuilt per attempt: a stitched retry resumes from the partial that
+        // just arrived instead of replaying the base transcript.
+        const request = requestMessages();
         try {
           streamResult = await window.electronAPI.chat.stream({
             providerId,
             modelId,
-            messages: allMessages,
+            messages: request,
             // Auto intensity resolves per-turn from the user's ask (codex-style),
             // then clamps to the levels the selected model actually declares.
-            reasoningEffort: resolveEffort(reasoningEffort, lastUserText(allMessages), selectedModel?.reasoningEfforts),
+            reasoningEffort: resolveEffort(reasoningEffort, lastUserText(request), selectedModel?.reasoningEfforts),
             maxTokens,
             // Tags every chunk and keys the main-process abort controller, so
             // concurrent conversations never cancel or mix each other's output.
@@ -1875,7 +1995,39 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
             attempt: streamAttempt + 1,
             message: e?.message,
           });
-          if (ownsRun()) patchRun(convId, { content: '', reasoningContent: '', toolName: null });
+          // A dropped stream that already delivered pure-text partial keeps it:
+          // resume from the partial instead of restarting the turn and losing
+          // what the user already watched arrive. Only when nothing usable
+          // arrived (or a tool call was already announced) is the buffer
+          // cleared for a clean restart. Stitching consumes attempts from the
+          // same retry budget, so this can never spin forever.
+          flushRunDeltas();
+          const partialText = ownsRun() ? runBuffer().content : '';
+          const partialReasoning = ownsRun() ? runBuffer().reasoningContent : '';
+          const partialHasTools = ownsRun() && !!runBuffer().toolName;
+          const stitchedAlready = stitch.active && stitch.forIteration === iteration
+            && (!!stitch.rawContent || !!stitch.rawReasoning);
+          if (!abortController.signal.aborted && partialText.trim() && !partialHasTools && !stitchedAlready) {
+            // Store the RAW partial — normalization runs once on the stitched
+            // totals below, so a tool call split across the drop is completed
+            // rather than processed as two broken halves.
+            stitch = {
+              active: true,
+              forIteration: iteration,
+              rawContent: partialText,
+              rawReasoning: partialReasoning,
+              promptTokens: 0,
+              completionTokens: 0,
+              tokens: 0,
+              thinkingBlocks: undefined,
+              segments: 0,
+            };
+            console.warn('[runAgentLoop] resuming from partial after transient failure', {
+              partialLen: partialText.length,
+            });
+          } else if (ownsRun() && !stitch.active) {
+            patchRun(convId, { content: '', reasoningContent: '', toolName: null });
+          }
           await new Promise((resolve) => setTimeout(resolve, 500 * (streamAttempt + 1)));
           if (abortController.signal.aborted || !ownsRun()) throw e;
         }
@@ -1888,23 +2040,45 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
       // tokens if the last chat:chunk IPC events haven't been applied by the time
       // the invoke resolves — that race is what made replies "suddenly cut off".
       // Fall back to the live buffer only if the return shape is unexpected/empty.
+      // On a stitched turn the buffer still holds earlier segments, so only the
+      // return value is read for the current one.
       const authoritative = extractStreamResult(streamResult);
       // Structured calls the provider returned. A turn that only calls tools has
       // no prose at all, so several checks below key off this being non-empty.
+      // Only the FINAL segment's calls run — earlier segments were continued
+      // precisely because they carried none.
       const nativeCalls = authoritative.toolCalls;
-      const rawContent = authoritative.content.trim() ? authoritative.content : runBuffer().content;
-      const rawReasoning = authoritative.reasoning.trim() ? authoritative.reasoning : runBuffer().reasoningContent;
+      const stitchedTurn = stitch.active && stitch.forIteration === iteration;
+      const segRawContent = stitchedTurn
+        ? authoritative.content
+        : (authoritative.content.trim() ? authoritative.content : runBuffer().content);
+      const segRawReasoning = stitchedTurn
+        ? authoritative.reasoning
+        : (authoritative.reasoning.trim() ? authoritative.reasoning : runBuffer().reasoningContent);
       // The 'done' chunk sets the run's finish reason, but it's the event most
       // likely to arrive after this invoke resolves — so trust the return
       // value's finish_reason when present (keeps the "truncated, please
       // continue" hint reliable for OpenAI-style providers).
       if (authoritative.finishReason) turnFinishReason = authoritative.finishReason;
 
+      // Accumulate this segment into the turn totals. Normalization runs ONCE
+      // on the totals below, so a tool call split across a truncation boundary
+      // is completed by its continuation instead of dying as two halves.
+      stitch.rawContent += segRawContent;
+      stitch.rawReasoning += segRawReasoning
+        ? (stitch.rawReasoning ? '\n' : '') + segRawReasoning
+        : '';
+      stitch.promptTokens += authoritative.promptTokens || 0;
+      stitch.completionTokens += authoritative.completionTokens || 0;
+      stitch.tokens += authoritative.tokens || 0;
+      if (authoritative.thinkingBlocks?.length) stitch.thinkingBlocks = authoritative.thinkingBlocks;
+      stitch.segments += 1;
+
       // Split out any inline <think> chain-of-thought, then rewrite native XML
       // tool calls into ```json blocks — before we store, render, or parse.
-      const split = extractThink(rawContent);
+      const split = extractThink(stitch.rawContent);
       let finalContent = normalizeBareJsonActions(normalizeToolCalls(split.content));
-      let finalReasoningContent = [rawReasoning, split.reasoning]
+      let finalReasoningContent = [stitch.rawReasoning, split.reasoning]
         .filter((s) => s && s.trim())
         .join('\n');
 
@@ -1926,6 +2100,24 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
       if (finalReasoningContent && finalReasoningContent.trim()) {
         useModelStore.getState().learnReasoning(providerId, modelId);
       }
+
+      // Length-cap truncation with no actionable work yet: resume seamlessly
+      // from the accumulated text instead of stopping with a "truncated" error.
+      // Bounded — after MAX_CONTINUATIONS segments the turn finalizes and the
+      // one-click continue takes over. Tool-carrying turns never enter here:
+      // their calls execute below and the loop continues on the results.
+      const hasWork = nativeCalls.length > 0 || extractToolActionEntries(finalContent).length > 0;
+      if (finishReason() === 'length' && !hasWork && stitch.segments <= MAX_CONTINUATIONS
+        && !abortController.signal.aborted && ownsRun()) {
+        stitch.active = true;
+        stitch.forIteration = iteration + 1;
+        console.warn('[runAgentLoop] length truncation, stitching seamless continuation', {
+          segments: stitch.segments,
+          stitchedLen: stitch.rawContent.length,
+        });
+        continue;
+      }
+      stitch.active = false;
 
       // No usable content. Most often the model was truncated mid-reasoning
       // (finish_reason 'length') or only produced thinking. Surface it instead of
@@ -1951,15 +2143,20 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
             providerId,
             createdAt: Date.now(),
             thinkingTime: Date.now() - turnStartTime,
+            interrupted: true,
           };
           await window.electronAPI.message.create(assistantMsg);
           if (ownsRun()) patchRun(convId, { content: '', reasoningContent: '' });
           set((s) => s.activeConversationId === convId
             ? { messages: [...s.messages, assistantMsg] }
             : {});
+          if (ownsRun()) set({ continuableConvId: convId });
         } else {
           const t = useLanguageStore.getState().t;
-          if (ownsRun()) set({ error: finishReason() === 'length' ? t('errTruncated') : t('errNoContent') });
+          if (ownsRun()) set({
+            error: finishReason() === 'length' ? t('errTruncated') : t('errNoContent'),
+            continuableConvId: convId,
+          });
         }
         break;
       }
@@ -1974,11 +2171,13 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
         providerId,
         createdAt: Date.now(),
         thinkingTime: Date.now() - turnStartTime,
-        tokensUsed: authoritative.tokens || undefined,
-        promptTokens: authoritative.promptTokens || undefined,
-        completionTokens: authoritative.completionTokens || undefined,
+        // Token counts accumulate across stitched segments; a single-segment
+        // turn sums to exactly its own usage.
+        tokensUsed: stitch.tokens || undefined,
+        promptTokens: stitch.promptTokens || undefined,
+        completionTokens: stitch.completionTokens || undefined,
         toolCalls: nativeCalls.length ? nativeCalls : undefined,
-        thinkingBlocks: authoritative.thinkingBlocks,
+        thinkingBlocks: stitch.thinkingBlocks,
       };
       await window.electronAPI.message.create(assistantMsg);
       if (ownsRun()) patchRun(convId, { content: '', reasoningContent: '' });
@@ -2006,6 +2205,8 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
         // No action this turn. If the model was cut off at the token limit
         // (finish_reason 'length'), it likely meant to keep going (e.g. emit a
         // tool call) — surface that rather than ending as if it were done.
+        // (Short truncations never reach here: they were stitched seamlessly
+        // above. This is the exhausted-budget path.)
         if (finishReason() === 'length') {
           // If there's reasoning content, save it and suggest continuation
           if (finalReasoningContent.trim()) {
@@ -2019,14 +2220,19 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
               providerId,
               createdAt: Date.now(),
               thinkingTime: Date.now() - turnStartTime,
+              interrupted: true,
             };
             await window.electronAPI.message.create(assistantMsg);
             if (ownsRun()) patchRun(convId, { content: '', reasoningContent: '' });
             set((s) => s.activeConversationId === convId
               ? { messages: [...s.messages, assistantMsg] }
               : {});
+            if (ownsRun()) set({ continuableConvId: convId });
           } else {
-            if (ownsRun()) set({ error: useLanguageStore.getState().t('errTruncated') });
+            if (ownsRun()) set({
+              error: useLanguageStore.getState().t('errTruncated'),
+              continuableConvId: convId,
+            });
           }
         }
         // If there's content but no actions, the model finished its response
@@ -2142,7 +2348,7 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
           pendingNote: string,
         ): Promise<string> => {
           const id = await codeChangesStore.addChange({ ...changeCtx, ...data });
-          if (shouldAutoApprove(useSettingsStore.getState().approvalMode, data.kind)) {
+          if (shouldAutoApprove(effectiveApprovalMode(), data.kind)) {
             const outcome = await codeChangesStore.autoApply(id);
             shouldContinue = true;
             return outcome.result || pendingNote;
@@ -2330,6 +2536,17 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
           case 'spawn_agent': {
             const report = await runHeadlessAgent(action.task!, providerId, modelId, abortController.signal);
             result = `Sub-agent report:\n${report}`;
+            break;
+          }
+          case 'github_sync': {
+            result = await runGithubSyncText();
+            break;
+          }
+          case 'github_push': {
+            const skillId = typeof action.skillId === 'string' && action.skillId.trim()
+              ? action.skillId.trim()
+              : undefined;
+            result = await runGithubPushText(skillId);
             break;
           }
           case 'edit_file': {
@@ -2654,6 +2871,11 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
     // salvage and its state is not ours to clear.
     if (!ownsRun()) return;
     const userStopped = abortController.signal.aborted;
+    // Token deltas are buffered per animation frame — a failure that lands
+    // between the last chat:chunk and the next frame would otherwise salvage a
+    // buffer missing its tail ("输出一半就没了"). Flush first so the salvaged
+    // partial includes everything that actually arrived.
+    flushRunDeltas();
     const partial = runBuffer().content;
     const partialReasoning = runBuffer().reasoningContent;
     console.warn('[runAgentLoop] stream interrupted', {
@@ -2664,7 +2886,8 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
     const salvaged = normalizeBareJsonActions(normalizeToolCalls(split.content));
     const salvagedReasoning = [partialReasoning, split.reasoning].filter((s) => s && s.trim()).join('\n');
     if (salvaged.trim() || salvagedReasoning.trim()) {
-      const note = userStopped ? '' : '\n\n_(输出意外中断，请点继续或重试)_';
+      const t = useLanguageStore.getState().t;
+      const note = userStopped ? '' : `\n\n${t('interruptNote')}`;
       const msg: Message = {
         id: uuidv4(),
         conversationId: convId,
@@ -2675,11 +2898,15 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
         providerId,
         createdAt: Date.now(),
         thinkingTime: Date.now() - turnStartTime,
+        // Only a genuine (non-stop) interruption offers continuation — a user
+        // stop is final by definition.
+        interrupted: !userStopped,
       };
       await window.electronAPI.message.create(msg);
       set((s) => s.activeConversationId === convId ? { messages: [...s.messages, msg] } : {});
+      if (!userStopped && ownsRun()) set({ continuableConvId: convId });
     } else if (!userStopped && e?.name !== 'AbortError') {
-      if (ownsRun()) set({ error: e?.message || String(e) });
+      if (ownsRun()) set({ error: e?.message || String(e), continuableConvId: convId });
     }
   } finally {
     if (runControllers.get(convId) === abortController) {
@@ -2778,6 +3005,18 @@ interface ChatStore {
   /** Release install hold and auto-continue the held conversation. */
   continueAfterInstall: () => Promise<void>;
   clearError: () => void;
+  /**
+   * Conversation whose last run ended interruptible (network drop, output-limit
+   * truncation) and can take a one-click continuation. Cleared when its next
+   * run starts — a fresh turn supersedes the stalled one.
+   */
+  continuableConvId: string | null;
+  /**
+   * One-click resume: sends a "continue where you stopped" turn into the
+   * stalled conversation. The prompt is persisted as a normal user message so
+   * the transcript stays honest about what happened.
+   */
+  continueGeneration: (conversationId?: string) => Promise<void>;
   compactConversation: (providerId: string, modelId: string) => Promise<void>;
   pushNotice: (markdown: string, providerId?: string, modelId?: string) => Promise<void>;
   /** Delete `messageId` and every message after it (checkpoint rollback). */
@@ -2791,6 +3030,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   isStreaming: false,
   streamingRuns: {},
   error: null,
+  continuableConvId: null,
   messageEdits: {},
   /** opencode-style follow-ups typed mid-run, per conversation (session-only). */
   queuedMessages: {},
@@ -3222,6 +3462,29 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   clearError: () => set({ error: null }),
+
+  continueGeneration: async (conversationId) => {
+    const convId = conversationId ?? get().activeConversationId;
+    if (!convId) return;
+    if (get().streamingRuns[convId] || get().messageEdits[convId]) return;
+    if (isHolding(useInstallGateStore.getState().jobs)) return;
+    if (!get().conversations.some((c) => c.id === convId)) return;
+    const conv = get().conversations.find((c) => c.id === convId);
+    let providerId = conv?.providerId;
+    let modelId = conv?.modelId;
+    if (!providerId || !modelId) {
+      const { useModelStore } = await import('./model.store');
+      const sel = useModelStore.getState().getSelectedModel();
+      if (!sel) {
+        set({ error: useLanguageStore.getState().t('selectModelHint') });
+        return;
+      }
+      providerId = sel.providerId;
+      modelId = sel.id;
+    }
+    set({ error: null });
+    await deliverToConversation(convId, useLanguageStore.getState().t('continuePrompt'), providerId, modelId);
+  },
 
   // Drop the tail of the transcript, in storage as well as in memory, so a
   // rolled-back turn doesn't come back on reload — and so the model is never

@@ -683,8 +683,13 @@ function initProviders() {
   const providers = providerRepo.findAll();
   for (const p of providers) {
     if (p.enabled) {
+      // Local endpoints (Ollama / LM Studio / vLLM…) need no key. Skipping
+      // registration when the key is empty leaves a saved, enabled provider
+      // with no adapter — model:list falls back to cache so models still show,
+      // then chat:stream throws "Provider not found" ("模型连接不上").
+      // Always register; the adapters send an empty bearer which those servers ignore.
       const apiKey = readJSON<Record<string, string>>('apikeys.json', {})[p.id] || '';
-      if (apiKey) providerRegistry.register({ ...p, apiKey });
+      providerRegistry.register({ ...p, apiKey });
     }
   }
 }
@@ -729,21 +734,40 @@ function registerIPC() {
   ipcMain.handle('provider:list', () => providerRepo.findAll());
   ipcMain.handle('provider:create', (_, config) => {
     const provider = providerRepo.create(config);
+    // Always register the adapter, even with an empty key (local keyless
+    // endpoints). Otherwise the new provider can list cached models but every
+    // chat:stream fails with "Provider not found".
     if (config.apiKey) {
       const keys = readJSON<Record<string, string>>('apikeys.json', {});
       keys[provider.id] = config.apiKey;
       writeJSON('apikeys.json', keys);
-      providerRegistry.register({ ...provider, apiKey: config.apiKey });
     }
+    providerRegistry.register({ ...provider, apiKey: config.apiKey || '' });
     return provider;
   });
   ipcMain.handle('provider:update', (_, id, config) => {
     const provider = providerRepo.update(id, config);
-    if (provider && config.apiKey) {
-      const keys = readJSON<Record<string, string>>('apikeys.json', {});
-      keys[id] = config.apiKey;
-      writeJSON('apikeys.json', keys);
-      providerRegistry.register({ ...provider, apiKey: config.apiKey });
+    // Re-register on ANY update so baseUrl/type edits take effect even when
+    // the key field was left blank. Previously only a non-empty apiKey
+    // re-registered, leaving the adapter stuck on the old baseUrl ("连接不上"
+    // after editing the endpoint).
+    if (provider) {
+      if (config && config.enabled === false) {
+        // Disabled → no adapter, so its models can't be used by mistake.
+        providerRegistry.unregister(id);
+      } else if (config && typeof config.apiKey === 'string' && config.apiKey) {
+        // A newly typed key replaces the stored one.
+        const keys = readJSON<Record<string, string>>('apikeys.json', {});
+        keys[id] = config.apiKey;
+        writeJSON('apikeys.json', keys);
+        providerRegistry.register({ ...provider, apiKey: config.apiKey });
+      } else {
+        // Blank key field means "untouched" (the edit form always sends the
+        // field): keep the stored key instead of wiping it, but still
+        // re-register so baseUrl/type edits take effect immediately.
+        const apiKey = readJSON<Record<string, string>>('apikeys.json', {})[id] || '';
+        providerRegistry.register({ ...provider, apiKey });
+      }
     }
     // Disabling a provider → drop its cached models so they stop showing up
     // (they'll be re-fetched fresh if it's re-enabled).

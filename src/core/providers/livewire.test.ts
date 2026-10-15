@@ -182,6 +182,15 @@ describe('Anthropic over the wire', () => {
       { type: 'text', text: 'runtime A' },
     ]);
   });
+
+  it('rejects a stream that closes without message_stop', async () => {
+    respondWith = (res) => sse(res, [
+      '{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}',
+    ]);
+    await expect(new AnthropicAdapter(config({ type: 'anthropic' })).streamMessage(
+      { model: 'm', messages: [{ role: 'user', content: 'continue' }] }, () => {},
+    )).rejects.toThrow('Incomplete model stream');
+  });
 });
 
 describe('Gemini over the wire', () => {
@@ -205,6 +214,13 @@ describe('Gemini over the wire', () => {
     // Text that arrived alongside the call is not lost.
     expect(parts.find((p: any) => p.text)?.text).toBe('looking');
     expect(result.usageMetadata.totalTokenCount).toBe(42);
+  });
+
+  it('rejects a stream that closes without a finishReason', async () => {
+    respondWith = (res) => sse(res, ['{"candidates":[{"content":{"parts":[{"text":"partial"}]}}]}']);
+    await expect(new GeminiAdapter(config({ type: 'gemini' })).streamMessage(
+      { model: 'm', messages: [{ role: 'user', content: 'continue' }] }, () => {},
+    )).rejects.toThrow('Incomplete model stream');
   });
 });
 
@@ -285,7 +301,7 @@ describe('a compacted history reaches the provider', () => {
   });
 
   it('Gemini gets the summary, and never an empty contents list', async () => {
-    respondWith = (res) => sse(res, ['{"candidates":[{"content":{"parts":[{"text":"ok"}]}}]}']);
+    respondWith = (res) => sse(res, ['{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP"}]}']);
     await new GeminiAdapter(config({ type: 'gemini' })).streamMessage(
       { model: 'm', messages: compacted }, () => {},
     );

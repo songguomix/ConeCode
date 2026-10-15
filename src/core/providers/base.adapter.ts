@@ -199,6 +199,13 @@ export abstract class BaseAdapter implements ProviderAdapter {
         buffer += text;
         onData(text);
       }
+      // Flush a multibyte char split across the final chunk boundary — without
+      // this its bytes are silently dropped and the saved message loses its tail.
+      const tail = decoder.decode();
+      if (tail) {
+        buffer += tail;
+        onData(tail);
+      }
     } finally {
       if (idleTimer) clearTimeout(idleTimer);
     }

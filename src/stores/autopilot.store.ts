@@ -95,11 +95,20 @@ export const useAutopilotStore = create<AutopilotStore>((set, get) => ({
 
     set({ loadingIdeas: true });
     try {
+      // Reasoning models need room to think: 1200 tokens truncates them into an
+      // empty reply (→ silent fallback that looks like "模型连接不上"). Scale
+      // the budget the same way chat turns do.
+      let maxTokens = 4000;
+      try {
+        const { useModelStore } = await import('./model.store');
+        const m = useModelStore.getState().models.get(providerId!)?.find((x) => x.id === modelId);
+        if (m && (m.supportsReasoning || (m as any).userEnabledReasoning)) maxTokens = 16000;
+      } catch {}
       const result = await window.electronAPI.chat.stream({
         providerId: providerId!,
         modelId: modelId!,
         silent: true,
-        maxTokens: 1200,
+        maxTokens,
         messages: [
           { role: 'system', content: IDEAS_SYSTEM_PROMPT },
           { role: 'user', content: 'Suggest 6 projects to build right now.' },
@@ -108,7 +117,8 @@ export const useAutopilotStore = create<AutopilotStore>((set, get) => ({
       const ideas = parseIdeas(extractText(result), uuidv4);
       if (!ideas.length) return showFallback();
       set({ ideas, usingFallback: false, loadingIdeas: false, ideasModelKey: key });
-    } catch {
+    } catch (e: any) {
+      console.warn('[autopilot] loadIdeas failed:', e?.message || String(e));
       showFallback();
     }
   },
@@ -239,7 +249,11 @@ async function resolveVerifyCommand(dir: string): Promise<string | null> {
 function extractText(result: any): string {
   if (!result || typeof result !== 'object') return '';
   const msg = result.choices?.[0]?.message;
-  if (msg && typeof msg.content === 'string') return msg.content;
+  // Prefer content, but fall back to reasoning_content: some models emit the
+  // whole answer there and leave content empty (see runAgentLoop promotion).
+  if (msg && typeof msg.content === 'string' && msg.content.trim()) return msg.content;
+  if (msg && typeof msg.reasoning_content === 'string' && msg.reasoning_content.trim()) return msg.reasoning_content;
+  if (typeof result?.reasoning_content === 'string' && result.reasoning_content.trim()) return result.reasoning_content;
   if (Array.isArray(result.content)) {
     return result.content.map((b: any) => (typeof b?.text === 'string' ? b.text : '')).join('');
   }

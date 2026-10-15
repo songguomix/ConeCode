@@ -167,7 +167,9 @@ function truncate(text: string, max: number): string {
 function extractText(result: any): string {
   if (!result || typeof result !== 'object') return '';
   const msg = result.choices?.[0]?.message;
-  if (msg && typeof msg.content === 'string') return msg.content;
+  if (msg && typeof msg.content === 'string' && msg.content.trim()) return msg.content;
+  if (msg && typeof msg.reasoning_content === 'string' && msg.reasoning_content.trim()) return msg.reasoning_content;
+  if (typeof result?.reasoning_content === 'string' && result.reasoning_content.trim()) return result.reasoning_content;
   if (Array.isArray(result.content)) {
     return result.content.map((b: any) => (typeof b?.text === 'string' ? b.text : '')).join('');
   }

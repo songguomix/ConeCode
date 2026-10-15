@@ -45,6 +45,14 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
       // The main process returns null when the id no longer exists — keep the
       // current entry rather than punching a null into the list.
       set((s) => ({ providers: s.providers.map((p) => (p.id === id && provider ? provider : p)) }));
+      // Endpoint / key / type edits change what the provider reports (models,
+      // context windows). Re-list immediately so the new specs show up without
+      // a manual refresh; a disabled provider has nothing to list.
+      const enabled = provider ? provider.enabled : get().providers.find((p) => p.id === id)?.enabled;
+      if (provider && enabled !== false) {
+        const { useModelStore } = await import('./model.store');
+        await useModelStore.getState().fetchModels(id);
+      }
     } catch (e: any) {
       set({ error: e.message });
     }

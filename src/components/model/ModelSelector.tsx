@@ -19,7 +19,11 @@ const CAP_ICONS: Record<string, string> = {
 export default function ModelSelector() {
   const [search, setSearch] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [tooltipModel, setTooltipModel] = useState<AIModel | null>(null);
+  // Hover key only — the model object itself is derived fresh from the store
+  // every render. Storing the object here froze the tooltip on the values from
+  // hover time, so a just-saved context/output edit kept showing the old
+  // numbers until the mouse moved away and back ("改了不同步").
+  const [tooltipKey, setTooltipKey] = useState<{ providerId: string; modelId: string } | null>(null);
   const [editingLimits, setEditingLimits] = useState<{ providerId: string; modelId: string } | null>(null);
   const [refreshingLimits, setRefreshingLimits] = useState(false);
   const [limitDraft, setLimitDraft] = useState<{ context: string; maxOutput: string }>({ context: '', maxOutput: '' });
@@ -79,6 +83,10 @@ export default function ModelSelector() {
   }, [models, search, favorites, recentModels, providers, t]);
 
   const flatModels = useMemo(() => grouped.flatMap((g) => g.models), [grouped]);
+
+  const tooltipModel = tooltipKey
+    ? models.get(tooltipKey.providerId)?.find((m) => m.id === tooltipKey.modelId) ?? null
+    : null;
 
   useEffect(() => {
     if (isOpen) searchRef.current?.focus();
@@ -243,8 +251,8 @@ export default function ModelSelector() {
                     <div key={scopedLimitKey}>
                       <div
                         onClick={() => { selectModel(model.id, model.providerId); closeModelSelector(); }}
-                        onMouseEnter={() => { setSelectedIndex(idx); setTooltipModel(model); }}
-                        onMouseLeave={() => setTooltipModel(null)}
+                        onMouseEnter={() => { setSelectedIndex(idx); setTooltipKey({ providerId: model.providerId, modelId: model.id }); }}
+                        onMouseLeave={() => setTooltipKey(null)}
                         className={`flex items-center gap-2 px-3 py-2.5 cursor-pointer text-sm transition-colors ${
                           idx === selectedIndex ? 'bg-[var(--bg-3)]' : 'hover:bg-[var(--bg-3)]/50'
                         } ${isSelected ? 'text-[var(--accent)]' : 'text-[var(--text-primary)]'}`}>

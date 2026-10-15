@@ -20,9 +20,18 @@ Instruct the implementation agent to work in the new project directory provided 
 
 export function parseProjectBrief(result: any): ProjectBrief {
   const message = result?.choices?.[0]?.message;
-  const text = typeof message?.content === 'string' ? message.content
-    : Array.isArray(result?.content) ? result.content.map((b: any) => b?.text || '').join('')
-    : (result?.candidates?.[0]?.content?.parts || []).map((p: any) => p?.text || '').join('');
+  // Some models (e.g. Xiaomi mimo) put the entire reply into reasoning_content
+  // and leave content empty — the same promotion runAgentLoop does for chat
+  // turns. Without it every brief generation with such a model fails as
+  // "连接不上" even though the model actually answered.
+  const text = typeof message?.content === 'string' && message.content.trim()
+    ? message.content
+    : typeof message?.reasoning_content === 'string' && message.reasoning_content.trim()
+      ? message.reasoning_content
+      : typeof result?.reasoning_content === 'string' && result.reasoning_content.trim()
+        ? result.reasoning_content
+        : Array.isArray(result?.content) ? result.content.map((b: any) => b?.text || '').join('')
+        : (result?.candidates?.[0]?.content?.parts || []).map((p: any) => p?.text || '').join('');
   const raw = text.trim();
   const json = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
   try {

@@ -53,6 +53,9 @@ export interface Message {
   summaryUpToId?: string;
   // Time in milliseconds the model spent thinking/generating this response.
   thinkingTime?: number;
+  // The turn ended by interruption (network drop) or by hitting the output
+  // limit rather than finishing — the UI offers one-click continuation for it.
+  interrupted?: boolean;
 }
 
 export interface ChatState {

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useChatStore } from './chat.store';
 import { useModelStore } from './model.store';
+import { useLanguageStore } from './language.store';
 import { useSettingsStore } from './settings.store';
 import { useWorkspaceStore } from './workspace.store';
 import { useTodosStore } from './todos.store';
@@ -524,6 +525,121 @@ describe('runAgentLoop with native tool calling', () => {
     expect(useChatStore.getState().isStreaming).toBe(false);
   });
 
+  it('compacts against the conversation model window, not the selected one', async () => {
+    // The run uses the 100-token model while a 1M model is selected: the
+    // compaction guard must still trigger. Reading the selected model here
+    // (as before) computed a 256k budget and skipped compaction entirely.
+    const big = { ...model, id: 'big', name: 'Big', contextWindow: 1_000_000 };
+    const small = { ...model, contextWindow: 100 };
+    useModelStore.setState({
+      models: new Map([['p1', [small, big]]]),
+      selectedModelId: 'big',
+      selectedProviderId: 'p1',
+    });
+    useChatStore.setState({
+      messages: Array.from({ length: 13 }, (_, index) => ({
+        id: `old-${index}`, conversationId: 'conv1', role: 'user' as const,
+        content: 'x'.repeat(120), createdAt: index,
+      })),
+    });
+    queued = [textResponse('compact summary'), textResponse('main answer')];
+
+    await useChatStore.getState().sendMessage('trigger compaction', 'p1', 'gpt-test');
+
+    expect(streamCalls).toHaveLength(2);
+    expect(streamCalls[0].messages[0].content).toContain('compress');
+    expect(created.some((message) => message.isSummary)).toBe(true);
+    expect(created.some((message) => message.content === 'main answer')).toBe(true);
+  });
+
+  it('picks up a limit edit on the next turn of the same run', async () => {
+    // A context/max-output edit mid-run must reach the following turn without
+    // waiting for the user to send another message.
+    useModelStore.setState({ models: new Map([['p1', [model]]]) });
+    queued = [toolCallResponse('read_file', { path: '/proj/a.ts' }), textResponse('done')];
+    const origRead = window.electronAPI.fs.readFile;
+    window.electronAPI.fs.readFile = async (p: string) => {
+      useModelStore.getState().setModelLimits('p1', 'gpt-test', { maxOutputTokens: 7777 });
+      return origRead(p);
+    };
+
+    await useChatStore.getState().sendMessage('read it', 'p1', 'gpt-test');
+
+    expect(streamCalls).toHaveLength(2);
+    expect(streamCalls[0].maxTokens).toBe(8192);
+    expect(streamCalls[1].maxTokens).toBe(7777);
+  });
+
+  it('lets the model drive a repo push through the GitHub plugin tools', async () => {
+    // Unknown skill: the plugin refuses with a correctable error (not a crash),
+    // the error is fed back, and the loop continues to a final answer.
+    queued = [toolCallResponse('github_push', { skillId: 'ghost' }), textResponse('done')];
+
+    await useChatStore.getState().sendMessage('push my changes', 'p1', 'gpt-test');
+
+    expect(streamCalls).toHaveLength(2);
+    expect(JSON.stringify(streamCalls[1].messages)).toContain('not installed from a GitHub repo');
+    expect(created.some((m) => m.content === 'done')).toBe(true);
+  });
+
+  it('refuses GitHub tool calls while the plugin is disabled', async () => {
+    const { usePluginStore } = await import('./plugin.store');
+    usePluginStore.setState({ disabled: ['github-sync'] });
+    try {
+      queued = [toolCallResponse('github_sync', {}), textResponse('done')];
+
+      await useChatStore.getState().sendMessage('sync my repo', 'p1', 'gpt-test');
+
+      expect(streamCalls).toHaveLength(2);
+      expect(JSON.stringify(streamCalls[1].messages)).toContain('plugin is disabled');
+    } finally {
+      usePluginStore.setState({ disabled: [] });
+    }
+  });
+
+  it('pushes a linked skill when the model calls github_push', async () => {
+    const { useSkillsStore } = await import('./skills.store');
+    const { useMarketStore } = await import('./market.store');
+    useSkillsStore.setState({
+      installed: [{
+        id: 'alpha', name: 'Alpha', scope: 'global', source: 'custom',
+        description: 'd', tags: ['market'], body: 'FIXED locally',
+      }],
+      effective: [],
+      loaded: true,
+    } as any);
+    useMarketStore.setState({
+      repo: 'o/r',
+      origins: { alpha: { repo: 'o/r', path: 'alpha/SKILL.md', content: 'baseline' } },
+      error: null,
+    });
+    localStorage.setItem('conecode.pluginToken', 'tok');
+    const puts: any[] = [];
+    const savedFetch = (globalThis as any).fetch;
+    (globalThis as any).fetch = vi.fn(async (url: string, opts: any) => {
+      if (opts?.method === 'PUT') {
+        puts.push({ url, body: JSON.parse(opts.body) });
+        return new Response('{}', { status: 200 });
+      }
+      return new Response(JSON.stringify({ sha: 'abc' }), { status: 200 });
+    });
+    try {
+      queued = [toolCallResponse('github_push', { skillId: 'alpha' }), textResponse('done')];
+
+      await useChatStore.getState().sendMessage('push my changes', 'p1', 'gpt-test');
+
+      expect(puts).toHaveLength(1);
+      expect(puts[0].url).toContain('/repos/o/r/contents/alpha/SKILL.md');
+      expect(puts[0].body.message).toContain('alpha');
+      expect(streamCalls).toHaveLength(2);
+      expect(JSON.stringify(streamCalls[1].messages)).toContain('Pushed');
+      expect(JSON.stringify(streamCalls[1].messages)).toContain('alpha/SKILL.md');
+    } finally {
+      (globalThis as any).fetch = savedFetch;
+      localStorage.removeItem('conecode.pluginToken');
+    }
+  });
+
   it('runs two conversations concurrently, even on the same model', async () => {
     window.electronAPI.message.list = vi.fn(async (id: string): Promise<Message[]> =>
       id === 'conv1'
@@ -594,5 +710,129 @@ describe('runAgentLoop with native tool calling', () => {
 
     expect(useChatStore.getState().activeConversationId).toBe('conv3');
     expect(useChatStore.getState().messages).toEqual([conv3Message]);
+  });
+
+  it('stitches a length-truncated reply seamlessly instead of stopping', async () => {
+    const lengthResponse = (content: string) => ({
+      choices: [{ message: { role: 'assistant', content }, finish_reason: 'length' }],
+    });
+    window.electronAPI.chat.stream = vi.fn(async (params: any) => {
+      streamCalls.push(params);
+      return streamCalls.length === 1 ? lengthResponse('part one ') : textResponse('part two');
+    });
+
+    await useChatStore.getState().sendMessage('write a long answer', 'p1', 'gpt-test');
+
+    expect(streamCalls).toHaveLength(2);
+    // Second request resumes from the partial with a continue prompt.
+    const second = JSON.stringify(streamCalls[1].messages);
+    expect(second).toContain('part one ');
+    // One stitched message, no truncation error, no extra scaffolding saved.
+    const assistants = useChatStore.getState().messages.filter((m) => m.role === 'assistant');
+    expect(assistants).toHaveLength(1);
+    expect(assistants[0].content).toBe('part one part two');
+    expect(useChatStore.getState().error).toBeNull();
+    expect(useChatStore.getState().continuableConvId).toBeNull();
+  });
+
+  it('still executes a tool call that arrived with a length finish', async () => {
+    queued = [
+      {
+        choices: [{
+          message: {
+            role: 'assistant', content: '',
+            tool_calls: [{ id: 'c1', type: 'function', function: { name: 'read_file', arguments: '{"path":"/proj/a.ts"}' } }],
+          },
+          finish_reason: 'length',
+        }],
+      },
+      textResponse('done'),
+    ];
+
+    await useChatStore.getState().sendMessage('read it', 'p1', 'gpt-test');
+
+    const toolResult = useChatStore.getState().messages.find((m) => m.role === 'tool');
+    expect(toolResult!.content).toContain('file body');
+    expect(streamCalls).toHaveLength(2);
+  });
+
+  it('resumes from a dropped stream partial instead of restarting the turn', async () => {
+    let attempts = 0;
+    window.electronAPI.chat.stream = vi.fn(async (params: any) => {
+      streamCalls.push(params);
+      attempts++;
+      if (attempts === 1) {
+        // Simulate tokens that already reached the live view, then a drop.
+        useChatStore.setState((s) => ({
+          streamingRuns: {
+            ...s.streamingRuns,
+            conv1: { ...(s.streamingRuns.conv1 || { reasoningContent: '', status: 'writing', toolName: null }), content: 'partial text here ' },
+          },
+        }));
+        throw new Error('Incomplete model stream: missing completion marker');
+      }
+      return textResponse('continued.');
+    });
+
+    await useChatStore.getState().sendMessage('keep going', 'p1', 'gpt-test');
+
+    expect(streamCalls).toHaveLength(2);
+    // The retry resumed from the partial rather than replaying the base turn.
+    expect(JSON.stringify(streamCalls[1].messages)).toContain('partial text here ');
+    const assistants = useChatStore.getState().messages.filter((m) => m.role === 'assistant');
+    expect(assistants).toHaveLength(1);
+    expect(assistants[0].content).toBe('partial text here continued.');
+    expect(useChatStore.getState().error).toBeNull();
+  });
+
+  it('marks a salvaged interruption and offers one-click continuation', async () => {
+    window.electronAPI.chat.stream = vi.fn(async (params: any) => {
+      streamCalls.push(params);
+      useChatStore.setState((s) => ({
+        streamingRuns: {
+          ...s.streamingRuns,
+          conv1: { ...(s.streamingRuns.conv1 || { reasoningContent: '', status: 'writing', toolName: null }), content: 'half an answer' },
+        },
+      }));
+      throw new Error('provider exploded');
+    });
+
+    await useChatStore.getState().sendMessage('go', 'p1', 'gpt-test');
+
+    const salvaged = useChatStore.getState().messages.find((m) => m.role === 'assistant');
+    expect(salvaged!.content).toContain('half an answer');
+    expect(salvaged!.interrupted).toBe(true);
+    expect(useChatStore.getState().continuableConvId).toBe('conv1');
+
+    // One click continues the conversation with a continue prompt.
+    window.electronAPI.chat.stream = vi.fn(async (params: any) => {
+      streamCalls.push(params);
+      return textResponse('the rest');
+    });
+    await useChatStore.getState().continueGeneration('conv1');
+
+    const continued = useChatStore.getState().messages.filter((m) => m.role === 'user').pop();
+    expect(continued!.content).toBe(useLanguageStore.getState().t('continuePrompt'));
+    expect(useChatStore.getState().continuableConvId).toBeNull();
+  });
+
+  it('auto-runs commands under an approval override without touching settings', async () => {
+    // RSI-style: the stored mode stays suggest, execution still goes fullAuto.
+    (window as any).electronAPI.exec = {
+      run: async () => ({ success: true, stdout: 'ok', stderr: '', exitCode: 0 }),
+    };
+    useSettingsStore.setState({ approvalMode: 'suggest', approvalOverride: 'fullAuto' });
+    try {
+      queued = [toolCallResponse('exec', { command: 'ls' }), textResponse('done')];
+
+      await useChatStore.getState().sendMessage('run it', 'p1', 'gpt-test');
+
+      expect(streamCalls).toHaveLength(2);
+      expect(useCodeChangesStore.getState().changes.every((c) => c.status !== 'pending')).toBe(true);
+      expect(useSettingsStore.getState().approvalMode).toBe('suggest');
+      expect(useChatStore.getState().error).toBeNull();
+    } finally {
+      useSettingsStore.setState({ approvalOverride: null });
+    }
   });
 });

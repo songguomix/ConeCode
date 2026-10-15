@@ -204,6 +204,7 @@ export class AnthropicAdapter extends BaseAdapter {
     let stopReason = '';
     let usage: any = null;
     let sseBuffer = '';
+    let sawStop = false;
     // Blocks arrive one at a time, identified by index: text, thinking (whose
     // text and cryptographic signature stream separately), and tool_use (whose
     // `input` streams as partial JSON fragments).
@@ -259,6 +260,7 @@ export class AnthropicAdapter extends BaseAdapter {
             if (parsed.usage) usage = { ...(usage || {}), ...parsed.usage };
             break;
           case 'message_stop':
+            sawStop = true;
             onChunk({ type: 'done', content: '', reasoning_content: fullThinking || undefined, finishReason: stopReason || undefined });
             break;
         }
@@ -272,6 +274,14 @@ export class AnthropicAdapter extends BaseAdapter {
       for (const line of lines) handleLine(line);
     }, signal);
     if (sseBuffer.trim()) handleLine(sseBuffer);
+
+    // A provider that closes without message_stop has dropped the response
+    // mid-turn. Returning the partial text as success makes the agent loop stop
+    // silently ("输出突然中断" with no error); surface it as a retryable
+    // failure instead — same contract as the OpenAI adapter's [DONE] check.
+    if (!sawStop && !signal?.aborted) {
+      throw new Error('Incomplete model stream: missing message_stop marker');
+    }
 
     // Rebuild the assistant turn's blocks in index order so tool calls survive.
     const content: any[] = [];

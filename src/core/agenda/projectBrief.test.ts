@@ -23,6 +23,14 @@ describe('parseProjectBrief', () => {
     expect(markdown.title).toBe('My App');
     expect(markdown.prompt).toContain('Build it well.');
   });
+
+  it('promotes reasoning_content when content is empty (reasoning-only models)', () => {
+    const raw = JSON.stringify({ title: 'Todo App', prompt: 'Build a todo app.' });
+    expect(parseProjectBrief({ choices: [{ message: { content: '', reasoning_content: raw } }] }))
+      .toEqual({ title: 'Todo App', prompt: 'Build a todo app.' });
+    expect(parseProjectBrief({ choices: [{ message: { content: '   ', reasoning_content: '# My App\nBuild it well.' } }] }).title)
+      .toBe('My App');
+  });
 });
 
 describe('projectExecutionPrompt', () => {

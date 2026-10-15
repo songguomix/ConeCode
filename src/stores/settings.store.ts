@@ -59,6 +59,18 @@ interface SettingsStore extends Settings {
   updateSettings: (partial: Partial<Settings>) => void;
   loadSettings: () => Promise<void>;
   saveSettings: () => Promise<void>;
+  /**
+   * Session-only approval override (e.g. RSI runs fullAuto). Never persisted,
+   * never shown in Settings — the stored `approvalMode` stays exactly as the
+   * user left it. `effectiveApprovalMode()` is what execution paths read.
+   */
+  approvalOverride: ApprovalMode | null;
+}
+
+/** The approval mode that actually governs the agent: override wins. */
+export function effectiveApprovalMode(): ApprovalMode {
+  const s = useSettingsStore.getState();
+  return s.approvalOverride ?? s.approvalMode;
 }
 
 export const useSettingsStore = create<SettingsStore>((set, get) => ({
@@ -81,6 +93,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   fullContext: false,
   costLock: false,
   maxEpisodeCost: 0.5,
+  approvalOverride: null,
 
   updateSettings: (partial) => {
     set(partial);

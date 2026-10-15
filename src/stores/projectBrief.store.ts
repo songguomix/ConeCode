@@ -35,8 +35,17 @@ export const useProjectBriefStore = create<ProjectBriefStore>((set, get) => ({
     const request = ++generation;
     set({ generating: true, error: null });
     try {
+      // Reasoning models spend output tokens thinking before they answer — a
+      // 4096 cap truncates them mid-thought into an empty reply, which used to
+      // surface as a generic "连接不上". Give them the same floor chat turns use.
+      let maxTokens = 4096;
+      try {
+        const { useModelStore } = await import('./model.store');
+        const m = useModelStore.getState().models.get(providerId)?.find((x) => x.id === modelId);
+        if (m && (m.supportsReasoning || (m as any).userEnabledReasoning)) maxTokens = 32000;
+      } catch {}
       const result = await window.electronAPI.chat.stream({
-        providerId, modelId, silent: true, maxTokens: 4096,
+        providerId, modelId, silent: true, maxTokens,
         messages: [
           { role: 'system', content: `${PROJECT_BRIEF_SYSTEM_PROMPT}\nWrite the title and prompt in ${locale === 'zh' ? 'Simplified Chinese' : locale === 'zhHant' ? 'Traditional Chinese' : locale === 'ja' ? 'Japanese' : 'English'}, unless the user explicitly requests another language.` },
           { role: 'user', content: idea },
@@ -48,7 +57,11 @@ export const useProjectBriefStore = create<ProjectBriefStore>((set, get) => ({
       // something to review before step 3 starts the work.
       const brief = parseProjectBrief(result);
       set({ brief, prompt: brief.prompt, generating: false });
-    } catch {
+    } catch (e: any) {
+      // Keep the i18n key (the UI renders t(error)) but log the real cause —
+      // previously every failure (timeout, 401, empty reply) collapsed into one
+      // opaque key with nothing in the console to diagnose.
+      console.warn('[brief] generate failed:', e?.message || String(e));
       if (request === generation) set({ generating: false, error: 'briefGenerateFailed' });
     }
   },
