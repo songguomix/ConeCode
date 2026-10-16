@@ -161,11 +161,16 @@ export function selectForArchive(
   archive: ParetoCandidate[],
   epsilon = 1e-3,
 ): ArchiveVerdict {
+  // Idempotency: a repeated delivery of an already-archived id must not
+  // double-register or flip the verdict. Recompute the same decision
+  // deterministically instead of appending a duplicate frontier node.
+  const already = archive.some((o) => o.id === candidateId);
   const d = selectCandidate(candidate, best, baseline, epsilon);
   if (d.accept) return { action: 'replace-best', reason: d.reason };
   if (d.reason !== 'not-better-than-best' && d.reason !== 'not-better-than-baseline') {
     return { action: 'reject', reason: d.reason };
   }
+  if (already) return { action: 'reject', reason: d.reason };
   const metrics: Record<string, number> = {};
   for (const m of candidate.metrics) metrics[m.id] = scaledDelta(m);
   const node: ParetoCandidate = { id: candidateId, metrics };
@@ -175,15 +180,42 @@ export function selectForArchive(
 }
 
 /**
+ * Add a frontier node and drop members it (or others) dominate, so the
+ * archive stays the true non-dominated set. Idempotent on id.
+ */
+export function pruneParetoArchive(archive: ParetoCandidate[], node: ParetoCandidate): ParetoCandidate[] {
+  const next = archive.some((c) => c.id === node.id)
+    ? archive.map((c) => (c.id === node.id ? node : c))
+    : [...archive, node];
+  return next.filter((c) => !next.some((o) => o !== c && dominates(o, c)));
+}
+
+/**
  * Convergence test: stop when the last `window` accepted rewards fail to beat
- * the previous best by more than epsilon (plateau ≈ local optimum).
+ * the previous best by more than epsilon (plateau ≈ budget-limited local
+ * convergence — NEVER a proof of global optimality; see rsiLoop.evaluateStop
+ * for the evidence-aware stop that also weighs module breadth, repeated
+ * failures, and remaining budget).
+ *
+ * REWARD_FAIL sentinels (hard-gate breaches) are ignored here: consecutive
+ * hard fails are a separate stop condition (broken oracle), not a plateau.
  */
 export function isConverged(rewardHistory: number[], window = 3, epsilon = 1e-3): boolean {
-  if (rewardHistory.length < window) return false;
-  const tail = rewardHistory.slice(-window);
-  const priorBest = Math.max(...rewardHistory.slice(0, -window), -Infinity);
+  const hist = rewardHistory.filter((r) => r !== REWARD_FAIL);
+  if (hist.length < window + 1) return false;
+  const tail = hist.slice(-window);
+  const priorBest = Math.max(...hist.slice(0, -window));
   const tailBest = Math.max(...tail);
   return tailBest <= priorBest + epsilon;
+}
+
+/**
+ * Budget-limited local-plateau alias. Same test as isConverged; renamed so
+ * call sites and reports cannot mistake "3 tries without improvement" for a
+ * global optimum. Always report "no better candidate within budget".
+ */
+export function isLocalPlateau(rewardHistory: number[], window = 3, epsilon = 1e-3): boolean {
+  return isConverged(rewardHistory, window, epsilon);
 }
 
 // ---------------------------------------------------------------------------

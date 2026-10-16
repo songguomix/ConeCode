@@ -31,8 +31,10 @@ import CommandApprovalCard from '../chat/CommandApprovalCard';
 import QuestionPromptCard from '../chat/QuestionPromptCard';
 import { commandsForConversation } from '../chat/approvalPresentation';
 import { useUIStore } from '../../stores/ui.store';
+import { useWorkspaceStore } from '../../stores/workspace.store';
 import SyncView from '../plugins/SyncView';
 import { rsiCanStart } from '../../core/agents/rsiStart';
+import { bootstrapRsiWorkspace, electronAsyncFs } from '../../core/agents/rsiBridge';
 
 /** Helper to infer active phase number (1..5) from text content. */
 function detectActivePhase(text: string): number {
@@ -311,6 +313,16 @@ export default function RsiView() {
         return;
       await st.setEnabled(true);
       useSettingsStore.setState({ approvalOverride: 'fullAuto' });
+      // Program-side search state on real disk (STRATEGY.md default + resume
+      // LOOP_STATE.json when a frozen goal exists). Best-effort: a bridge
+      // failure must never block the agent run below.
+      try {
+        const afs = electronAsyncFs();
+        const root = useWorkspaceStore.getState().rootPath;
+        if (afs && root) await bootstrapRsiWorkspace(afs, root);
+      } catch {
+        /* offline bridge: the prompt-driven loop still proceeds */
+      }
       await sendMessage(t('rsiKickoff'), model.providerId, model.id);
     } finally {
       useSettingsStore.setState({ approvalOverride: null });

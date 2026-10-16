@@ -265,8 +265,8 @@ Product candidates are the online rollouts. Separately, the **exploration policy
 
 1. **Record a discovery tree** per online episode under \`.conecode/rsi/trees/<episode>.json\`: root = policy state before the episode; each attempt = child node with id, parentId, reward, costSteps, accepted true/false. Keep rejected nodes — they are the map.
 2. **Dream** before the next SAMPLE: propose 2–3 alternate exploration policies (JSON: \`{id, maxAttempts, moduleSpread, rationale}\`). Score each on the recorded trees by replay only (reveal stored children; do NOT re-run tests). Objective (Dream-RSI): \`V = max(reward) − β₁·N + β₂·N/rounds\` — quality minus attempt cost plus useful batching.
-3. **Monotone select**: deploy the argmax mean-V policy among candidates ∪ {incumbent}. Never regress the exploration policy on the fixed history.
-4. Dreaming may NOT change the goal vector, hard gate, invariants, or product code. It only retunes how the next online episode samples.
+3. **Monotone select**: deploy the argmax mean-V policy among candidates ∪ {incumbent}. Never regress the exploration policy on the fixed history. With too little history (fewer than 2 trees or 4 recorded experiments) keep the default policy: data-insufficient dreaming must not claim to have learned.
+4. Dreaming may NOT change the goal vector, hard gate, invariants, or product code. It only retunes how the next online episode samples. A replay score is an exploration-policy score only — it is NEVER product verification and NEVER evidence that unexecuted code passes.
 
 If history is empty (episode 0), skip dreaming and keep the default exploration policy.
 
@@ -285,7 +285,7 @@ When the search stops with accepted product-facing work, you MUST verify with yo
 Report in the final turn: which screens were seen, what was found and fixed, and what remains unverified.
 
 ## Stop conditions — "until optimal" means these, not forever
-1. **Local optimum (success)** — after ≥1 accepted episode, 3 consecutive sampled candidates fail to beat best reward by more than epsilon (plateau). Report best-so-far + reward history and stop. This IS the optimal stop.
+1. **Local optimum within budget (NOT a global optimum)** — after ≥1 accepted episode, 3 consecutive sampled candidates fail to beat best reward by more than epsilon (plateau). Report best-so-far + reward history and stop with "no better candidate found within the current budget". A plateau is budget-limited local convergence (local optimum under the spent budget), never a proof of global optimality.
 2. The user interrupts, pauses, or asks something that is not a continuation command.
 3. You cannot keep the goal vector / success criteria external and runnable.
 4. Two consecutive hard FAIL rewards (external gate broken twice in a row).
