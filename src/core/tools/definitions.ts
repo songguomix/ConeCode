@@ -501,7 +501,7 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
   {
     name: 'github_sync',
     description:
-      'Sync skills from the GitHub repo configured in the GitHub sync plugin (Settings → Plugins). Returns the skills found and installs nothing by itself — ask before installing anything. Do NOT read SKILL.md files yourself for this; the plugin is the source of truth. Fails when no repo is configured or the plugin is disabled.',
+      'Sync skills from the GitHub repo configured in the GitHub sync plugin (Settings → Plugins). The plugin fetches everything itself and reports the skill ids it found; nothing is installed by this call. Use use_skill with one of the returned ids to load a skill’s instructions. Never read, glob, or search repository files yourself — that is the plugin’s job, and doing it yourself wastes the turn.',
     parameters: {
       type: 'object',
       properties: {},
@@ -512,7 +512,7 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
   {
     name: 'github_push',
     description:
-      'Push locally-modified skills back to their GitHub repo through the GitHub sync plugin — this is how a repository push gets done. Omit skillId to push every skill with local changes; pass one skillId to push just that skill. Do NOT write SKILL.md bytes or call the GitHub API yourself; the plugin owns the push. The repo and token come from the plugin configuration.',
+      'Push locally-modified skills back to their GitHub repo through the GitHub sync plugin — this is the ONLY way a repository push happens. Omit skillId to push every skill with local changes; pass one skillId to push just that skill. Never write the skill files or call the GitHub API yourself; the plugin owns both and reports the outcome.',
     parameters: {
       type: 'object',
       properties: {

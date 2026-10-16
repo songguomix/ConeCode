@@ -457,10 +457,13 @@ async function backgroundStatusText(parentConversationId?: string): Promise<stri
 // ---------------------------------------------------------------------------
 // GitHub plugin tools (github_sync / github_push).
 //
-// The model must NEVER read SKILL.md bytes or call the GitHub API itself for
-// repo work — the GitHub sync plugin owns both. These helpers are the single
-// entry point the executor uses, so UI buttons and model tool calls share one
-// implementation (market.store) and one gate (plugin enabled).
+// The plugin is the ONLY thing that touches the repo — files, paths, API
+// calls. The model must never read SKILL.md files, chase a repo path with
+// read_file, or call the GitHub API itself; that is what these tools exist
+// to prevent. So their results deliberately expose NO paths and NO raw bytes:
+// a returned path is an invitation for the model to go read it, which is
+// exactly how "stray read_file on SKILL.md" happened. Skills are handed over
+// by id, ready for use_skill.
 // ---------------------------------------------------------------------------
 
 /** Null when the model may use the GitHub tools, otherwise the refusal text. */
@@ -484,8 +487,19 @@ export async function runGithubSyncText(): Promise<string> {
   if (!ok) {
     return `Error: GitHub sync failed (${st.error || 'unknown error'}). Check the repo name and token in the GitHub sync plugin.`;
   }
-  const names = st.remote.map((r) => `- ${r.name} (${r.path})`).join('\n');
-  return `Synced ${st.remote.length} skill(s) from ${st.repo}:\n${names}\nNothing was installed — ask before installing anything.`;
+  // Installed status comes from the skills store (not from the repo listing) so
+  // the model knows which ids are already usable without being told where any
+  // of them live.
+  const { useSkillsStore } = await import('./skills.store');
+  const installedIds = new Set(useSkillsStore.getState().installed.map((s) => s.id));
+  const lines = st.remote.map((r) =>
+    `- ${r.id}${installedIds.has(r.id) ? ' (installed — call use_skill with this id)' : ' (not installed — ask the user before installing)'}`,
+  );
+  return [
+    `Synced ${st.remote.length} skill(s) from ${st.repo}.`,
+    lines.join('\n'),
+    'These came straight from the plugin. Use use_skill with a skill id to load its instructions — never read, glob, or search the repo or its files yourself.',
+  ].join('\n');
 }
 
 export async function runGithubPushText(skillId?: string): Promise<string> {
@@ -499,7 +513,7 @@ export async function runGithubPushText(skillId?: string): Promise<string> {
       return `Error: skill "${skillId}" was not installed from a GitHub repo (no push origin). Sync it first with github_sync.`;
     }
     const ok = await st.pushSkill(skillId);
-    if (ok) return `Pushed "${skillId}" to ${origin.repo} (${origin.path}).`;
+    if (ok) return `Pushed "${skillId}" to ${origin.repo}. The repo is updated.`;
     const err = useMarketStore.getState().error;
     return `Error: pushing "${skillId}" failed (${err || 'unknown error'}). Check the token in the GitHub sync plugin, then retry.`;
   }

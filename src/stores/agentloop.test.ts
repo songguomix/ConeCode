@@ -633,10 +633,42 @@ describe('runAgentLoop with native tool calling', () => {
       expect(puts[0].body.message).toContain('alpha');
       expect(streamCalls).toHaveLength(2);
       expect(JSON.stringify(streamCalls[1].messages)).toContain('Pushed');
-      expect(JSON.stringify(streamCalls[1].messages)).toContain('alpha/SKILL.md');
+      // The model is told WHAT was pushed, never WHERE it lives: a path in the
+      // result read_file'ing a stray SKILL.md.
+      expect(JSON.stringify(streamCalls[1].messages)).not.toContain('SKILL.md');
     } finally {
       (globalThis as any).fetch = savedFetch;
       localStorage.removeItem('conecode.pluginToken');
+    }
+  });
+
+  it('hides repo paths from the model after github_sync', async () => {
+    const { useMarketStore } = await import('./market.store');
+    const tree = [{ type: 'blob', path: 'alpha/SKILL.md' }, { type: 'blob', path: 'beta/SKILL.md' }];
+    const savedFetch = (globalThis as any).fetch;
+    (globalThis as any).fetch = vi.fn(async (url: string) => {
+      if (String(url).includes('/git/trees/')) {
+        return new Response(JSON.stringify({ tree }), { status: 200 });
+      }
+      const body = String(url).includes('alpha')
+        ? `---\nname: Alpha\ndescription: A\n---\nDo alpha things.`
+        : `---\nname: Beta\ndescription: B\n---\nDo beta things.`;
+      return new Response(body, { status: 200 });
+    });
+    try {
+      queued = [toolCallResponse('github_sync', {}), textResponse('done')];
+
+      await useChatStore.getState().sendMessage('sync my repo', 'p1', 'gpt-test');
+
+      const fedBack = JSON.stringify(streamCalls[1].messages);
+      expect(fedBack).toContain('alpha');
+      expect(fedBack).toContain('beta');
+      // Neither the path nor the file name is ever handed to the model.
+      expect(fedBack).not.toContain('SKILL.md');
+      expect(fedBack).not.toContain('alpha/');
+    } finally {
+      (globalThis as any).fetch = savedFetch;
+      useMarketStore.setState({ remote: [], error: null });
     }
   });
 

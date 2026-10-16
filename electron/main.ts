@@ -1278,6 +1278,7 @@ function registerIPC() {
   });
   // Live process metrics for the RSI performance monitor (per-process CPU /
   // memory straight from Electron, plus host pressure). Polled, never pushed.
+  ipcMain.handle('app:getVersion', () => app.getVersion());
   ipcMain.handle('app:getAppMetrics', async () => {
     let processes: { pid: number; type: string; cpu: number; memory: number }[] = [];
     try {
