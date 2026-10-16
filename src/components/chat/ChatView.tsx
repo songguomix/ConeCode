@@ -28,8 +28,6 @@ export default function ChatView() {
   const streamingToolName = activeRun?.toolName ?? null;
   const error = useChatStore((s) => s.error);
   const clearError = useChatStore((s) => s.clearError);
-  const continuableConvId = useChatStore((s) => s.continuableConvId);
-  const continueGeneration = useChatStore((s) => s.continueGeneration);
   const { t } = useLanguageStore();
   const approvalMode = useSettingsStore((s) => s.approvalOverride ?? s.approvalMode);
   const addChange = useCodeChangesStore((s) => s.addChange);
@@ -303,19 +301,6 @@ export default function ChatView() {
           <div className="mt-3 p-3.5 rounded-xl bg-[var(--error)]/10 border border-[var(--error)]/20 text-[var(--error)] text-sm flex items-center justify-between">
             <span>{error}</span>
             <button onClick={clearError} className="text-xs underline opacity-70 hover:opacity-100">{t('dismiss')}</button>
-          </div>
-        )}
-
-        {/* One-click resume for an interrupted turn (network drop, output-limit
-            truncation): sends a "continue where you stopped" turn. */}
-        {continuableConvId === activeConversationId && !isStreaming && (
-          <div className="mt-3 flex items-center justify-center">
-            <button
-              onClick={() => void continueGeneration()}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[var(--accent)] text-white text-sm font-medium hover:bg-[var(--accent-hover)] active:scale-[0.99] transition-all"
-            >
-              <FiPlay size={13} /> {t('continueOutput')}
-            </button>
           </div>
         )}
 
