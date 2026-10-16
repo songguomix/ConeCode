@@ -499,28 +499,17 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
     promptExample: '{"action": "spawn_agent", "task": "what to investigate and report back"}',
   },
   {
-    name: 'github_sync',
-    description:
-      'Sync skills from the GitHub repo configured in the GitHub sync plugin (Settings → Plugins). The plugin fetches everything itself and reports the skill ids it found; nothing is installed by this call. Use use_skill with one of the returned ids to load a skill’s instructions. Never read, glob, or search repository files yourself — that is the plugin’s job, and doing it yourself wastes the turn.',
-    parameters: {
-      type: 'object',
-      properties: {},
-    },
-    mutating: true,
-    promptExample: '{"action": "github_sync"}',
-  },
-  {
     name: 'github_push',
     description:
-      'Push locally-modified skills back to their GitHub repo through the GitHub sync plugin — this is the ONLY way a repository push happens. Omit skillId to push every skill with local changes; pass one skillId to push just that skill. Never write the skill files or call the GitHub API yourself; the plugin owns both and reports the outcome.',
+      'Commit the open project and push it to GitHub through the GitHub plugin — this is the ONLY way the repository gets pushed. The plugin uses the repo and token configured in Settings → Plugins (GitHub sync). Never run git commands or call the GitHub API yourself; the plugin owns the push and reports the outcome.',
     parameters: {
       type: 'object',
       properties: {
-        skillId: str('Optional skill id to push; omit to push all locally-modified skills'),
+        message: str('Optional commit message; a short default is used when omitted'),
       },
     },
     mutating: true,
-    promptExample: '{"action": "github_push", "skillId": "my-skill"}',
+    promptExample: '{"action": "github_push", "message": "Fix the login redirect"}',
   },
 ];
 

@@ -1,34 +1,28 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { normalizeRepo, useMarketStore } from './market.store';
+import { useWorkspaceStore } from './workspace.store';
 
-const SKILL_A = `---\nname: Alpha\ndescription: First remote skill for testing sync.\n---\nDo alpha things.`;
-const SKILL_B = `---\nname: Beta\ndescription: Second remote skill for testing sync.\n---\nDo beta things.`;
-
-function json(obj: unknown, status = 200) {
-  return new Response(JSON.stringify(obj), { status });
-}
+const pushProject = vi.fn(async () => ({ ok: true, message: 'Pushed branch "main" to o/r.' }));
+const gitInfo = vi.fn(async () => ({ isRepo: true, branch: 'main', dirty: 2 }));
 
 beforeEach(() => {
   localStorage.clear();
   vi.clearAllMocks();
+  pushProject.mockResolvedValue({ ok: true, message: 'Pushed branch "main" to o/r.' });
+  gitInfo.mockResolvedValue({ isRepo: true, branch: 'main', dirty: 2 });
   useMarketStore.setState({
-    repo: 'o/r',
+    repo: '',
     tokenSet: false,
-    remote: [],
-    fetchedAt: null,
-    syncing: false,
-    error: null,
+    status: null,
+    refreshing: false,
+    pushing: false,
+    lastPushAt: null,
+    result: null,
   });
+  useWorkspaceStore.setState({ rootPath: null });
   (globalThis as any).window = {
     electronAPI: {
-      skill: {
-        install: vi.fn(async () => ({ ok: true })),
-        list: vi.fn(async () => ({ global: [], project: [] })),
-        remove: vi.fn(async () => ({ ok: true })),
-      },
-      conversation: { create: vi.fn(), list: vi.fn(async () => []), update: vi.fn() },
-      message: { create: vi.fn(), list: vi.fn(async () => []) },
-      chat: { onChunk: vi.fn(() => () => {}), stream: vi.fn(), stop: vi.fn() },
+      git: { info: gitInfo, pushProject },
     },
   };
 });
@@ -43,172 +37,60 @@ describe('normalizeRepo', () => {
   });
 });
 
-describe('market sync', () => {
-  it('lists SKILL.md files and parses them', async () => {
-    (globalThis as any).fetch = vi.fn(async (url: string, opts: any) => {
-      if (String(url).includes('/git/trees/')) {
-        return json({ tree: [
-          { type: 'blob', path: 'alpha/SKILL.md' },
-          { type: 'blob', path: 'beta/SKILL.md' },
-          { type: 'blob', path: 'README.md' },
-        ] });
-      }
-      if (String(url).includes('alpha%2FSKILL.md') || String(url).includes('alpha/SKILL.md')) {
-        return new Response(SKILL_A, { status: 200 });
-      }
-      return new Response(SKILL_B, { status: 200 });
-    });
-    const ok = await useMarketStore.getState().sync();
-    expect(ok).toBe(true);
-    const remote = useMarketStore.getState().remote;
-    expect(remote.map((r) => r.id).sort()).toEqual(['alpha', 'beta']);
-    expect(remote[0].body.length).toBeGreaterThan(0);
-    expect(useMarketStore.getState().error).toBeNull();
+describe('repo status', () => {
+  it('reports "not a repo" when no folder is open', async () => {
+    await useMarketStore.getState().refresh();
+    expect(gitInfo).not.toHaveBeenCalled();
+    expect(useMarketStore.getState().status?.isRepo).toBe(false);
   });
 
-  it('maps failures to friendly errors', async () => {
-    (globalThis as any).fetch = vi.fn(async () => new Response('x', { status: 404 }));
-    expect(await useMarketStore.getState().sync()).toBe(false);
-    expect(useMarketStore.getState().error).toBe('repo-not-found');
+  it('reads branch and uncommitted count from the open project', async () => {
+    useWorkspaceStore.setState({ rootPath: '/proj' });
+    await useMarketStore.getState().refresh();
+    expect(gitInfo).toHaveBeenCalledWith('/proj');
+    expect(useMarketStore.getState().status).toEqual({ isRepo: true, branch: 'main', dirty: 2 });
+  });
+});
 
-    (globalThis as any).fetch = vi.fn(async (url: string) =>
-      String(url).includes('/git/trees/') ? json({ tree: [] }) : new Response('x', { status: 200 }),
-    );
-    expect(await useMarketStore.getState().sync()).toBe(false);
-    expect(useMarketStore.getState().error).toBe('empty-repo');
+describe('pushRepo', () => {
+  it('refuses without an open project', async () => {
+    const res = await useMarketStore.getState().pushRepo();
+    expect(res.ok).toBe(false);
+    expect(res.message).toContain('no project folder');
+    expect(pushProject).not.toHaveBeenCalled();
   });
 
-  it('auto-pushes local fixes at the end of a successful sync', async () => {
-    const { useSkillsStore } = await import('./skills.store');
-    useSkillsStore.setState({
-      installed: [{
-        id: 'alpha', name: 'Alpha', scope: 'global', source: 'custom',
-        description: 'd', tags: ['market'], body: 'FIXED locally',
-      }],
-      effective: [],
-      loaded: true,
-    } as any);
-    useMarketStore.setState({
-      origins: { alpha: { repo: 'o/r', path: 'alpha/SKILL.md', content: 'baseline' } },
-    });
+  it('pushes the open project through the configured repo and token', async () => {
+    useWorkspaceStore.setState({ rootPath: '/proj' });
     localStorage.setItem('conecode.pluginToken', 'tok');
-    const puts: any[] = [];
-    (globalThis as any).fetch = vi.fn(async (url: string, opts: any) => {
-      if (String(url).includes('/git/trees/')) {
-        return json({ tree: [{ type: 'blob', path: 'alpha/SKILL.md' }] });
-      }
-      if (String(url).includes('/contents/')) {
-        if ((opts?.method || 'GET') === 'PUT') {
-          puts.push(JSON.parse(opts.body));
-          return new Response('{}', { status: 200 });
-        }
-        if (opts?.headers?.Accept === 'application/vnd.github.raw') {
-          return new Response(SKILL_A, { status: 200 });
-        }
-        return new Response(JSON.stringify({ sha: 'abc' }), { status: 200 });
-      }
-      return new Response('x', { status: 404 });
+    useMarketStore.setState({ repo: 'https://github.com/o/r.git' });
+
+    const res = await useMarketStore.getState().pushRepo('Fix the login redirect');
+
+    expect(res.ok).toBe(true);
+    expect(pushProject).toHaveBeenCalledWith({
+      cwd: '/proj',
+      message: 'Fix the login redirect',
+      repo: 'o/r',
+      token: 'tok',
     });
-    expect(await useMarketStore.getState().sync()).toBe(true);
-    expect(puts).toHaveLength(1);
-    expect(Buffer.from(puts[0].content, 'base64').toString('utf-8')).toContain('FIXED locally');
-    expect(useMarketStore.getState().hasLocalChanges('alpha')).toBe(false);
-    expect(useMarketStore.getState().error).toBeNull();
+    expect(useMarketStore.getState().result?.ok).toBe(true);
+    expect(useMarketStore.getState().lastPushAt).not.toBeNull();
+    // A successful push refreshes the project's git status (fire-and-forget).
+    await vi.waitFor(() => expect(gitInfo).toHaveBeenCalledWith('/proj'));
     localStorage.removeItem('conecode.pluginToken');
   });
 
-  it('installs through the custom (unreviewed) path', async () => {
-    const { useSkillsStore } = await import('./skills.store');
-    const alpha = {
-      id: 'alpha', name: 'Alpha', scope: 'global', source: 'custom',
-      description: 'First remote skill for testing sync installs.',
-      tags: ['market'], body: 'Do alpha things thoroughly and well.',
-    };
-    (window as any).electronAPI.skill.list = vi.fn(async () => ({ global: [alpha], project: [] }));
-    useSkillsStore.setState({ installed: [], effective: [], loaded: true } as any);
-    const ok = await useMarketStore.getState().installRemote(
-      { id: 'alpha', name: 'Alpha', description: 'First remote skill for testing sync installs.', path: 'alpha/SKILL.md', body: 'Do alpha things thoroughly and well.' },
-      'global',
-    );
-    expect(ok).toBe(true);
-    const install = (window as any).electronAPI.skill.install;
-    expect(install).toHaveBeenCalledTimes(1);
-    expect(String(install.mock.calls[0][0].content)).toContain('source: custom');
-    // Origin baseline recorded for push-back.
-    const origins = useMarketStore.getState().origins;
-    expect(origins.alpha.repo).toBe('o/r');
-    expect(origins.alpha.path).toBe('alpha/SKILL.md');
-    expect(useMarketStore.getState().hasLocalChanges('alpha')).toBe(false);
-  });
+  it('surfaces a failed push without advancing the last-push time', async () => {
+    useWorkspaceStore.setState({ rootPath: '/proj' });
+    gitInfo.mockResolvedValue({ isRepo: true, branch: 'main', dirty: 0 });
+    pushProject.mockResolvedValue({ ok: false, message: 'git push failed.' });
 
-  it('preserves remote skill.id even when name produces a different slug', async () => {
-    const { useSkillsStore } = await import('./skills.store');
-    const customTool = {
-      id: 'tool-xyz', name: 'My Custom Tool Pro', scope: 'global', source: 'custom',
-      description: 'Test', tags: ['market'], body: 'Body with enough length for validation.',
-    };
-    (window as any).electronAPI.skill.list = vi.fn(async () => ({ global: [customTool], project: [] }));
-    useSkillsStore.setState({ installed: [], effective: [], loaded: true } as any);
-    const ok = await useMarketStore.getState().installRemote(
-      { id: 'tool-xyz', name: 'My Custom Tool Pro', description: 'Test', path: 'tools/tool-xyz/SKILL.md', body: 'Body with enough length for validation.' },
-      'global',
-    );
-    expect(ok).toBe(true);
-    const install = (window as any).electronAPI.skill.install;
-    expect(install.mock.calls.some((c: any) => c[0].id === 'tool-xyz')).toBe(true);
-    expect(useMarketStore.getState().origins['tool-xyz']).toBeDefined();
-  });
+    const res = await useMarketStore.getState().pushRepo();
 
-  it('pushes local edits back and reports conflicts', async () => {
-    const { useSkillsStore } = await import('./skills.store');
-    const alpha = {
-      id: 'alpha', name: 'Alpha', scope: 'global', source: 'custom',
-      description: 'First remote skill for testing sync installs.',
-      tags: ['market'], body: 'Do alpha things thoroughly and well.',
-    };
-    useSkillsStore.setState({ installed: [alpha], effective: [alpha], loaded: true } as any);
-    useMarketStore.setState({
-      origins: { alpha: { repo: 'o/r', path: 'alpha/SKILL.md', content: 'baseline' } },
-    });
-
-    // Local edit detected.
-    expect(useMarketStore.getState().hasLocalChanges('alpha')).toBe(true);
-
-    // No token → refuse without touching the network.
-    localStorage.removeItem('conecode.pluginToken');
-    const calls: any[] = [];
-    (globalThis as any).fetch = vi.fn(async (url: string, opts: any) => {
-      calls.push({ url, method: opts?.method || 'GET', body: opts?.body });
-      if ((opts?.method || 'GET') === 'PUT') return new Response('{}', { status: 200 });
-      return new Response(JSON.stringify({ sha: 'abc' }), { status: 200 });
-    });
-    expect(await useMarketStore.getState().pushSkill('alpha')).toBe(false);
-    expect(useMarketStore.getState().error).toBe('auth-failed');
-    expect(calls).toHaveLength(0);
-
-    // With token: GET sha then PUT new content, baseline advances.
-    localStorage.setItem('conecode.pluginToken', 'tok');
-    expect(await useMarketStore.getState().pushSkill('alpha')).toBe(true);
-    const put = calls.find((c) => c.method === 'PUT');
-    expect(put.url).toContain('/repos/o/r/contents/alpha/SKILL.md');
-    const payload = JSON.parse(put.body);
-    expect(payload.sha).toBe('abc');
-    expect(payload.message).toContain('alpha');
-    expect(Buffer.from(payload.content, 'base64').toString('utf-8')).toContain('Do alpha things');
-    expect(useMarketStore.getState().hasLocalChanges('alpha')).toBe(false);
-
-    // Remote moved on → conflict, baseline untouched.
-    (globalThis as any).fetch = vi.fn(async (url: string, opts: any) => {
-      if ((opts?.method || 'GET') === 'PUT') return new Response('{}', { status: 409 });
-      return new Response(JSON.stringify({ sha: 'other' }), { status: 200 });
-    });
-    useSkillsStore.setState({
-      installed: [{ ...alpha, body: 'CHANGED again' }],
-      effective: [],
-      loaded: true,
-    } as any);
-    expect(await useMarketStore.getState().pushSkill('alpha')).toBe(false);
-    expect(useMarketStore.getState().error).toBe('conflict');
-    expect(useMarketStore.getState().hasLocalChanges('alpha')).toBe(true);
+    expect(res.ok).toBe(false);
+    expect(res.message).toBe('Error: git push failed.');
+    expect(useMarketStore.getState().lastPushAt).toBeNull();
+    expect(useMarketStore.getState().result).toEqual({ ok: false, message: 'Error: git push failed.' });
   });
 });

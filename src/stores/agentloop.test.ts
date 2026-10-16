@@ -570,26 +570,38 @@ describe('runAgentLoop with native tool calling', () => {
     expect(streamCalls[1].maxTokens).toBe(7777);
   });
 
-  it('lets the model drive a repo push through the GitHub plugin tools', async () => {
-    // Unknown skill: the plugin refuses with a correctable error (not a crash),
-    // the error is fed back, and the loop continues to a final answer.
-    queued = [toolCallResponse('github_push', { skillId: 'ghost' }), textResponse('done')];
+  it('lets the model drive a project push through the GitHub plugin tool', async () => {
+    const { useMarketStore } = await import('./market.store');
+    const pushProject = vi.fn(async () => ({ ok: true, message: 'Committed and pushed branch "main" to o/r.' }));
+    (window as any).electronAPI.git.pushProject = pushProject;
+    localStorage.setItem('conecode.pluginToken', 'tok');
+    useMarketStore.setState({ repo: 'o/r', result: null });
+    try {
+      queued = [toolCallResponse('github_push', { message: 'Ship it' }), textResponse('done')];
 
-    await useChatStore.getState().sendMessage('push my changes', 'p1', 'gpt-test');
+      await useChatStore.getState().sendMessage('push my changes', 'p1', 'gpt-test');
 
-    expect(streamCalls).toHaveLength(2);
-    expect(JSON.stringify(streamCalls[1].messages)).toContain('not installed from a GitHub repo');
-    expect(created.some((m) => m.content === 'done')).toBe(true);
+      expect(pushProject).toHaveBeenCalledWith({ cwd: '/proj', message: 'Ship it', repo: 'o/r', token: 'tok' });
+      expect(streamCalls).toHaveLength(2);
+      expect(JSON.stringify(streamCalls[1].messages)).toContain('Committed and pushed');
+      expect(created.some((m) => m.content === 'done')).toBe(true);
+    } finally {
+      localStorage.removeItem('conecode.pluginToken');
+      useMarketStore.setState({ repo: '', result: null });
+    }
   });
 
   it('refuses GitHub tool calls while the plugin is disabled', async () => {
     const { usePluginStore } = await import('./plugin.store');
     usePluginStore.setState({ disabled: ['github-sync'] });
+    const pushProject = vi.fn();
+    (window as any).electronAPI.git.pushProject = pushProject;
     try {
-      queued = [toolCallResponse('github_sync', {}), textResponse('done')];
+      queued = [toolCallResponse('github_push', {}), textResponse('done')];
 
-      await useChatStore.getState().sendMessage('sync my repo', 'p1', 'gpt-test');
+      await useChatStore.getState().sendMessage('push my repo', 'p1', 'gpt-test');
 
+      expect(pushProject).not.toHaveBeenCalled();
       expect(streamCalls).toHaveLength(2);
       expect(JSON.stringify(streamCalls[1].messages)).toContain('plugin is disabled');
     } finally {
@@ -597,79 +609,17 @@ describe('runAgentLoop with native tool calling', () => {
     }
   });
 
-  it('pushes a linked skill when the model calls github_push', async () => {
-    const { useSkillsStore } = await import('./skills.store');
+  it('feeds a failed project push back to the model', async () => {
     const { useMarketStore } = await import('./market.store');
-    useSkillsStore.setState({
-      installed: [{
-        id: 'alpha', name: 'Alpha', scope: 'global', source: 'custom',
-        description: 'd', tags: ['market'], body: 'FIXED locally',
-      }],
-      effective: [],
-      loaded: true,
-    } as any);
-    useMarketStore.setState({
-      repo: 'o/r',
-      origins: { alpha: { repo: 'o/r', path: 'alpha/SKILL.md', content: 'baseline' } },
-      error: null,
-    });
-    localStorage.setItem('conecode.pluginToken', 'tok');
-    const puts: any[] = [];
-    const savedFetch = (globalThis as any).fetch;
-    (globalThis as any).fetch = vi.fn(async (url: string, opts: any) => {
-      if (opts?.method === 'PUT') {
-        puts.push({ url, body: JSON.parse(opts.body) });
-        return new Response('{}', { status: 200 });
-      }
-      return new Response(JSON.stringify({ sha: 'abc' }), { status: 200 });
-    });
-    try {
-      queued = [toolCallResponse('github_push', { skillId: 'alpha' }), textResponse('done')];
+    const pushProject = vi.fn(async () => ({ ok: false, message: 'The project has no origin remote.' }));
+    (window as any).electronAPI.git.pushProject = pushProject;
+    useMarketStore.setState({ repo: '', result: null });
+    queued = [toolCallResponse('github_push', {}), textResponse('done')];
 
-      await useChatStore.getState().sendMessage('push my changes', 'p1', 'gpt-test');
+    await useChatStore.getState().sendMessage('push my changes', 'p1', 'gpt-test');
 
-      expect(puts).toHaveLength(1);
-      expect(puts[0].url).toContain('/repos/o/r/contents/alpha/SKILL.md');
-      expect(puts[0].body.message).toContain('alpha');
-      expect(streamCalls).toHaveLength(2);
-      expect(JSON.stringify(streamCalls[1].messages)).toContain('Pushed');
-      // The model is told WHAT was pushed, never WHERE it lives: a path in the
-      // result read_file'ing a stray SKILL.md.
-      expect(JSON.stringify(streamCalls[1].messages)).not.toContain('SKILL.md');
-    } finally {
-      (globalThis as any).fetch = savedFetch;
-      localStorage.removeItem('conecode.pluginToken');
-    }
-  });
-
-  it('hides repo paths from the model after github_sync', async () => {
-    const { useMarketStore } = await import('./market.store');
-    const tree = [{ type: 'blob', path: 'alpha/SKILL.md' }, { type: 'blob', path: 'beta/SKILL.md' }];
-    const savedFetch = (globalThis as any).fetch;
-    (globalThis as any).fetch = vi.fn(async (url: string) => {
-      if (String(url).includes('/git/trees/')) {
-        return new Response(JSON.stringify({ tree }), { status: 200 });
-      }
-      const body = String(url).includes('alpha')
-        ? `---\nname: Alpha\ndescription: A\n---\nDo alpha things.`
-        : `---\nname: Beta\ndescription: B\n---\nDo beta things.`;
-      return new Response(body, { status: 200 });
-    });
-    try {
-      queued = [toolCallResponse('github_sync', {}), textResponse('done')];
-
-      await useChatStore.getState().sendMessage('sync my repo', 'p1', 'gpt-test');
-
-      const fedBack = JSON.stringify(streamCalls[1].messages);
-      expect(fedBack).toContain('alpha');
-      expect(fedBack).toContain('beta');
-      // Neither the path nor the file name is ever handed to the model.
-      expect(fedBack).not.toContain('SKILL.md');
-      expect(fedBack).not.toContain('alpha/');
-    } finally {
-      (globalThis as any).fetch = savedFetch;
-      useMarketStore.setState({ remote: [], error: null });
-    }
+    expect(streamCalls).toHaveLength(2);
+    expect(JSON.stringify(streamCalls[1].messages)).toContain('Error: The project has no origin remote.');
   });
 
   it('runs two conversations concurrently, even on the same model', async () => {

@@ -32,7 +32,7 @@ export const BUILTIN_PLUGINS: PluginDef[] = [
   {
     id: 'github-sync',
     name: 'GitHub 同步',
-    description: '从 GitHub 仓库同步插件，改完一键推回去，一个 Token 全搞定。',
+    description: '把当前项目一键提交并推送到 GitHub 仓库。',
     kind: 'builtin',
     icon: 'github',
     view: 'sync',

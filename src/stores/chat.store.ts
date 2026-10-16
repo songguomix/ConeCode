@@ -266,7 +266,7 @@ function screenshotParts(images: string[]): any[] {
 }
 
 interface FileAction {
-  action: 'read_file' | 'list_dir' | 'ask_user' | 'edit_file' | 'create_file' | 'create_dir' | 'delete' | 'rename' | 'copy' | 'exec' | 'open_app' | 'open_path' | 'system_info' | 'perf_snapshot' | 'perf_monitor' | 'perf_inspect' | 'cost_snapshot' | 'run_background' | 'background_status' | 'search' | 'glob' | 'update_todos' | 'git_status' | 'git_diff' | 'web_fetch' | 'web_search' | 'download' | 'mcp_call' | 'spawn_agent' | 'use_skill' | 'computer' | 'github_sync' | 'github_push'
+  action: 'read_file' | 'list_dir' | 'ask_user' | 'edit_file' | 'create_file' | 'create_dir' | 'delete' | 'rename' | 'copy' | 'exec' | 'open_app' | 'open_path' | 'system_info' | 'perf_snapshot' | 'perf_monitor' | 'perf_inspect' | 'cost_snapshot' | 'run_background' | 'background_status' | 'search' | 'glob' | 'update_todos' | 'git_status' | 'git_diff' | 'web_fetch' | 'web_search' | 'download' | 'mcp_call' | 'spawn_agent' | 'use_skill' | 'computer' | 'github_push'
     | 'page_navigate' | 'page_snapshot' | 'page_click' | 'page_fill' | 'page_eval' | 'page_console' | 'remember';
   /** The `computer` tool's own request, nested so its `action` field survives. */
   computer?: ComputerRequest;
@@ -279,8 +279,8 @@ interface FileAction {
   /** remember: which drawer of memory this belongs in, and the evidence for it. */
   kind?: string;
   why?: string;
-  /** github_push: push just this skill; omit to push all locally-modified skills. */
-  skillId?: string;
+  /** github_push: optional commit message for the project push. */
+  message?: string;
   path?: string;
   todos?: { content: string; status?: string }[];
   url?: string;
@@ -313,7 +313,7 @@ interface FileAction {
 // react to (so the agent loop should run another turn). Everything else is
 // either deferred for user confirmation or terminal.
 const INFO_ACTIONS = new Set([
-  'read_file', 'list_dir', 'create_file', 'create_dir', 'open_app', 'open_path', 'system_info', 'perf_snapshot', 'perf_monitor', 'perf_inspect', 'cost_snapshot', 'background_status', 'search', 'glob', 'update_todos', 'git_status', 'git_diff', 'web_fetch', 'web_search', 'download', 'mcp_call', 'spawn_agent', 'use_skill', 'github_sync', 'github_push',
+  'read_file', 'list_dir', 'create_file', 'create_dir', 'open_app', 'open_path', 'system_info', 'perf_snapshot', 'perf_monitor', 'perf_inspect', 'cost_snapshot', 'background_status', 'search', 'glob', 'update_todos', 'git_status', 'git_diff', 'web_fetch', 'web_search', 'download', 'mcp_call', 'spawn_agent', 'use_skill', 'github_push',
   'page_navigate', 'page_snapshot', 'page_click', 'page_fill', 'page_eval', 'page_console', 'remember',
 ]);
 
@@ -329,7 +329,7 @@ const INDEPENDENT_READ_ACTIONS = new Set([
 // recognize BARE JSON action objects without mistakenly wrapping unrelated JSON.
 const KNOWN_ACTIONS = new Set([
   'read_file', 'list_dir', 'ask_user', 'edit_file', 'create_file', 'create_dir',
-  'delete', 'rename', 'copy', 'exec', 'open_app', 'open_path', 'system_info', 'perf_snapshot', 'perf_monitor', 'perf_inspect', 'cost_snapshot', 'run_background', 'background_status', 'search', 'glob', 'update_todos', 'git_status', 'git_diff', 'web_fetch', 'web_search', 'download', 'mcp_call', 'spawn_agent', 'use_skill', 'computer', 'github_sync', 'github_push',
+  'delete', 'rename', 'copy', 'exec', 'open_app', 'open_path', 'system_info', 'perf_snapshot', 'perf_monitor', 'perf_inspect', 'cost_snapshot', 'run_background', 'background_status', 'search', 'glob', 'update_todos', 'git_status', 'git_diff', 'web_fetch', 'web_search', 'download', 'mcp_call', 'spawn_agent', 'use_skill', 'computer', 'github_push',
   'page_navigate', 'page_snapshot', 'page_click', 'page_fill', 'page_eval', 'page_console', 'remember',
 ]);
 
@@ -455,76 +455,29 @@ async function backgroundStatusText(parentConversationId?: string): Promise<stri
 }
 
 // ---------------------------------------------------------------------------
-// GitHub plugin tools (github_sync / github_push).
+// GitHub plugin tool (github_push).
 //
-// The plugin is the ONLY thing that touches the repo — files, paths, API
-// calls. The model must never read SKILL.md files, chase a repo path with
-// read_file, or call the GitHub API itself; that is what these tools exist
-// to prevent. So their results deliberately expose NO paths and NO raw bytes:
-// a returned path is an invitation for the model to go read it, which is
-// exactly how "stray read_file on SKILL.md" happened. Skills are handed over
-// by id, ready for use_skill.
+// The plugin is the ONLY thing that touches the repo — git commands, the API,
+// the token. The model must never run git itself, read SKILL.md files, or chase
+// repo paths; it just asks the plugin to push the open project and reports what
+// the plugin returned. Pushing skills is NOT this plugin's job.
 // ---------------------------------------------------------------------------
 
-/** Null when the model may use the GitHub tools, otherwise the refusal text. */
+/** Null when the model may use the GitHub tool, otherwise the refusal text. */
 async function githubPluginGate(): Promise<string | null> {
   const { usePluginStore } = await import('./plugin.store');
   if (usePluginStore.getState().disabled.includes('github-sync')) {
-    return 'Error: the GitHub sync plugin is disabled. Enable it in Settings → Plugins first, then call again.';
+    return 'Error: the GitHub plugin is disabled. Enable it in Settings → Plugins first, then call again.';
   }
   return null;
 }
 
-export async function runGithubSyncText(): Promise<string> {
+export async function runGithubPushText(message?: string): Promise<string> {
   const blocked = await githubPluginGate();
   if (blocked) return blocked;
   const { useMarketStore } = await import('./market.store');
-  if (!useMarketStore.getState().repo.trim()) {
-    return 'Error: no GitHub repo is configured in the GitHub sync plugin. Ask the user for an "owner/repo" first.';
-  }
-  const ok = await useMarketStore.getState().sync();
-  const st = useMarketStore.getState();
-  if (!ok) {
-    return `Error: GitHub sync failed (${st.error || 'unknown error'}). Check the repo name and token in the GitHub sync plugin.`;
-  }
-  // Installed status comes from the skills store (not from the repo listing) so
-  // the model knows which ids are already usable without being told where any
-  // of them live.
-  const { useSkillsStore } = await import('./skills.store');
-  const installedIds = new Set(useSkillsStore.getState().installed.map((s) => s.id));
-  const lines = st.remote.map((r) =>
-    `- ${r.id}${installedIds.has(r.id) ? ' (installed — call use_skill with this id)' : ' (not installed — ask the user before installing)'}`,
-  );
-  return [
-    `Synced ${st.remote.length} skill(s) from ${st.repo}.`,
-    lines.join('\n'),
-    'These came straight from the plugin. Use use_skill with a skill id to load its instructions — never read, glob, or search the repo or its files yourself.',
-  ].join('\n');
-}
-
-export async function runGithubPushText(skillId?: string): Promise<string> {
-  const blocked = await githubPluginGate();
-  if (blocked) return blocked;
-  const { useMarketStore } = await import('./market.store');
-  const st = useMarketStore.getState();
-  if (skillId) {
-    const origin = st.origins[skillId];
-    if (!origin) {
-      return `Error: skill "${skillId}" was not installed from a GitHub repo (no push origin). Sync it first with github_sync.`;
-    }
-    const ok = await st.pushSkill(skillId);
-    if (ok) return `Pushed "${skillId}" to ${origin.repo}. The repo is updated.`;
-    const err = useMarketStore.getState().error;
-    return `Error: pushing "${skillId}" failed (${err || 'unknown error'}). Check the token in the GitHub sync plugin, then retry.`;
-  }
-  const pushed = await st.autoPush();
-  if (pushed.length) return `Pushed ${pushed.length} skill(s) to GitHub: ${pushed.join(', ')}.`;
-  const after = useMarketStore.getState();
-  if (after.error) return `Error: GitHub push failed (${after.error}). Check the token in the GitHub sync plugin.`;
-  if (!Object.keys(after.origins).length) {
-    return 'Error: nothing has been installed from a GitHub repo yet, so there is nothing to push. Sync first with github_sync.';
-  }
-  return 'No local changes to push — everything is already in sync.';
+  const res = await useMarketStore.getState().pushRepo(message);
+  return res.message;
 }
 
 const MAX_ITERATIONS = 200;
@@ -603,7 +556,7 @@ function isTransientStreamError(error: any): boolean {
 
 function toolActionLabel(action: FileAction): string {
   const raw = action.path || action.oldPath || action.srcPath || action.command || action.name
-    || action.url || action.query || action.id || action.skillId || action.tool || action.action;
+    || action.url || action.query || action.id || action.tool || action.action;
   return raw.length > 160 ? `${raw.slice(0, 157)}...` : raw;
 }
 
@@ -2552,15 +2505,10 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
             result = `Sub-agent report:\n${report}`;
             break;
           }
-          case 'github_sync': {
-            result = await runGithubSyncText();
-            break;
-          }
           case 'github_push': {
-            const skillId = typeof action.skillId === 'string' && action.skillId.trim()
-              ? action.skillId.trim()
-              : undefined;
-            result = await runGithubPushText(skillId);
+            result = await runGithubPushText(
+              typeof action.message === 'string' && action.message.trim() ? action.message.trim() : undefined,
+            );
             break;
           }
           case 'edit_file': {

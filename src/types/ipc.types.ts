@@ -237,12 +237,15 @@ export interface ElectronAPI {
     openPath: (path: string) => Promise<boolean>;
     getSystemInfo: () => Promise<Record<string, any>>;
     getAppMetrics: () => Promise<AppMetricsSnapshot>;
+    getVersion: () => Promise<string>;
   };
   git: {
     info: (cwd?: string) => Promise<{ isRepo: boolean; branch: string | null; dirty: number }>;
     status: (cwd?: string) => Promise<string>;
     diff: (cwd?: string, file?: string) => Promise<string>;
     branches: (cwd?: string) => Promise<string[]>;
+    pushProject: (opts: { cwd: string; message?: string; repo?: string; token?: string }) =>
+      Promise<{ ok: boolean; message: string }>;
     review: (cwd: string, options: {
       scope: 'uncommitted' | 'base' | 'commit';
       target?: string;

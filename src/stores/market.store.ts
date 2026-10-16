@@ -1,78 +1,47 @@
 import { create } from 'zustand';
-import { isSafeSkillId, parseSkill, serializeSkill, skillId } from '../core/skills/skills';
-import { useSkillsStore } from './skills.store';
 
+// The GitHub plugin's state. Its whole job is to push the *open project* to a
+// GitHub repo: it stores where to push and the token to push with, reads the
+// project's git state, and runs one commit+push. No skills, no SKILL.md — the
+// chat model only ever asks this store to push; it never touches git itself.
 const REPO_KEY = 'conecode.pluginRepo';
 const TOKEN_KEY = 'conecode.pluginToken';
-const ORIGINS_KEY = 'conecode.pluginOrigins';
 
-export type MarketError =
-  | 'repo-not-found'
-  | 'auth-failed'
-  | 'rate-limited'
-  | 'network-error'
-  | 'empty-repo'
-  | 'conflict';
-
-/** A SKILL.md found in the synced repo. `installed` is resolved at render. */
-export interface RemoteSkill {
-  id: string;
-  name: string;
-  description: string;
-  path: string;
-  body: string;
+/** Minimal git state of the open project, for the plugin view. */
+export interface RepoStatus {
+  isRepo: boolean;
+  branch: string | null;
+  dirty: number;
 }
 
-/** Where an installed skill came from, plus what it looked like then. */
-export interface SkillOrigin {
-  repo: string;
-  path: string;
-  /** Full serialized SKILL.md at install/push time — the diff baseline. */
-  content: string;
+export interface RepoPushResult {
+  ok: boolean;
+  message: string;
 }
 
 interface MarketStore {
-  /** "owner/repo". */
+  /** "owner/repo" the open project is pushed to. */
   repo: string;
   tokenSet: boolean;
-  remote: RemoteSkill[];
-  fetchedAt: number | null;
-  syncing: boolean;
-  error: MarketError | null;
-  /** skillId → where it was installed from (survives reloads). */
-  origins: Record<string, SkillOrigin>;
-  pushing: string | null;
+  /** Git state of the open project; null until refreshed with a folder open. */
+  status: RepoStatus | null;
+  refreshing: boolean;
+  pushing: boolean;
+  /** When the last successful push happened (for the view). */
+  lastPushAt: number | null;
+  /** Last push outcome — kept so the view can show exactly what the model saw. */
+  result: RepoPushResult | null;
   setRepo: (repo: string) => void;
   /** Persist a token (or null to forget it). The value never enters state. */
   setToken: (token: string | null) => void;
-  sync: () => Promise<boolean>;
-  /** Install/update into the library (stamped custom = unreviewed). */
-  installRemote: (skill: RemoteSkill, scope: 'global' | 'project') => Promise<boolean>;
-  /** True when the local copy differs from the last synced content. */
-  hasLocalChanges: (skillId: string) => boolean;
-  /** Push the local SKILL.md back to its repo (one click, fixed message). */
-  pushSkill: (skillId: string) => Promise<boolean>;
+  /** Read the open project's git state (branch, uncommitted count). */
+  refresh: () => Promise<void>;
   /**
-   * Push every locally-modified skill back. Runs automatically at the end of
-   * a successful sync — fixed skills flow back to GitHub on their own.
-   * No token → no-op (never sets an error). A conflict stops that skill only;
-   * the baseline stays so the user can resolve it by hand.
+   * Commit whatever is uncommitted in the open project and push the current
+   * branch to the configured repo. Runs through the main process; the token, if
+   * any, authenticates the push without being stored in the git config.
    */
-  autoPush: () => Promise<string[]>;
-}
-
-function loadOrigins(): Record<string, SkillOrigin> {
-  try {
-    return JSON.parse(localStorage.getItem(ORIGINS_KEY) || '{}');
-  } catch {
-    return {};
-  }
-}
-
-function saveOrigins(origins: Record<string, SkillOrigin>) {
-  try {
-    localStorage.setItem(ORIGINS_KEY, JSON.stringify(origins));
-  } catch {}
+  pushRepo: (message?: string) => Promise<RepoPushResult>;
 }
 
 function loadRepo(): string {
@@ -91,13 +60,6 @@ function loadToken(): string | null {
   }
 }
 
-function headers(): Record<string, string> {
-  const h: Record<string, string> = { Accept: 'application/vnd.github+json' };
-  const token = loadToken();
-  if (token) h.Authorization = `Bearer ${token}`;
-  return h;
-}
-
 /** Accept "owner/repo" or a github.com URL, reject everything else. */
 export function normalizeRepo(input: string): string | null {
   const t = input.trim().replace(/\/+$/, '');
@@ -105,34 +67,19 @@ export function normalizeRepo(input: string): string | null {
   return m ? m[1] : null;
 }
 
-async function api(path: string): Promise<{ ok: boolean; status: number; text: string }> {
-  const res = await fetch(`https://api.github.com${path}`, { headers: headers() });
-  return { ok: res.ok, status: res.status, text: await res.text() };
-}
-
-function toError(status: number): MarketError {
-  if (status === 404) return 'repo-not-found';
-  if (status === 401) return 'auth-failed';
-  if (status === 403 || status === 429) return 'rate-limited';
-  return 'network-error';
-}
-
-/** UTF-8-safe base64 for the Contents API (btoa is Latin-1 only). */
-function b64(text: string): string {
-  const Buf = (globalThis as any).Buffer;
-  if (Buf) return Buf.from(text, 'utf-8').toString('base64');
-  return btoa(unescape(encodeURIComponent(text)));
+async function openRoot(): Promise<string | null> {
+  const { useWorkspaceStore } = await import('./workspace.store');
+  return useWorkspaceStore.getState().rootPath || null;
 }
 
 export const useMarketStore = create<MarketStore>((set, get) => ({
   repo: loadRepo(),
   tokenSet: !!loadToken(),
-  remote: [],
-  fetchedAt: null,
-  syncing: false,
-  error: null,
-  origins: loadOrigins(),
-  pushing: null,
+  status: null,
+  refreshing: false,
+  pushing: false,
+  lastPushAt: null,
+  result: null,
 
   setRepo: (repo) => {
     try {
@@ -149,173 +96,45 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
     set({ tokenSet: !!token });
   },
 
-  sync: async () => {
+  refresh: async () => {
+    const root = await openRoot();
+    set({ refreshing: true });
+    try {
+      if (!root) {
+        set({ status: { isRepo: false, branch: null, dirty: 0 }, refreshing: false });
+        return;
+      }
+      const info = await window.electronAPI.git.info(root);
+      set({ status: info, refreshing: false });
+    } catch {
+      set({ status: null, refreshing: false });
+    }
+  },
+
+  pushRepo: async (message) => {
+    const root = await openRoot();
+    if (!root) {
+      const res = { ok: false, message: 'Error: no project folder is open — open a folder first.' };
+      set({ result: res });
+      return res;
+    }
     const repo = normalizeRepo(get().repo);
-    if (!repo) {
-      set({ error: 'repo-not-found', remote: [] });
-      return false;
-    }
-    set({ syncing: true, error: null });
-    try {
-      const tree = await api(`/repos/${repo}/git/trees/HEAD?recursive=1`);
-      if (!tree.ok) {
-        set({ syncing: false, error: toError(tree.status), remote: [] });
-        return false;
-      }
-      const files = (JSON.parse(tree.text).tree || [])
-        .filter((n: any) => n.type === 'blob' && /(^|\/)SKILL\.md$/i.test(n.path || ''))
-        .slice(0, 60);
-      if (files.length === 0) {
-        set({ syncing: false, error: 'empty-repo', remote: [], fetchedAt: Date.now() });
-        return false;
-      }
-      const out: RemoteSkill[] = [];
-      for (const f of files.slice(0, 25)) {
-        try {
-          // Raw file bytes (not the JSON envelope) when the accept header asks.
-          const h: Record<string, string> = { Accept: 'application/vnd.github.raw' };
-          const token = loadToken();
-          if (token) h.Authorization = `Bearer ${token}`;
-          const res = await fetch(
-            `https://api.github.com/repos/${repo}/contents/${encodeURIComponent(f.path)}?ref=HEAD`,
-            { headers: h },
-          );
-          if (!res.ok) continue;
-          const text = await res.text();
-          const dir = f.path.split('/').slice(0, -1).join('/') || f.path;
-          const fallbackId = dir.split('/').pop() || 'remote-skill';
-          const parsed = parseSkill(text, {
-            id: isSafeSkillId(fallbackId) ? fallbackId : skillId(fallbackId),
-            scope: 'global',
-          });
-          if (!parsed || !parsed.body) continue;
-          out.push({
-            id: parsed.id,
-            name: parsed.name || parsed.id,
-            description: parsed.description || '',
-            path: f.path,
-            body: parsed.body,
-          });
-        } catch {
-          continue;
-        }
-      }
-      set({ syncing: false, remote: out, fetchedAt: Date.now(), error: out.length === 0 ? 'empty-repo' : null });
-      if (out.length > 0) await get().autoPush();
-      return out.length > 0;
-    } catch {
-      set({ syncing: false, error: 'network-error' });
-      return false;
-    }
-  },
-
-  installRemote: async (skill, scope) => {
-    const ok = await useSkillsStore.getState().saveCustom(
-      { name: skill.name, description: skill.description, tags: ['market'], body: skill.body },
-      scope,
-      skill.id,
-    );
-    if (ok) {
-      // Baseline for one-click push-back: the exact bytes we wrote.
-      const after = useSkillsStore.getState().installed.find((s) => s.id === skill.id && s.scope === scope);
-      const repo = normalizeRepo(get().repo);
-      if (after && repo) {
-        const origins = {
-          ...get().origins,
-          [skill.id]: { repo, path: skill.path, content: serializeSkill(after) },
-        };
-        saveOrigins(origins);
-        set({ origins });
-      }
-    }
-    return ok;
-  },
-
-  hasLocalChanges: (skillId) => {
-    const origin = get().origins[skillId];
-    if (!origin) return false;
-    const skills = useSkillsStore.getState().installed;
-    const local = skills.find((s) => s.id === skillId && s.scope === 'global')
-      || skills.find((s) => s.id === skillId);
-    if (!local) return false;
-    return serializeSkill(local) !== origin.content;
-  },
-
-  pushSkill: async (skillId) => {
-    const origin = get().origins[skillId];
     const token = loadToken();
-    if (!origin || !token) {
-      set({ error: 'auth-failed' });
-      return false;
-    }
-    const skills = useSkillsStore.getState().installed;
-    const local = skills.find((s) => s.id === skillId && s.scope === 'global')
-      || skills.find((s) => s.id === skillId);
-    if (!local) return false;
-    const content = serializeSkill(local);
-    set({ pushing: skillId, error: null });
+    set({ pushing: true, result: null });
+    let res: RepoPushResult;
     try {
-      const h: Record<string, string> = {
-        Accept: 'application/vnd.github+json',
-        Authorization: `Bearer ${token}`,
-      };
-      const encPath = origin.path.split('/').map(encodeURIComponent).join('/');
-      // Current sha first: missing file = create, mismatched base = conflict
-      // is reported by the PUT itself.
-      const cur = await fetch(
-        `https://api.github.com/repos/${origin.repo}/contents/${encPath}?ref=HEAD`,
-        { headers: h },
-      );
-      let sha: string | undefined;
-      if (cur.ok) {
-        try {
-          sha = (await cur.json()).sha;
-        } catch {}
-      } else if (cur.status !== 404) {
-        set({ pushing: null, error: toError(cur.status) });
-        return false;
-      }
-      const put = await fetch(
-        `https://api.github.com/repos/${origin.repo}/contents/${encPath}`,
-        {
-          method: 'PUT',
-          headers: { ...h, 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            message: `Update ${skillId} via ConeCode`,
-            content: b64(content),
-            ...(sha ? { sha } : {}),
-          }),
-        },
-      );
-      if (!put.ok) {
-        const err: MarketError =
-          put.status === 409 || put.status === 422 ? 'conflict'
-          : put.status === 401 || put.status === 403 ? 'auth-failed'
-          : toError(put.status);
-        set({ pushing: null, error: err });
-        return false;
-      }
-      const origins = { ...get().origins, [skillId]: { ...origin, content } };
-      saveOrigins(origins);
-      set({ pushing: null, origins });
-      return true;
-    } catch {
-      set({ pushing: null, error: 'network-error' });
-      return false;
+      const out = await window.electronAPI.git.pushProject({
+        cwd: root,
+        message,
+        repo: repo || undefined,
+        token: token || undefined,
+      });
+      res = out.ok ? { ok: true, message: out.message } : { ok: false, message: `Error: ${out.message}` };
+    } catch (e: any) {
+      res = { ok: false, message: `Error: ${e?.message || String(e)}` };
     }
-  },
-
-  autoPush: async () => {
-    if (!loadToken()) return [];
-    const pushed: string[] = [];
-    for (const id of Object.keys(get().origins)) {
-      if (!get().hasLocalChanges(id)) continue;
-      try {
-        if (await get().pushSkill(id)) pushed.push(id);
-      } catch {
-        continue;
-      }
-    }
-    return pushed;
+    set({ pushing: false, result: res, lastPushAt: res.ok ? Date.now() : get().lastPushAt });
+    if (res.ok) void get().refresh();
+    return res;
   },
 }));

@@ -97,6 +97,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     status: (cwd?: string) => ipcRenderer.invoke('git:status', cwd),
     diff: (cwd?: string, file?: string) => ipcRenderer.invoke('git:diff', cwd, file),
     branches: (cwd?: string) => ipcRenderer.invoke('git:branches', cwd),
+    pushProject: (opts: { cwd: string; message?: string; repo?: string; token?: string }) =>
+      ipcRenderer.invoke('git:pushProject', opts),
     review: (cwd: string, options: any) => ipcRenderer.invoke('git:review', cwd, options),
   },
   worktree: {

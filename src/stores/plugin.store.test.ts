@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BUILTIN_PLUGINS, buildCreatePluginPrompt, findBuiltinPlugin } from '../core/plugins/plugins';
 import { selectPlugins, usePluginStore } from './plugin.store';
 import { useLanguageStore } from './language.store';
-import { useMarketStore } from './market.store';
 import { useSkillsStore } from './skills.store';
 
 beforeEach(() => {
@@ -20,7 +19,6 @@ beforeEach(() => {
     },
   };
   usePluginStore.setState({ custom: [], disabled: [] });
-  useMarketStore.setState({ origins: {} });
   useSkillsStore.setState({ installed: [], effective: [], loaded: true } as any);
 });
 
@@ -77,27 +75,22 @@ describe('plugin registry', () => {
     expect(usePluginStore.getState().custom.some((c) => c.id === id1)).toBe(false);
   });
 
-  it('merges builtin, market and custom without fighting skills', () => {
+  it('merges builtin and custom without fighting skills', () => {
     useSkillsStore.setState({
       installed: [{ id: 'alpha', name: 'Alpha', scope: 'global', source: 'custom', description: 'd', tags: [], body: 'b' }],
       effective: [],
       loaded: true,
     } as any);
-    useMarketStore.setState({
-      origins: { alpha: { repo: 'o/r', path: 'alpha/SKILL.md', content: 'x' } },
-    });
     usePluginStore.getState().addCustom({ name: '自建', description: 'd', skillId: 'alpha' });
     const all = selectPlugins();
     expect(all.filter((p) => p.kind === 'builtin')).toHaveLength(6);
-    expect(all.some((p) => p.id === 'market:alpha' && p.skillId === 'alpha')).toBe(true);
     expect(all.some((p) => p.kind === 'custom' && p.view === 'skill')).toBe(true);
     expect(all.find((p) => p.id === 'github-sync')?.skillInstalled).toBe(true);
     expect(all.find((p) => p.id === 'todo-scan')?.skillInstalled).toBe(false);
-    expect(all.find((p) => p.id === 'market:alpha')?.skillInstalled).toBe(true);
     expect(all.find((p) => p.kind === 'custom')?.skillInstalled).toBe(true);
     // Disabling a plugin never touches the skill side.
-    usePluginStore.getState().setEnabled('market:alpha', false);
-    expect(selectPlugins().find((p) => p.id === 'market:alpha')?.enabled).toBe(false);
+    usePluginStore.getState().setEnabled('todo-scan', false);
+    expect(selectPlugins().find((p) => p.id === 'todo-scan')?.enabled).toBe(false);
     expect(useSkillsStore.getState().installed).toHaveLength(1);
   });
 });

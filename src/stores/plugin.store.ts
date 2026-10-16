@@ -1,6 +1,5 @@
 import { create } from 'zustand';
 import { BUILTIN_PLUGINS, type PluginDef, type PluginKind } from '../core/plugins/plugins';
-import { useMarketStore } from './market.store';
 import { useSkillsStore } from './skills.store';
 
 const CUSTOM_KEY = 'conecode.customPlugins';
@@ -60,7 +59,6 @@ export const usePluginStore = create<PluginStore>((set, get) => ({
     const taken = new Set([
       ...BUILTIN_PLUGINS.map((p) => p.id),
       ...get().custom.map((p) => p.id),
-      ...Object.keys(useMarketStore.getState().origins),
     ]);
     const id = customId(name, taken);
     const custom = [...get().custom, { id, name, description, skillId: draft.skillId || undefined }];
@@ -91,14 +89,12 @@ export const usePluginStore = create<PluginStore>((set, get) => ({
 }));
 
 /**
- * Everything the library shows, merged from three sources that never fight:
- * builtin code, market installs (derived from sync origins whose skill is
- * still installed), and user-added customs. Enabling/disabling a plugin only
- * affects the plugin side — the linked skill's own switch stays independent.
+ * Everything the library shows, merged from two sources that never fight:
+ * builtin code and user-added customs. Enabling/disabling a plugin only affects
+ * the plugin side — the linked skill's own switch stays independent.
  */
 export function selectPlugins(): PluginEntry[] {
   const { custom, disabled } = usePluginStore.getState();
-  const origins = useMarketStore.getState().origins;
   const installed = useSkillsStore.getState().installed;
   const out: PluginEntry[] = BUILTIN_PLUGINS.map((p) => {
     const needsSkill = p.view === 'skill' || p.view === 'security';
@@ -111,22 +107,6 @@ export function selectPlugins(): PluginEntry[] {
       skillInstalled: isSkillInstalled,
     };
   });
-  for (const [skillId, origin] of Object.entries(origins)) {
-    const skill = installed.find((s) => s.id === skillId);
-    if (!skill) continue;
-    out.push({
-      id: `market:${skillId}`,
-      name: skill.name || skillId,
-      description: skill.description || origin.path,
-      kind: 'market' as PluginKind,
-      icon: 'box',
-      skillId,
-      view: 'skill',
-      enabled: !disabled.includes(`market:${skillId}`),
-      skillScope: skill.scope,
-      skillInstalled: true,
-    });
-  }
   for (const c of custom) {
     const skill = c.skillId ? installed.find((s) => s.id === c.skillId) : undefined;
     out.push({

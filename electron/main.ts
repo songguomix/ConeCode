@@ -1335,6 +1335,74 @@ function registerIPC() {
       .filter((line) => line && !line.endsWith('/HEAD'))));
   });
 
+  // The GitHub plugin's whole job: commit the open project and push it to the
+  // configured repo. A token, when given, authenticates through a one-shot HTTP
+  // header so it never lands in .git/config, the remote URL, or the shell's argv.
+  ipcMain.handle(
+    'git:pushProject',
+    async (_, opts: { cwd: string; message?: string; repo?: string; token?: string }) => {
+      const cwd = opts?.cwd;
+      if (!cwd) return { ok: false, message: 'No project folder is open.' };
+
+      const inside = await runGit(['rev-parse', '--is-inside-work-tree'], cwd);
+      if (inside.code !== 0 || inside.stdout.trim() !== 'true') {
+        return { ok: false, message: 'The open project is not a Git repository.' };
+      }
+
+      let branch = (await runGit(['branch', '--show-current'], cwd)).stdout.trim();
+      if (!branch) branch = (await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], cwd)).stdout.trim();
+      if (!branch || branch === 'HEAD') {
+        return { ok: false, message: 'The project is in a detached HEAD state — check out a branch first.' };
+      }
+
+      const status = await runGit(['status', '--porcelain'], cwd);
+      const dirty = status.stdout.split('\n').filter((l) => l.trim()).length;
+      let committed = false;
+      if (dirty > 0) {
+        const add = await runGit(['add', '-A'], cwd);
+        if (add.code !== 0) return { ok: false, message: add.stderr.trim() || 'git add failed.' };
+        const commit = await runGit(['commit', '-m', opts.message?.trim() || 'Update via ConeCode'], cwd);
+        if (commit.code !== 0) {
+          return { ok: false, message: commit.stderr.trim() || commit.stdout.trim() || 'git commit failed.' };
+        }
+        committed = true;
+      }
+
+      const repo = (opts.repo || '').trim();
+      const token = (opts.token || '').trim();
+      let args: string[];
+      let target = repo || 'origin';
+      if (token && repo) {
+        const basic = Buffer.from(`x-access-token:${token}`).toString('base64');
+        args = [
+          '-c', `http.https://github.com/.extraheader=AUTHORIZATION: basic ${basic}`,
+          'push', `https://github.com/${repo}.git`, `HEAD:refs/heads/${branch}`,
+        ];
+      } else {
+        const remote = (await runGit(['remote', 'get-url', 'origin'], cwd)).stdout.trim();
+        if (!remote) {
+          return {
+            ok: false,
+            message: 'The project has no "origin" remote — set an owner/repo and token in the GitHub plugin.',
+          };
+        }
+        target = remote;
+        args = ['push', '-u', 'origin', branch];
+      }
+
+      const push = await runGit(args, cwd);
+      if (push.code !== 0) {
+        return { ok: false, message: push.stderr.trim() || push.stdout.trim() || 'git push failed.' };
+      }
+      return {
+        ok: true,
+        message: committed
+          ? `Committed and pushed branch "${branch}" to ${target}.`
+          : `Pushed branch "${branch}" to ${target}.`,
+      };
+    },
+  );
+
   ipcMain.handle('git:review', async (_event, cwd: string, options: {
     scope: 'uncommitted' | 'base' | 'commit';
     target?: string;

@@ -47,20 +47,17 @@ describe('buildToolset', () => {
     expect(names).not.toContain('remember');
   });
 
-  it('advertises the GitHub plugin tools in normal mode, never in Plan Mode', () => {
+  it('advertises the GitHub plugin tool in normal mode, never in Plan Mode', () => {
     const names = buildToolset({}).map((tl) => tl.name);
-    expect(names).toContain('github_sync');
     expect(names).toContain('github_push');
     const planNames = buildToolset({ planMode: true }).map((tl) => tl.name);
-    expect(planNames).not.toContain('github_sync');
     expect(planNames).not.toContain('github_push');
   });
 
-  it('accepts github_push with or without a skill id, and rejects a mistyped one', () => {
+  it('accepts github_push with or without a commit message, and rejects a mistyped one', () => {
     expect(validateToolArgs('github_push', {})).toBeNull();
-    expect(validateToolArgs('github_push', { skillId: 'my-skill' })).toBeNull();
-    expect(validateToolArgs('github_push', { skillId: 42 } as any)).toContain('skillId');
-    expect(validateToolArgs('github_sync', {})).toBeNull();
+    expect(validateToolArgs('github_push', { message: 'Ship it' })).toBeNull();
+    expect(validateToolArgs('github_push', { message: 42 } as any)).toContain('message');
   });
 
   it('exposes MCP tools as their own functions', () => {

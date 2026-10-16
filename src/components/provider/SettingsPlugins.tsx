@@ -69,17 +69,16 @@ export default function SettingsPlugins({ t }: { t: (k: string) => string }) {
   // Reactive subscriptions so list/detail refresh on any registry change.
   const custom = usePluginStore((s) => s.custom);
   const disabled = usePluginStore((s) => s.disabled);
-  const origins = useMarketStore((s) => s.origins);
   const installedSkills = useSkillsStore((s) => s.installed);
   const skillsLoaded = useSkillsStore((s) => s.loaded);
   const loadSkills = useSkillsStore((s) => s.load);
-  void custom; void disabled; void origins; void installedSkills;
+  void custom; void disabled; void installedSkills;
 
   useEffect(() => {
     if (!skillsLoaded) void loadSkills();
   }, [skillsLoaded, loadSkills]);
 
-  const plugins = useMemo(() => selectPlugins(), [custom, disabled, origins, installedSkills]);
+  const plugins = useMemo(() => selectPlugins(), [custom, disabled, installedSkills]);
   const q = query.trim().toLowerCase();
   const matches = (p: PluginEntry) =>
     !q || pluginDisplayName(p, t).toLowerCase().includes(q) || pluginDisplayDesc(p, t).toLowerCase().includes(q);
@@ -97,8 +96,8 @@ export default function SettingsPlugins({ t }: { t: (k: string) => string }) {
             <h3 className="text-xl font-semibold text-[var(--text-primary)]">{t('pluginsTitle')}</h3>
             <div className="flex-1" />
             <button
-              onClick={() => void useMarketStore.getState().sync()}
-              title={t('pluginSyncNow')}
+              onClick={() => void useMarketStore.getState().refresh()}
+              title={t('pluginRefresh')}
               className="w-8 h-8 rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:bg-[var(--bg-3)] transition-colors"
             >
               <FiRefreshCw size={14} />
@@ -124,7 +123,7 @@ export default function SettingsPlugins({ t }: { t: (k: string) => string }) {
                       onClick={() => { setAddOpen(false); setView({ kind: 'sync' }); }}
                       className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] text-[var(--text-secondary)] hover:bg-[var(--bg-3)] transition-colors"
                     >
-                      <FiGithub size={14} />{t('pluginAddMarket')}
+                      <FiGithub size={14} />{t('pluginAddGithub')}
                     </button>
                   </div>
                 </>
@@ -256,9 +255,8 @@ function InstalledRow({ plugin: p, t, onOpen }: { plugin: PluginEntry; t: (k: st
 function DetailView({ id, t }: { id: string; t: (k: string) => string }) {
   const custom = usePluginStore((s) => s.custom);
   const disabled = usePluginStore((s) => s.disabled);
-  const origins = useMarketStore((s) => s.origins);
   const installedSkills = useSkillsStore((s) => s.installed);
-  void custom; void disabled; void origins; void installedSkills;
+  void custom; void disabled; void installedSkills;
 
   const plugins = selectPlugins();
   const p = plugins.find((x) => x.id === id);
