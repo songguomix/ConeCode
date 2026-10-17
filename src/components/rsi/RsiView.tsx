@@ -139,6 +139,8 @@ export default function RsiView() {
   const stopGeneration = useChatStore((s) => s.stopGeneration);
   const continuableConvId = useChatStore((s) => s.continuableConvId);
   const continueGeneration = useChatStore((s) => s.continueGeneration);
+  const chatError = useChatStore((s) => s.error);
+  const clearChatError = useChatStore((s) => s.clearError);
   const activeConversationId = useChatStore((s) => s.activeConversationId);  const streamingRuns = useChatStore((s) => s.streamingRuns);
   const rawMessages = useChatStore((s) => s.messages);
 
@@ -313,6 +315,14 @@ export default function RsiView() {
         return;
       await st.setEnabled(true);
       useSettingsStore.setState({ approvalOverride: 'fullAuto' });
+      // A previous run may have died after persisting the kickoff (stream
+      // failure, turn cap, app restart — all surfaced as continuable). Pressing
+      // start again must CONTINUE that run, not stack a second kickoff onto
+      // the transcript.
+      if (continuableConvId && continuableConvId === activeConversationId) {
+        await continueGeneration(continuableConvId);
+        return;
+      }
       // Program-side search state on real disk (STRATEGY.md default + resume
       // LOOP_STATE.json when a frozen goal exists). Best-effort: a bridge
       // failure must never block the agent run below.
@@ -644,6 +654,14 @@ export default function RsiView() {
             />
           )}
           {/* One-click resume for an interrupted turn. */}
+          {chatError && !running && (
+            <div className="p-3 rounded-xl bg-[var(--error)]/10 border border-[var(--error)]/20 text-[var(--error)] text-sm flex items-center justify-between gap-3">
+              <span className="min-w-0 break-words">{chatError}</span>
+              <button onClick={clearChatError} className="text-xs underline opacity-70 hover:opacity-100 shrink-0">
+                {t('dismiss')}
+              </button>
+            </div>
+          )}
           {continuableConvId === activeConversationId && !running && (
             <button
               onClick={() => void continueGeneration()}

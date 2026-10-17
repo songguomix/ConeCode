@@ -1848,9 +1848,12 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
   let stitch = freshStitch();
   /** Extra segments allowed after the first before a turn must finalize. */
   const MAX_CONTINUATIONS = 3;
+  /** True only when the loop exits on MAX_ITERATIONS while the model kept asking for tools. */
+  let capCandidate = false;
   try {
     for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
       if (abortController.signal.aborted || !ownsRun()) break;
+      capCandidate = false;
 
       const selectedModel = resolveModel();
       const modelName = selectedModel?.name || modelId;
@@ -2821,6 +2824,26 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
       }
 
       if (askedUser || !shouldContinue) break;
+      // Reaching this line on the FINAL iteration means the loop exits on the
+      // iteration cap with the model still asking for tools — historically the
+      // run then just disappeared ("无征兆中断"). capCandidate survives the loop
+      // only when that exact case happened (reset each iteration above).
+      capCandidate = true;
+    }
+    // Exit after the cap: leave a persistable trace on the transcript, not just
+    // isStreaming=false. The notice is local-only (never sent to the model).
+    if (capCandidate && ownsRun()) {
+      const capNotice: Message = {
+        id: uuidv4(),
+        conversationId: convId,
+        role: 'assistant',
+        content: `⚙️ ${useLanguageStore.getState().t('turnLimitNotice')}`,
+        createdAt: Date.now(),
+        isLocalNotice: true,
+      };
+      await window.electronAPI.message.create(capNotice);
+      set((s) => s.activeConversationId === convId ? { messages: [...s.messages, capNotice] } : {});
+      set({ continuableConvId: convId });
     }
   } catch (e: any) {
     // The stream was interrupted before completing — a network error/server
@@ -2868,7 +2891,32 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
       set((s) => s.activeConversationId === convId ? { messages: [...s.messages, msg] } : {});
       if (!userStopped && ownsRun()) set({ continuableConvId: convId });
     } else if (!userStopped && e?.name !== 'AbortError') {
-      if (ownsRun()) set({ error: e?.message || String(e), continuableConvId: convId });
+      if (ownsRun()) {
+        // Nothing streamed to salvage — previously this only set an in-memory
+        // error, so the turn left ZERO trace: on reload the conversation looked
+        // untouched with a dangling user request (the "无征兆中断" report).
+        // Persist a local notice so the failure survives reloads and the
+        // program-visible transcript always matches what actually happened.
+        const cause = e?.message || String(e);
+        const diedNotice: Message = {
+          id: uuidv4(),
+          conversationId: convId,
+          role: 'assistant',
+          content: `⚠️ ${useLanguageStore.getState().t('runDiedNotice')} ${cause}`,
+          createdAt: Date.now(),
+          isLocalNotice: true,
+        };
+        try {
+          await window.electronAPI.message.create(diedNotice);
+        } catch {
+          // Notification persistence is best-effort; keep the error state either way.
+        }
+        set((s) => ({
+          error: cause,
+          continuableConvId: convId,
+          ...(s.activeConversationId === convId ? { messages: [...s.messages, diedNotice] } : {}),
+        }));
+      }
     }
   } finally {
     if (runControllers.get(convId) === abortController) {
