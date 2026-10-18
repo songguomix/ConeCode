@@ -37,10 +37,10 @@ export default function ProjectBriefComposer() {
   };
 
   return (
-    <section className="mb-5 rounded-2xl border border-[var(--border)] bg-[var(--bg-2)] p-5 min-w-0" aria-label={t('briefTitle')}>
+    <section className="mb-5 rounded-2xl border border-[var(--glass-border)] bg-[var(--glass-card)]/80 backdrop-blur-xl p-5 min-w-0 shadow-2xs" aria-label={t('briefTitle')}>
       <div className="flex items-center gap-2 mb-3 min-w-0">
         <FiMessageSquare size={15} className="text-[var(--accent)] shrink-0" />
-        <h2 className="text-sm font-semibold text-[var(--text-primary)] truncate">{t('briefTitle')}</h2>
+        <h2 className="text-[16px] font-bold text-[var(--text-primary)] font-serif tracking-tight truncate">{t('briefTitle')}</h2>
         <div className="ml-auto flex items-center gap-1.5 text-[10px] font-medium shrink-0" aria-hidden={!brief}>
           <Step label={t('briefStep1')} active={!brief} done={!!brief} />
           <span className="text-[var(--text-muted)]">→</span>
@@ -49,7 +49,7 @@ export default function ProjectBriefComposer() {
           <Step label={t('briefStep3')} active={starting} done={false} />
         </div>
       </div>
-      <div className="rounded-xl bg-[var(--bg-3)] p-3 focus-within:ring-1 focus-within:ring-[var(--accent)]/50">
+      <div className="rounded-xl bg-[var(--glass-surface)]/80 border border-[var(--glass-border)] p-3 focus-within:ring-2 focus-within:ring-[var(--accent)]/30 focus-within:border-[var(--accent)]/60 transition-all">
         <textarea
           id="conecode-project-idea"
           aria-label={t('briefIdeaLabel')}
@@ -60,7 +60,7 @@ export default function ProjectBriefComposer() {
           disabled={busy}
           rows={2}
           placeholder={t('briefPlaceholder')}
-          className="block w-full resize-y min-h-[56px] max-h-64 bg-transparent text-sm leading-relaxed text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)] disabled:opacity-60"
+          className="block w-full resize-y min-h-[56px] max-h-64 bg-transparent text-[15px] font-[450] leading-relaxed text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)] disabled:opacity-60"
         />
         <div className="mt-2 flex items-center gap-2 flex-wrap">
           <span className="flex-1 min-w-[140px] text-[11px] text-[var(--text-muted)]">{model ? t('briefInputHint') : t('selectModelHint')}</span>
@@ -68,7 +68,7 @@ export default function ProjectBriefComposer() {
             <button onClick={cancel} className="px-3 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--bg-2)] text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]">{t('cancel')}</button>
           ) : (
             <button onClick={generateBrief} disabled={!idea.trim() || !model || busy}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[var(--accent)] text-white text-xs font-medium hover:bg-[var(--accent-hover)] disabled:opacity-40">
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-[var(--accent)] text-white text-xs font-medium hover:bg-[var(--accent-hover)] shadow-xs disabled:opacity-40 transition-all">
               <FiArrowUp size={12} /> {t(brief ? 'briefRegenerate' : 'briefGenerate')}
             </button>
           )}
@@ -95,7 +95,7 @@ export default function ProjectBriefComposer() {
             {...compositionProps}
             disabled={starting}
             rows={11}
-            className="block w-full resize-y min-h-[180px] max-h-[480px] rounded-xl border border-[var(--border)] bg-[var(--bg-0)] p-3 text-sm leading-relaxed text-[var(--text-primary)] outline-none focus:border-[var(--accent)] disabled:opacity-60"
+            className="block w-full resize-y min-h-[180px] max-h-[480px] rounded-xl border border-[var(--glass-border)] bg-[var(--glass-surface)]/70 backdrop-blur-md p-3 text-sm leading-relaxed text-[var(--text-primary)] outline-none focus:border-[var(--accent)] disabled:opacity-60"
           />
           <div className="mt-2 flex items-center gap-1.5 text-[11px] text-[var(--text-muted)] min-w-0">
             <FiFolder size={12} className="shrink-0" />

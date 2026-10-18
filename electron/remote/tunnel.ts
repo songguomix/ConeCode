@@ -28,6 +28,7 @@ function bundledCloudflared(): string | null {
   const name =
     process.platform === 'darwin' && process.arch === 'arm64' ? 'cloudflared-darwin-arm64'
     : process.platform === 'win32' ? 'cloudflared-win-x64.exe'
+    : process.platform === 'linux' && process.arch === 'x64' ? 'cloudflared-linux-x64'
     : null;
   if (!name) return null;
   const base = app.isPackaged

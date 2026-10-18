@@ -1,3 +1,4 @@
+import { useGithubPushStore } from './githubPush.store';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useChatStore } from './chat.store';
 import { useModelStore } from './model.store';
@@ -76,8 +77,8 @@ function installStubs() {
         exists: async (p: string) => files.has(p),
         createDir: async () => true,
         stat: async () => ({ size: 1, isDirectory: false, isFile: true, createdAt: '', modifiedAt: '' }),
-        search: async () => [],
-        glob: async () => [],
+        search: async () => ({ matches: [], capped: false }),
+        glob: async () => ({ files: [], capped: false }),
       },
       git: { status: async () => '', diff: async () => '' },
       net: { fetch: async () => '', search: async () => '', download: async () => '' },
@@ -579,7 +580,11 @@ describe('runAgentLoop with native tool calling', () => {
     try {
       queued = [toolCallResponse('github_push', { message: 'Ship it' }), textResponse('done')];
 
-      await useChatStore.getState().sendMessage('push my changes', 'p1', 'gpt-test');
+      const sending = useChatStore.getState().sendMessage('push my changes', 'p1', 'gpt-test');
+      await vi.waitFor(() => expect(useGithubPushStore.getState().pending).not.toBeNull());
+      expect(pushProject).not.toHaveBeenCalled();
+      useGithubPushStore.getState().confirm('o/r');
+      await sending;
 
       expect(pushProject).toHaveBeenCalledWith({ cwd: '/proj', message: 'Ship it', repo: 'o/r', token: 'tok' });
       expect(streamCalls).toHaveLength(2);
@@ -616,7 +621,10 @@ describe('runAgentLoop with native tool calling', () => {
     useMarketStore.setState({ repo: '', result: null });
     queued = [toolCallResponse('github_push', {}), textResponse('done')];
 
-    await useChatStore.getState().sendMessage('push my changes', 'p1', 'gpt-test');
+    const sending = useChatStore.getState().sendMessage('push my changes', 'p1', 'gpt-test');
+    await vi.waitFor(() => expect(useGithubPushStore.getState().pending).not.toBeNull());
+    useGithubPushStore.getState().confirm('o/r');
+    await sending;
 
     expect(streamCalls).toHaveLength(2);
     expect(JSON.stringify(streamCalls[1].messages)).toContain('Error: The project has no origin remote.');
@@ -796,6 +804,28 @@ describe('runAgentLoop with native tool calling', () => {
     const continued = useChatStore.getState().messages.filter((m) => m.role === 'user').pop();
     expect(continued!.content).toBe(useLanguageStore.getState().t('continuePrompt'));
     expect(useChatStore.getState().continuableConvId).toBeNull();
+  });
+
+  it('leaves a persisted trace when a stream dies with nothing to salvage', async () => {
+    // No partial content is placed in the run buffer, so the catch path hits
+    // the empty-salvage branch — previously it set only an in-memory error,
+    // leaving the dangling request as the last message after a reload.
+    window.electronAPI.chat.stream = vi.fn(async (params: any) => {
+      streamCalls.push(params);
+      throw new Error('API error 401: bad key');
+    });
+
+    await useChatStore.getState().sendMessage('go', 'p1', 'gpt-test');
+
+    const notice = created.find((m) => (m as any).isLocalNotice);
+    expect(notice).toBeDefined();
+    expect(notice!.role).toBe('assistant');
+    expect(notice!.content).toContain(useLanguageStore.getState().t('runDiedNotice'));
+    expect(notice!.content).toContain('bad key');
+    expect(useChatStore.getState().error).toContain('bad key');
+    expect(useChatStore.getState().continuableConvId).toBe('conv1');
+    // The notice is visible in the transcript, never sent to the model.
+    expect(useChatStore.getState().messages.some((m) => (m as any).isLocalNotice)).toBe(true);
   });
 
   it('auto-runs commands under an approval override without touching settings', async () => {

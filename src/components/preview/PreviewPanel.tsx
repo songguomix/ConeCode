@@ -10,6 +10,7 @@ import { pickerScript, pickerStopScript, parsePick, pickToPrompt } from '../../c
 import { formatPinPrompt, nextPinLabel, pinFromPointer, type AnnotatePin } from '../../core/preview/annotate';
 import { setAgentWebview } from '../../core/preview/agentpage';
 import WorkbenchTabs from '../layout/WorkbenchTabs';
+import { outputErrors, errorPrompt } from '../../core/preview/output';
 
 // The built-in browser. Tabs, an address bar and history like any browser, but
 // its new-tab page lists the project's own dev server so previewing what the
@@ -785,11 +786,14 @@ function LogDrawer({ onClose }: { onClose: () => void }) {
   const clearLogs = usePreviewStore((s) => s.clearLogs);
   const { t } = useLanguageStore();
   const bottomRef = useRef<HTMLDivElement>(null);
+  const errors = useMemo(() => outputErrors(logs), [logs]);
+  const setInputContent = useUIStore((s) => s.setInputContent);
+  const askAI = () => setInputContent(errorPrompt(t('previewErrorPrompt'), errors, logs));
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ block: 'end' }); }, [logs.length]);
 
   return (
-    <div className="h-[180px] shrink-0 flex flex-col border-t border-[var(--border)] bg-[var(--bg-0)]">
+    <div className="h-[260px] max-h-[50vh] shrink-0 flex flex-col border-t border-[var(--border)] bg-[var(--bg-0)]">
       <div className="flex items-center gap-2 px-3 py-1.5 shrink-0">
         <span className="text-[12px] font-medium text-[var(--text-secondary)]">{t('previewLogs')}</span>
         <span className="text-[11px] text-[var(--text-muted)]">{logs.length}</span>
@@ -803,6 +807,20 @@ function LogDrawer({ onClose }: { onClose: () => void }) {
           <FiX size={14} />
         </button>
       </div>
+      {errors.length > 0 && (
+        <div role="status" className="mx-3 mb-2 rounded-lg border border-[var(--error-border)] bg-[var(--error-bg)] px-3 py-2 shrink-0">
+          <div className="flex items-center gap-2">
+            <FiAlertCircle size={14} className="text-[var(--error)] shrink-0" />
+            <span className="flex-1 text-xs font-medium text-[var(--text-primary)]">{t('previewErrors')} · {errors.length}</span>
+            <button onClick={askAI} className="rounded-md px-2 py-1 text-xs font-medium text-[var(--text-primary)] border border-[var(--error-border)] hover:bg-[var(--bg-2)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">
+              {t('previewAskAI')}
+            </button>
+          </div>
+          <div className="mt-1 max-h-20 overflow-y-auto whitespace-pre-wrap break-words ff-mono text-xs text-[var(--text-secondary)]">
+            {errors.slice(-3).join('\n\n')}
+          </div>
+        </div>
+      )}
       <div className="flex-1 min-h-0 overflow-y-auto px-3 pb-2 ff-mono text-[11.5px] leading-[17px]">
         {logs.length === 0 ? (
           <div className="text-[var(--text-muted)]">{t('previewNoOutput')}</div>

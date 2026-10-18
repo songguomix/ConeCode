@@ -105,6 +105,17 @@ export interface SearchMatch {
   text: string;
 }
 
+/** Search/glob result plus whether the list stopped at the cap (more may exist). */
+export interface SearchScanResult {
+  matches: SearchMatch[];
+  capped: boolean;
+}
+
+export interface GlobScanResult {
+  files: string[];
+  capped: boolean;
+}
+
 export interface McpToolSummary {
   server: string;
   name: string;
@@ -225,8 +236,8 @@ export interface ElectronAPI {
     move: (srcPath: string, destPath: string) => Promise<boolean>;
     copy: (srcPath: string, destPath: string) => Promise<boolean>;
     stat: (filePath: string) => Promise<FileStat | null>;
-    search: (opts: { query: string; dir?: string; isRegex?: boolean; maxResults?: number }) => Promise<SearchMatch[]>;
-    glob: (opts: { pattern: string; dir?: string; maxResults?: number }) => Promise<string[]>;
+    search: (opts: { query: string; dir?: string; isRegex?: boolean; maxResults?: number }) => Promise<SearchScanResult>;
+    glob: (opts: { pattern: string; dir?: string; maxResults?: number }) => Promise<GlobScanResult>;
   };
   exec: {
     run: (command: string, cwd?: string, sandbox?: SandboxRequest) => Promise<ExecResult>;

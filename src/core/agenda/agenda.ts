@@ -80,6 +80,18 @@ Rules:
 - Do not propose the same thing twice in different words.
 - If the scan is nearly empty, propose orientation work instead (read the entry points and write AGENTS.md, add the first test).`;
 
+export function buildSuggestSystemPrompt(locale: string = 'en'): string {
+  const langRule =
+    locale === 'zh'
+      ? '\n- IMPORTANT: Output the title, rationale, and prompt in Simplified Chinese (简体中文).'
+      : locale === 'zhHant'
+      ? '\n- IMPORTANT: Output the title, rationale, and prompt in Traditional Chinese (繁體中文).'
+      : locale === 'ja'
+      ? '\n- IMPORTANT: Output the title, rationale, and prompt in Japanese (日本語).'
+      : '\n- IMPORTANT: Output the title, rationale, and prompt in English.';
+  return SUGGEST_SYSTEM_PROMPT + langRule;
+}
+
 /** Render the scan as the compact factual briefing the model reasons over. */
 export function buildScanBriefing(scan: WorkspaceScan): string {
   const lines: string[] = [];

@@ -53,7 +53,18 @@ function loadFileTreeOpen(): boolean {
 /** The left column shows one of these at a time; both stay mounted. */
 export type WorkbenchTab = 'code' | 'preview';
 
+export type ViewMode = 'chat' | 'work';
+const VIEW_MODE_KEY = 'conecode.viewMode';
+function loadViewMode(): ViewMode {
+  try {
+    const raw = localStorage.getItem(VIEW_MODE_KEY);
+    if (raw === 'work' || raw === 'chat') return raw;
+  } catch {}
+  return 'chat';
+}
+
 interface UIStore {
+  viewMode: ViewMode;
   sidebarOpen: boolean;
   settingsOpen: boolean;
   modelSelectorOpen: boolean;
@@ -104,9 +115,11 @@ interface UIStore {
   setSidebarWidthPx: (px: number) => void;
   setPreviewWidthPx: (px: number) => void;
   setTerminalHeightPx: (px: number) => void;
+  setViewMode: (mode: ViewMode) => void;
 }
 
 export const useUIStore = create<UIStore>((set) => ({
+  viewMode: loadViewMode(),
   sidebarOpen: false,
   settingsOpen: false,
   modelSelectorOpen: false,
@@ -177,5 +190,9 @@ export const useUIStore = create<UIStore>((set) => ({
     const clamped = clampTerminalHeight(px);
     try { localStorage.setItem(TERMINAL_HEIGHT_KEY, String(clamped)); } catch {}
     set({ terminalHeightPx: clamped });
+  },
+  setViewMode: (mode) => {
+    try { localStorage.setItem(VIEW_MODE_KEY, mode); } catch {}
+    set({ viewMode: mode });
   },
 }));

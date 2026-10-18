@@ -41,7 +41,7 @@ interface MarketStore {
    * branch to the configured repo. Runs through the main process; the token, if
    * any, authenticates the push without being stored in the git config.
    */
-  pushRepo: (message?: string) => Promise<RepoPushResult>;
+  pushRepo: (message?: string, target?: { root: string; repo: string }) => Promise<RepoPushResult>;
 }
 
 function loadRepo(): string {
@@ -111,14 +111,26 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
     }
   },
 
-  pushRepo: async (message) => {
-    const root = await openRoot();
+  pushRepo: async (message, target) => {
+    const root = target?.root ?? await openRoot();
     if (!root) {
       const res = { ok: false, message: 'Error: no project folder is open — open a folder first.' };
       set({ result: res });
       return res;
     }
-    const repo = normalizeRepo(get().repo);
+    // A typed-but-invalid id must fail LOUDLY, not silently degrade: normalize
+    // rejects e.g. "songguomix/" after which `repo || undefined` would push to
+    // whatever "origin" happens to be (token unused) with no word of warning.
+    const raw = (target?.repo ?? get().repo).trim();
+    if (raw && !normalizeRepo(raw)) {
+      const res = {
+        ok: false,
+        message: `Error: "${raw}" is not a valid owner/repo — use owner/repo or a github.com URL.`,
+      };
+      set({ result: res });
+      return res;
+    }
+    const repo = normalizeRepo(raw);
     const token = loadToken();
     set({ pushing: true, result: null });
     let res: RepoPushResult;

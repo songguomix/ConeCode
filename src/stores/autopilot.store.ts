@@ -2,7 +2,9 @@ import { create } from 'zustand';
 import { v4 as uuidv4 } from 'uuid';
 import {
   FALLBACK_IDEAS,
+  getFallbackIdeas,
   IDEAS_SYSTEM_PROMPT,
+  buildIdeasSystemPrompt,
   buildAutopilotPrompt,
   buildRepairPrompt,
   extractVerifyCommand,
@@ -39,6 +41,7 @@ interface AutopilotStore {
    * replaced once the user's model actually arrived.
    */
   ideasModelKey: string | null;
+  ideasLocale: string | null;
 
   phase: AutopilotPhase;
   running: ProjectIdea | null;
@@ -48,7 +51,7 @@ interface AutopilotStore {
   lastOutput: string;
   error: string | null;
 
-  loadIdeas: (providerId?: string, modelId?: string, force?: boolean) => Promise<void>;
+  loadIdeas: (providerId?: string, modelId?: string, force?: boolean, locale?: string) => Promise<void>;
   run: (idea: ProjectIdea, providerId: string, modelId: string) => Promise<void>;
   reset: () => void;
 }
@@ -58,6 +61,7 @@ export const useAutopilotStore = create<AutopilotStore>((set, get) => ({
   loadingIdeas: false,
   usingFallback: false,
   ideasModelKey: null,
+  ideasLocale: null,
   phase: 'idle',
   running: null,
   projectDir: null,
@@ -74,21 +78,23 @@ export const useAutopilotStore = create<AutopilotStore>((set, get) => ({
    * list on any failure so the screen is never empty and never blocks on a
    * provider being configured.
    */
-  loadIdeas: async (providerId, modelId, force = false) => {
+  loadIdeas: async (providerId, modelId, force = false, locale) => {
     if (get().loadingIdeas) return;
 
+    const currentLocale = locale || (typeof window !== 'undefined' ? localStorage.getItem('locale') || 'en' : 'en');
     const key = providerId && modelId ? `${providerId}:${modelId}` : null;
     // Ask the user's model whenever we have one and the shown ideas did not come
-    // from it — that covers the startup race and switching models later.
-    const stale = key !== get().ideasModelKey;
+    // from it — that covers the startup race, switching models later, or language change.
+    const stale = key !== get().ideasModelKey || currentLocale !== get().ideasLocale;
     if (!force && get().ideas.length && !stale) return;
 
     const showFallback = () =>
       set({
-        ideas: FALLBACK_IDEAS.map((i) => ({ ...i, id: uuidv4() })),
+        ideas: getFallbackIdeas(currentLocale).map((i) => ({ ...i, id: uuidv4() })),
         usingFallback: true,
         loadingIdeas: false,
         ideasModelKey: null,
+        ideasLocale: currentLocale,
       });
 
     if (!key) return showFallback();
@@ -104,19 +110,27 @@ export const useAutopilotStore = create<AutopilotStore>((set, get) => ({
         const m = useModelStore.getState().models.get(providerId!)?.find((x) => x.id === modelId);
         if (m && (m.supportsReasoning || (m as any).userEnabledReasoning)) maxTokens = 16000;
       } catch {}
+      const prompt = buildIdeasSystemPrompt(currentLocale);
+      const userMessage = currentLocale === 'zh'
+        ? '请推荐 6 个适合自主构建的项目。'
+        : currentLocale === 'zhHant'
+        ? '請推薦 6 個適合自主構建的項目。'
+        : currentLocale === 'ja'
+        ? '今すぐ構築できるプロジェクトを6つ提案してください。'
+        : 'Suggest 6 projects to build right now.';
       const result = await window.electronAPI.chat.stream({
         providerId: providerId!,
         modelId: modelId!,
         silent: true,
         maxTokens,
         messages: [
-          { role: 'system', content: IDEAS_SYSTEM_PROMPT },
-          { role: 'user', content: 'Suggest 6 projects to build right now.' },
+          { role: 'system', content: prompt },
+          { role: 'user', content: userMessage },
         ],
       });
       const ideas = parseIdeas(extractText(result), uuidv4);
       if (!ideas.length) return showFallback();
-      set({ ideas, usingFallback: false, loadingIdeas: false, ideasModelKey: key });
+      set({ ideas, usingFallback: false, loadingIdeas: false, ideasModelKey: key, ideasLocale: currentLocale });
     } catch (e: any) {
       console.warn('[autopilot] loadIdeas failed:', e?.message || String(e));
       showFallback();
@@ -242,8 +256,9 @@ async function resolveVerifyCommand(dir: string): Promise<string | null> {
     const declared = extractVerifyCommand(m.content);
     if (declared) return declared;
   }
-  const files = await window.electronAPI.fs.glob({ pattern: '*', dir, maxResults: 200 }).catch(() => []);
-  return guessVerifyCommand(files.map((f) => f.split('/').pop() || f));
+  const fileScan = await window.electronAPI.fs.glob({ pattern: '*', dir, maxResults: 200 })
+    .catch(() => ({ files: [], capped: false }));
+  return guessVerifyCommand(fileScan.files.map((f) => f.split('/').pop() || f));
 }
 
 function extractText(result: any): string {

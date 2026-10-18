@@ -14,6 +14,19 @@ export default {
           0: '#1A1915', 1: '#14130F', 2: '#242320', 3: '#2E2D28', 4: '#3A3833',
         },
       },
+      fontFamily: {
+        serif: [
+          'Newsreader',
+          'Charter',
+          'Georgia',
+          '"Songti SC"',
+          'STSong',
+          '"Source Han Serif SC"',
+          '"Noto Serif SC"',
+          'SimSun',
+          'serif',
+        ],
+      },
       // Softer, rounder silhouette across the app — same class names, friendlier shape.
       borderRadius: {
         sm: '0.3rem',

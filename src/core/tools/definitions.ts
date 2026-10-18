@@ -602,9 +602,30 @@ function mcpToolDefinition(tl: McpToolInfo): ToolDefinition {
 /** The built-in browser's tools, only useful once there's a project to preview. */
 const PAGE_TOOLS = new Set(['page_navigate', 'page_snapshot', 'page_click', 'page_fill', 'page_eval', 'page_console']);
 
+/** Tools allowed in Chat mode (strictly conversation, web Q&A, and system diagnostics). */
+export const CHAT_MODE_TOOLS = new Set([
+  'ask_user',
+  'web_search',
+  'web_fetch',
+  'perf_snapshot',
+  'system_info',
+]);
+
 export function buildToolset(
-  opts: { planMode?: boolean; mcpTools?: McpToolInfo[]; computerControl?: boolean; projectOpen?: boolean } = {},
+  opts: {
+    planMode?: boolean;
+    mcpTools?: McpToolInfo[];
+    computerControl?: boolean;
+    projectOpen?: boolean;
+    isChatMode?: boolean;
+  } = {},
 ): ToolDefinition[] {
+  if (opts.isChatMode) {
+    // In Chat Mode, chat is strictly for conversation and technical Q&A.
+    // Workspace read/write/exec tools are excluded.
+    return BUILTIN_TOOLS.filter((tl) => CHAT_MODE_TOOLS.has(tl.name));
+  }
+
   const builtins = (opts.planMode ? BUILTIN_TOOLS.filter((tl) => PLAN_MODE_TOOLS.has(tl.name)) : BUILTIN_TOOLS)
     // Driving the screen is opt-in. While it's off the tool isn't advertised at
     // all — offering it would spend tokens on every turn and invite the model to

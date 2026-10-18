@@ -14,8 +14,9 @@ import {
   type SandboxMode,
 } from '../src/core/exec/sandbox';
 import { parseSkill, isSafeSkillId, SKILL_FILE } from '../src/core/skills/skills';
+import { searchFiles, findFiles } from './fssearch';
 import {
-  normalizeWebUrl, htmlToText, parseDuckResults, formatCompactResults,
+  normalizeWebUrl, htmlToText, formatCompactResults,
   looksLikeJsShell, createTtlCache, parseResultRef, resolveSearchRef,
   saveSearchRefs, MAX_SEARCH_RESULTS,
 } from '../src/core/browser/policy';
@@ -34,33 +35,40 @@ let mainWindow: BrowserWindow | null = null;
 /** Currently registered global screenshot hotkey (main-side, so it outlives renderer reloads). */
 let screenshotAccelerator: string | null = null;
 
+function getScreenshotDisplay(): Electron.Display {
+  try {
+    const point = screen.getCursorScreenPoint();
+    return screen.getDisplayNearestPoint(point) || screen.getPrimaryDisplay();
+  } catch {
+    return screen.getPrimaryDisplay();
+  }
+}
+
 /**
- * Grab the primary display at native resolution (region crops stay sharp).
+ * Capture pixels from the active display.
  * Returns pixels, or { error } — pixels (not the media-status string) are
  * the ground truth, because the status API can stay stale after a grant.
  */
-async function captureScreenOnce(): Promise<
+async function captureScreenOnce(targetDisplay?: Electron.Display): Promise<
   | { dataUrl: string; width: number; height: number }
   | { error: string; needsPermission?: string }
 > {
-  const display = screen.getPrimaryDisplay();
+  const display = targetDisplay || getScreenshotDisplay();
   const scale = display.scaleFactor || 1;
-  const fullW = Math.round(display.size.width * scale);
-  const fullH = Math.round(display.size.height * scale);
+  const fullW = Math.round(display.bounds.width * scale);
+  const fullH = Math.round(display.bounds.height * scale);
   // Try full-res first, then progressively smaller: oversized thumbnails are
   // a known cause of empty captures on some GPUs.
   const attempts = [
     { width: fullW, height: fullH },
     { width: 1920, height: Math.max(1, Math.round((1920 * fullH) / Math.max(1, fullW))) },
-    { width: display.size.width, height: display.size.height },
+    { width: display.bounds.width, height: display.bounds.height },
   ];
   for (const thumbnailSize of attempts) {
     try {
       const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize });
-      const ordered = [
-        sources.find((s) => s.display_id === String(display.id)),
-        ...sources,
-      ].filter((s): s is (typeof sources)[number] => !!s);
+      const matched = sources.find((s) => s.display_id === String(display.id));
+      const ordered = matched ? [matched, ...sources.filter((s) => s !== matched)] : sources;
       for (const source of ordered) {
         if (source.thumbnail.isEmpty()) continue;
         const size = source.thumbnail.getSize();
@@ -74,7 +82,7 @@ async function captureScreenOnce(): Promise<
   // A granted macOS TCC permission is not always reflected immediately in
   // desktopCapturer. The native tool uses the same system permission and
   // gives us a reliable second capture path before we show a permission UI.
-  const fallback = await captureMacScreenFallback();
+  const fallback = await captureMacScreenFallback(display);
   if (fallback) return fallback;
 
   let granted = true;
@@ -103,12 +111,13 @@ function reshowMainAfterShot(): void {
   }
 }
 
-function createShotOverlay(): void {
+function createShotOverlay(targetDisplay?: Electron.Display): void {
   if (shotOverlay && !shotOverlay.isDestroyed()) {
     shotOverlay.focus();
     return;
   }
-  const b = screen.getPrimaryDisplay().bounds;
+  const display = targetDisplay || getScreenshotDisplay();
+  const b = display.bounds;
   shotOverlay = new BrowserWindow({
     x: b.x,
     y: b.y,
@@ -126,6 +135,8 @@ function createShotOverlay(): void {
     skipTaskbar: true,
     hasShadow: false,
     show: false,
+    enableLargerThanScreen: true,
+    roundedCorners: false,
     title: 'ConeCode Screenshot',
     webPreferences: {
       nodeIntegration: false,
@@ -133,6 +144,7 @@ function createShotOverlay(): void {
       preload: path.join(__dirname, 'preload.js'),
     },
   });
+  shotOverlay.setBounds(b);
   shotOverlay.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   shotOverlay.setAlwaysOnTop(true, 'screen-saver');
   const distPath = path.join(__dirname, '../dist/index.html');
@@ -157,14 +169,20 @@ function createShotOverlay(): void {
  * permission change). Use the OS capture path as a fallback so an empty
  * Electron thumbnail is not misreported as a missing permission.
  */
-async function captureMacScreenFallback(): Promise<{ dataUrl: string; width: number; height: number } | null> {
+async function captureMacScreenFallback(targetDisplay?: Electron.Display): Promise<{ dataUrl: string; width: number; height: number } | null> {
   if (process.platform !== 'darwin') return null;
 
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'conecode-screenshot-'));
   const output = path.join(directory, 'capture.png');
   try {
     await new Promise<void>((resolve, reject) => {
-      const child = spawn('/usr/sbin/screencapture', ['-x', '-t', 'png', output], { stdio: 'ignore' });
+      const args = ['-x', '-t', 'png'];
+      if (targetDisplay?.bounds) {
+        const { x, y, width, height } = targetDisplay.bounds;
+        args.push(`-R${x},${y},${width},${height}`);
+      }
+      args.push(output);
+      const child = spawn('/usr/sbin/screencapture', args, { stdio: 'ignore' });
       child.once('error', reject);
       child.once('exit', (code) => code === 0 ? resolve() : reject(new Error(`screencapture exited with code ${code}`)));
     });
@@ -399,42 +417,25 @@ async function netFetch(url: string, scope?: string): Promise<string> {
 
 async function netSearch(query: string, scope?: string): Promise<string> {
   const q = (query || '').trim();
+  // A failed/empty search must not leave #N pointing at an older query.
+  saveSearchRefs(scope, []);
   if (!q) return 'No web results for "".';
   const cacheKey = q.toLowerCase();
   const cached = searchCache.get(cacheKey);
   // A cached hit still belongs to this conversation's ref table — the numbers
   // in it must open the same pages.
   if (cached !== undefined) {
-    if (cached.refs.length) saveSearchRefs(scope, cached.refs);
+    saveSearchRefs(scope, cached.refs);
     return cached.text;
   }
   const done = (text: string, refs: { title: string; link: string }[]): string => {
     saveSearchRefs(scope, refs);
-    searchCache.set(cacheKey, { text, refs });
+    // Do not cache empty/blocked results for five minutes.
+    if (refs.length) searchCache.set(cacheKey, { text, refs });
     return text;
   };
-  // L1: cheap fetch of the html endpoint (~1s when it works). Now with
-  // snippets, so most asks are answered without ever opening the browser.
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 8000);
-    let html = '';
-    try {
-      const res = await fetch('https://html.duckduckgo.com/html/?q=' + encodeURIComponent(q), {
-        signal: controller.signal,
-        headers: { 'User-Agent': 'Mozilla/5.0 (ConeCode)' },
-      });
-      html = await res.text();
-    } finally {
-      clearTimeout(timer);
-    }
-    const results = parseDuckResults(html, MAX_SEARCH_RESULTS);
-    if (results.length) return done(formatCompactResults(q, results), results);
-  } catch {
-    // Blocked or timed out — fall through to the browser path.
-  }
-  // L2: render the search page in the built-in Chromium (resists the bot
-  // blocks that stop plain fetches) and parse the anchors.
+  // Bing serves inconsistent results to plain HTTP clients in this environment.
+  // Use the normal Chromium session for both Chinese and English searches.
   try {
     const results = await browserSearch(q, MAX_SEARCH_RESULTS);
     return done(formatCompactResults(q, results), results);
@@ -610,6 +611,9 @@ function createWindow() {
       { label: 'Paste', role: 'paste', enabled: params.isEditable },
       { type: 'separator' },
       { label: 'Select All', role: 'selectAll' },
+      { type: 'separator' },
+      { label: 'Reload', role: 'reload' },
+      { label: 'Force Reload', role: 'forceReload' },
     ]);
     menu.popup();
   });
@@ -1050,82 +1054,16 @@ function registerIPC() {
     }
   });
 
-  // Code search (grep-like): recursively scan text files for a query.
-  ipcMain.handle('fs:search', async (_, opts: { query: string; dir?: string; isRegex?: boolean; maxResults?: number }) => {
-    const root = opts.dir || process.cwd();
-    const max = opts.maxResults || 200;
-    const ignore = new Set(['node_modules', '.git', 'dist', 'dist-electron', 'release', 'build', 'out', '.next', '.cache', 'coverage']);
-    const results: { file: string; line: number; text: string }[] = [];
-    let re: RegExp | null = null;
-    if (opts.isRegex) { try { re = new RegExp(opts.query, 'i'); } catch { re = null; } }
-    const needle = opts.query.toLowerCase();
+  // Code search (grep-like) and the glob finder share electron/fssearch: they
+  // skip dependency/build/cache trees and nested checkouts (git worktrees,
+  // vendored copies) so stale duplicates of the project cannot crowd out real
+  // hits, and they report when a list was capped. Argument problems reject with
+  // a message meant for the model, rather than returning a false "no matches".
+  ipcMain.handle('fs:search', async (_, opts: { query: string; dir?: string; isRegex?: boolean; maxResults?: number }) =>
+    searchFiles({ root: opts?.dir || '', query: opts?.query || '', isRegex: opts?.isRegex, maxResults: opts?.maxResults }));
 
-    const walk = (dir: string) => {
-      if (results.length >= max) return;
-      let entries: fs.Dirent[];
-      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-      for (const e of entries) {
-        if (results.length >= max) break;
-        const full = path.join(dir, e.name);
-        if (e.isDirectory()) {
-          if (ignore.has(e.name)) continue;
-          walk(full);
-        } else if (e.isFile()) {
-          let stat: fs.Stats;
-          try { stat = fs.statSync(full); } catch { continue; }
-          if (stat.size > 2 * 1024 * 1024) continue;
-          let content: string;
-          try { content = fs.readFileSync(full, 'utf-8'); } catch { continue; }
-          if (content.includes('\u0000')) continue; // skip binary
-          const lines = content.split('\n');
-          for (let i = 0; i < lines.length; i++) {
-            const hit = re ? re.test(lines[i]) : lines[i].toLowerCase().includes(needle);
-            if (hit) {
-              results.push({ file: full, line: i + 1, text: lines[i].trim().slice(0, 240) });
-              if (results.length >= max) break;
-            }
-          }
-        }
-      }
-    };
-    walk(root);
-    return results;
-  });
-
-  // Glob-like file finder: match file paths against a simple glob pattern.
-  ipcMain.handle('fs:glob', async (_, opts: { pattern: string; dir?: string; maxResults?: number }) => {
-    const root = opts.dir || process.cwd();
-    const max = opts.maxResults || 300;
-    const ignore = new Set(['node_modules', '.git', 'dist', 'dist-electron', 'release', 'build', 'out', '.next', '.cache', 'coverage']);
-    const results: string[] = [];
-    let re: RegExp | null = null;
-    try {
-      const r = opts.pattern
-        .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-        .replace(/\*\*/g, '\u0000').replace(/\*/g, '[^/]*').replace(/\u0000/g, '.*')
-        .replace(/\?/g, '.');
-      re = new RegExp(`^${r}$`, 'i');
-    } catch { re = null; }
-
-    const walk = (dir: string) => {
-      if (results.length >= max) return;
-      let entries: fs.Dirent[];
-      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-      for (const e of entries) {
-        if (results.length >= max) break;
-        const full = path.join(dir, e.name);
-        if (e.isDirectory()) {
-          if (ignore.has(e.name)) continue;
-          walk(full);
-        } else if (e.isFile()) {
-          const rel = path.relative(root, full);
-          if (!re || re.test(rel) || re.test(e.name)) results.push(full);
-        }
-      }
-    };
-    walk(root);
-    return results;
-  });
+  ipcMain.handle('fs:glob', async (_, opts: { pattern: string; dir?: string; maxResults?: number }) =>
+    findFiles({ root: opts?.dir || '', pattern: opts?.pattern || '', maxResults: opts?.maxResults }));
 
   // Dialog operations
   ipcMain.handle('dialog:openFile', async () => {
@@ -1372,12 +1310,41 @@ function registerIPC() {
       const token = (opts.token || '').trim();
       let args: string[];
       let target = repo || 'origin';
+      let pushResult = { code: 0, stdout: '', stderr: '' };
       if (token && repo) {
         const basic = Buffer.from(`x-access-token:${token}`).toString('base64');
         args = [
           '-c', `http.https://github.com/.extraheader=AUTHORIZATION: basic ${basic}`,
           'push', `https://github.com/${repo}.git`, `HEAD:refs/heads/${branch}`,
         ];
+        pushResult = await runGit(args, cwd);
+        // A fine-grained PAT that passes the repo read API can still be denied
+        // at the git-over-HTTPS endpoint (repository not selected, or missing
+        // "Contents: read and write"). That leaves the repo permanently out of
+        // sync while the UI shows only the raw 403. Fall back to the origin
+        // remote (keychain/gh credentials), and REPORT BOTH outcomes — never
+        // silently swap an auth failure for a success.
+        if (pushResult.code !== 0) {
+          const tokenErr = pushResult.stderr.trim() || pushResult.stdout.trim() || 'git push (token) failed.';
+          const originUrl = (await runGit(['remote', 'get-url', 'origin'], cwd)).stdout.trim();
+          if (!originUrl) {
+            return {
+              ok: false,
+              message: `Token push failed (${tokenErr}) and the project has no "origin" remote to fall back to. Fix the token (GitHub → Fine-grained tokens: select this repo and allow "Contents: Read and write") or add an origin remote.`,
+            };
+          }
+          const fallback = await runGit(['push', '-u', 'origin', branch], cwd);
+          if (fallback.code === 0) {
+            return {
+              ok: true,
+              message: `Pushed branch "${branch}" via the "origin" remote (keychain credentials). NOTE: the stored token was REFUSED: ${tokenErr} — fix it for syncs that don't run from this machine.`,
+            };
+          }
+          return {
+            ok: false,
+            message: `Token push failed: ${tokenErr} — and origin fallback also failed: ${(fallback.stderr.trim() || fallback.stdout.trim() || 'git push failed.')}`,
+          };
+        }
       } else {
         const remote = (await runGit(['remote', 'get-url', 'origin'], cwd)).stdout.trim();
         if (!remote) {
@@ -1388,11 +1355,11 @@ function registerIPC() {
         }
         target = remote;
         args = ['push', '-u', 'origin', branch];
+        pushResult = await runGit(args, cwd);
       }
 
-      const push = await runGit(args, cwd);
-      if (push.code !== 0) {
-        return { ok: false, message: push.stderr.trim() || push.stdout.trim() || 'git push failed.' };
+      if (pushResult.code !== 0) {
+        return { ok: false, message: pushResult.stderr.trim() || pushResult.stdout.trim() || 'git push failed.' };
       }
       return {
         ok: true,
@@ -1768,17 +1735,18 @@ function registerIPC() {
       shotOverlay.focus();
       return { ok: true };
     }
+    const targetDisplay = getScreenshotDisplay();
     shotHidMain = !!mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible();
     if (shotHidMain) mainWindow?.hide();
     // Let the compositor drop our window before grabbing pixels.
     await new Promise((r) => setTimeout(r, 300));
-    const cap = await captureScreenOnce();
+    const cap = await captureScreenOnce(targetDisplay);
     if ('error' in cap) {
       reshowMainAfterShot();
       return { ok: false, error: cap.error, needsPermission: (cap as { needsPermission?: string }).needsPermission };
     }
     shotImage = cap;
-    createShotOverlay();
+    createShotOverlay(targetDisplay);
     return { ok: true };
   });
   // The overlay window pulls the pixels main grabbed for it.

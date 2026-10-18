@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { v4 as uuidv4 } from 'uuid';
 import {
   SUGGEST_SYSTEM_PROMPT,
+  buildSuggestSystemPrompt,
   buildScanBriefing,
   parseSuggestions,
   rankTasks,
@@ -35,12 +36,17 @@ function readCache(): CacheShape {
   }
 }
 
-function writeCache(rootPath: string, tasks: SuggestedTask[], generatedAt: number) {
+function writeCache(key: string, tasks: SuggestedTask[], generatedAt: number) {
   try {
     const cache = readCache();
-    cache[rootPath] = { tasks, generatedAt };
+    cache[key] = { tasks, generatedAt };
     localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
   } catch {}
+}
+
+function getCacheKey(rootPath: string, locale?: string): string {
+  const loc = locale || (typeof window !== 'undefined' ? localStorage.getItem('locale') || 'en' : 'en');
+  return `${rootPath}:${loc}`;
 }
 
 interface AgendaStore {
@@ -54,9 +60,9 @@ interface AgendaStore {
 
   scanWorkspace: () => Promise<WorkspaceScan | null>;
   /** Show a warm cache without contacting the provider. */
-  loadCached: () => void;
+  loadCached: (locale?: string) => void;
   /** Scan (if needed) then ask the model for work. `force` bypasses the cache. */
-  findWork: (providerId: string, modelId: string, force?: boolean) => Promise<void>;
+  findWork: (providerId: string, modelId: string, force?: boolean, locale?: string) => Promise<void>;
   loadResume: () => Promise<void>;
   reset: () => void;
 }
@@ -83,14 +89,15 @@ export const useAgendaStore = create<AgendaStore>((set, get) => ({
     set({ scanning: true, error: null });
     try {
       const api = window.electronAPI;
-      const [git, statusText, diffText, todoMatches, files] = await Promise.all([
+      const [git, statusText, diffText, todoScan, fileScan] = await Promise.all([
         api.git.info(rootPath).catch(() => ({ isRepo: false, branch: null, dirty: 0 })),
         api.git.status(rootPath).catch(() => ''),
         api.git.diff(rootPath).catch(() => ''),
         api.fs
           .search({ query: '(TODO|FIXME|XXX|HACK)[:( ]', dir: rootPath, isRegex: true, maxResults: 40 })
-          .catch(() => []),
-        api.fs.glob({ pattern: '**/*', dir: rootPath, maxResults: FILE_SCAN_CAP }).catch(() => []),
+          .catch(() => ({ matches: [], capped: false })),
+        api.fs.glob({ pattern: '**/*', dir: rootPath, maxResults: FILE_SCAN_CAP })
+          .catch(() => ({ files: [], capped: false })),
       ]);
 
       // package.json gives the project's real name and commands, which makes the
@@ -112,14 +119,14 @@ export const useAgendaStore = create<AgendaStore>((set, get) => ({
         if (text) { readmeHead = text.slice(0, 1200); break; }
       }
 
-      const relative = files.map((f) => f.replace(rootPath.replace(/\/$/, '') + '/', ''));
+      const relative = fileScan.files.map((f) => f.replace(rootPath.replace(/\/$/, '') + '/', ''));
       const scan: WorkspaceScan = {
         rootPath,
         scannedAt: Date.now(),
         git,
         statusText: statusText.slice(0, 2500),
         diffText: diffText.slice(0, 6000),
-        todoComments: todoMatches.slice(0, 25).map((m) => ({
+        todoComments: todoScan.matches.slice(0, 25).map((m) => ({
           file: m.file.replace(rootPath.replace(/\/$/, '') + '/', ''),
           line: m.line,
           text: m.text.slice(0, 160),
@@ -129,7 +136,7 @@ export const useAgendaStore = create<AgendaStore>((set, get) => ({
         readmeHead,
         hasTests: relative.some((f) => /(\.|_)(test|spec)\.[cm]?[jt]sx?$/.test(f) || /(^|\/)(tests?|__tests__)\//.test(f)),
         fileCount: relative.length,
-        fileCountCapped: relative.length >= FILE_SCAN_CAP,
+        fileCountCapped: fileScan.capped || relative.length >= FILE_SCAN_CAP,
         languages: detectLanguages(relative),
       };
       set({ scan, scanning: false });
@@ -143,21 +150,25 @@ export const useAgendaStore = create<AgendaStore>((set, get) => ({
   // Opening the home screen must never spend tokens on its own, but a previous
   // run's proposals are still useful — so the cache is shown immediately and a
   // fresh pass stays an explicit click.
-  loadCached: () => {
+  loadCached: (locale) => {
     const rootPath = useWorkspaceStore.getState().rootPath;
     if (!rootPath) return;
-    const cached = readCache()[rootPath];
+    const cache = readCache();
+    const key = getCacheKey(rootPath, locale);
+    const cached = cache[key] || cache[rootPath];
     if (cached?.tasks?.length && Date.now() - cached.generatedAt < CACHE_TTL) {
       set({ tasks: rankTasks(cached.tasks), generatedAt: cached.generatedAt, error: null });
     }
   },
 
-  findWork: async (providerId, modelId, force = false) => {
+  findWork: async (providerId, modelId, force = false, locale) => {
     const rootPath = useWorkspaceStore.getState().rootPath;
     if (!rootPath) return;
+    const currentLocale = locale || (typeof window !== 'undefined' ? localStorage.getItem('locale') || 'en' : 'en');
+    const key = getCacheKey(rootPath, currentLocale);
 
     if (!force) {
-      const cached = readCache()[rootPath];
+      const cached = readCache()[key];
       if (cached && Date.now() - cached.generatedAt < CACHE_TTL && cached.tasks.length) {
         set({ tasks: rankTasks(cached.tasks), generatedAt: cached.generatedAt, error: null });
         // Still refresh the local facts so the header is accurate.
@@ -186,7 +197,7 @@ export const useAgendaStore = create<AgendaStore>((set, get) => ({
         silent: true,
         maxTokens,
         messages: [
-          { role: 'system', content: SUGGEST_SYSTEM_PROMPT },
+          { role: 'system', content: buildSuggestSystemPrompt(currentLocale) },
           { role: 'user', content: buildScanBriefing(scan) },
         ],
       });
@@ -198,7 +209,7 @@ export const useAgendaStore = create<AgendaStore>((set, get) => ({
       }
       const generatedAt = Date.now();
       set({ tasks, generatedAt, suggesting: false, error: null });
-      writeCache(rootPath, tasks, generatedAt);
+      writeCache(key, tasks, generatedAt);
     } catch (e: any) {
       set({ suggesting: false, error: e?.message || String(e) });
     }

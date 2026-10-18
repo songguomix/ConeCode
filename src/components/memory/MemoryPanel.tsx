@@ -48,25 +48,29 @@ export default function MemoryPanel({ t }: { t: (k: string) => string }) {
     .sort((a, b) => b.hits - a.hits || b.updatedAt - a.updatedAt);
 
   return (
-    <div className="bg-[var(--bg-2)] border border-[var(--border)] rounded-xl p-4">
-      <div className="flex items-center gap-2 mb-1">
-        <div className="font-medium text-sm">{t('memory')}</div>
-        <span className="text-xs text-[var(--text-muted)]">({visible.length})</span>
-        <label className="ml-auto flex items-center gap-1.5 text-xs text-[var(--text-secondary)] cursor-pointer">
-          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} className="accent-[var(--accent)]" />
+    <div className="bg-[var(--bg-2)] border border-[var(--border)] rounded-2xl p-4 shadow-2xs">
+      <div className="flex items-center justify-between gap-2 mb-3.5 pb-2.5 border-b border-[var(--border)]/60">
+        <div className="flex items-center gap-2">
+          <FiCpu size={14} className="text-[var(--accent)]" />
+          <div className="font-semibold text-sm text-[var(--text-primary)]">{t('memory')}</div>
+          <span className="text-[10px] px-2 py-0.5 rounded-full bg-[var(--accent-soft)] text-[var(--accent)] border border-[var(--accent)]/30 font-medium font-mono">
+            {visible.length}
+          </span>
+        </div>
+        <label className="flex items-center gap-1.5 text-xs text-[var(--text-secondary)] cursor-pointer">
+          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} className="accent-[var(--accent)] rounded" />
           {t('memoryEnabled')}
         </label>
       </div>
-      <p className="text-xs text-[var(--text-muted)] mb-3">{t('memoryHint')}</p>
 
-      <div className="flex items-center gap-2 mb-3">
+      <div className="flex items-center gap-2 mb-3.5">
         <select
           value={draftKind}
           onChange={(e) => setDraftKind(e.target.value as MemoryKind)}
-          className="shrink-0 px-2 py-1.5 rounded-lg bg-[var(--bg-3)] border border-[var(--border)] text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
+          className="shrink-0 px-2.5 py-1.5 rounded-xl bg-[var(--bg-1)] border border-[var(--border)] text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/20 shadow-2xs"
         >
           {MEMORY_KINDS.map((kind) => (
-            <option key={kind} value={kind}>{t(KIND_META[kind].labelKey)}</option>
+            <option key={kind} value={kind} className="bg-[var(--bg-2)] text-[var(--text-primary)]">{t(KIND_META[kind].labelKey)}</option>
           ))}
         </select>
         <input
@@ -74,36 +78,36 @@ export default function MemoryPanel({ t }: { t: (k: string) => string }) {
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && !(e.nativeEvent as any).isComposing) void submit(); }}
           placeholder={draftKind === 'project' ? t('memoryAddProjectPlaceholder') : t('memoryAddPlaceholder')}
-          className="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg bg-[var(--bg-3)] border border-[var(--border)] text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
+          className="flex-1 min-w-0 px-3 py-1.5 rounded-xl bg-[var(--bg-1)] border border-[var(--border)] text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] outline-none focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/20 shadow-2xs"
         />
         <button onClick={submit} disabled={!draft.trim()}
-          className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-[var(--accent)] text-white text-xs hover:bg-[var(--accent-hover)] disabled:opacity-40">
+          className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-[var(--accent)] to-[#e88a6a] text-white text-xs font-medium hover:opacity-95 shadow-2xs disabled:opacity-40 transition-all cursor-pointer">
           <FiPlus size={12} /> {t('memoryAdd')}
         </button>
       </div>
       {draftKind === 'project' && !rootPath && (
-        <p className="text-[11px] text-[var(--warning)] -mt-1 mb-2">{t('memoryProjectNeedsFolder')}</p>
+        <p className="text-[11px] text-[var(--warning)] -mt-1 mb-2.5">{t('memoryProjectNeedsFolder')}</p>
       )}
 
       {visible.length === 0 ? (
-        <div className="text-xs text-[var(--text-muted)] py-2">{t('memoryEmpty')}</div>
+        <div className="text-xs text-[var(--text-muted)] py-3 text-center">{t('memoryEmpty')}</div>
       ) : (
-        <div className="space-y-3 max-h-80 overflow-y-auto">
+        <div className="space-y-3.5 max-h-80 overflow-y-auto pr-1">
           {MEMORY_KINDS.map((kind) => {
             const group = byKind(kind);
             if (!group.length) return null;
             const meta = KIND_META[kind];
             return (
               <section key={kind}>
-                <div className="flex items-center gap-1.5 mb-1">
+                <div className="flex items-center gap-1.5 mb-1.5">
                   <span className={meta.tone}>{meta.icon}</span>
-                  <span className="text-[11px] font-medium text-[var(--text-secondary)]">{t(meta.labelKey)}</span>
+                  <span className="text-[11px] font-semibold text-[var(--text-secondary)]">{t(meta.labelKey)}</span>
                   {kind === 'project' && projectName && (
                     <span className="text-[10px] text-[var(--text-muted)]">· {projectName}</span>
                   )}
-                  <span className="text-[10px] text-[var(--text-muted)]">{group.length}</span>
+                  <span className="text-[10px] text-[var(--text-muted)] px-1.5 py-0.2 rounded-full bg-[var(--bg-1)] border border-[var(--border)] font-mono">{group.length}</span>
                 </div>
-                <ul className="space-y-1">
+                <ul className="space-y-1.5">
                   {group.map((entry) => <Row key={entry.id} entry={entry} t={t} onForget={() => remove(entry.id)} />)}
                 </ul>
               </section>
@@ -113,22 +117,22 @@ export default function MemoryPanel({ t }: { t: (k: string) => string }) {
       )}
 
       {visible.length > 0 && (
-        <div className="mt-3 flex items-center gap-2">
+        <div className="mt-3.5 flex items-center gap-2 pt-2 border-t border-[var(--border)]">
           {confirmClear ? (
             <>
               <span className="text-xs text-[var(--text-muted)]">{t('memoryClearConfirm')}</span>
               <button onClick={async () => { await clear(); setConfirmClear(false); }}
-                className="px-2 py-1 rounded-lg bg-[var(--error)]/15 text-xs font-semibold text-[var(--error)] hover:bg-[var(--error)]/25">
+                className="px-2.5 py-1 rounded-lg bg-[var(--error)]/15 text-xs font-semibold text-[var(--error)] hover:bg-[var(--error)]/25 cursor-pointer">
                 {t('memoryClear')}
               </button>
               <button onClick={() => setConfirmClear(false)}
-                className="px-2 py-1 rounded-lg bg-[var(--bg-3)] text-xs text-[var(--text-secondary)]">
+                className="px-2.5 py-1 rounded-lg bg-[var(--bg-1)] border border-[var(--border)] text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] cursor-pointer">
                 {t('cancel')}
               </button>
             </>
           ) : (
             <button onClick={() => setConfirmClear(true)}
-              className="text-xs text-[var(--text-muted)] hover:text-[var(--error)] transition-colors">
+              className="text-xs text-[var(--text-muted)] hover:text-[var(--error)] transition-colors cursor-pointer">
               {t('memoryClear')}
             </button>
           )}
@@ -141,20 +145,18 @@ export default function MemoryPanel({ t }: { t: (k: string) => string }) {
 
 function Row({ entry, t, onForget }: { entry: MemoryEntry; t: (k: string) => string; onForget: () => void }) {
   return (
-    <li className="group flex items-start gap-2 text-xs">
-      <span className="mt-1 w-1 h-1 rounded-full bg-[var(--text-muted)] shrink-0" />
-      <span className="flex-1 min-w-0 leading-snug">
-        <span className="text-[var(--text-secondary)]">{entry.text}</span>
-        {entry.hits > 1 && <span className="ml-1.5 text-[10px] text-[var(--text-muted)]">×{entry.hits}</span>}
-        {/* The reason is what makes a rule reviewable — without it you can't tell
-            a lesson worth keeping from one the assistant over-generalised. */}
+    <li className="group flex items-start gap-2.5 text-xs p-2.5 rounded-xl bg-[var(--bg-1)]/70 border border-[var(--border)] hover:border-[var(--accent)]/40 transition-all">
+      <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-[var(--accent)] shrink-0 opacity-60" />
+      <span className="flex-1 min-w-0 leading-relaxed">
+        <span className="text-[var(--text-primary)] font-medium">{entry.text}</span>
+        {entry.hits > 1 && <span className="ml-1.5 text-[10px] text-[var(--text-muted)] font-mono">×{entry.hits}</span>}
         {entry.why && (
           <span className="block text-[11px] text-[var(--text-muted)] italic mt-0.5">{t('memoryLearned')}: {entry.why}</span>
         )}
       </span>
       <button onClick={onForget} title={t('memoryForget')}
-        className="shrink-0 opacity-0 group-hover:opacity-100 p-0.5 rounded text-[var(--text-muted)] hover:text-[var(--error)] transition-all">
-        <FiTrash2 size={11} />
+        className="shrink-0 opacity-0 group-hover:opacity-100 p-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--error)] hover:bg-red-500/10 transition-all cursor-pointer">
+        <FiTrash2 size={12} />
       </button>
     </li>
   );

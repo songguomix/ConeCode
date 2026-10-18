@@ -1,6 +1,6 @@
 import { useRef, useEffect, useState, useMemo, useCallback, Fragment } from 'react';
 import { FiMap, FiPlay, FiEdit3, FiChevronDown, FiChevronRight } from 'react-icons/fi';
-import { useChatStore, useLanguageStore, useCodeChangesStore, useWorkspaceStore, useModelStore, useSettingsStore } from '../../stores';
+import { useChatStore, useLanguageStore, useCodeChangesStore, useWorkspaceStore, useModelStore, useSettingsStore, useUIStore } from '../../stores';
 import { orderForDisplay } from '../../stores/chat.store';
 import ChatInput from './ChatInput';
 import MessageBubble from './MessageBubble';
@@ -8,15 +8,21 @@ import MessageContent from './MessageContent';
 import MessageChanges from './InlineChanges';
 import CommandApprovalCard from './CommandApprovalCard';
 import QuestionPromptCard from './QuestionPromptCard';
+import WorkModeSuggestionCard from './WorkModeSuggestionCard';
 import TodoList from './TodoList';
 import DiffStatPill from './DiffStatPill';
 import GoalProgressRow from './GoalProgressRow';
 import { useInstallGateStore, activeInstallLabel, isHolding } from '../../stores/installGate.store';
 import AgentHome from '../home/AgentHome';
+import NewChatHero from './NewChatHero';
 import { commandsForConversation } from './approvalPresentation';
 import { formatUSD, messageCost } from '../../core/pricing/cost';
+import { completedWorkProcesses } from './workProcess';
+import { responseHealth } from '../../core/model/responseHealth';
 
 export default function ChatView() {
+  const viewMode = useUIStore((s) => s.viewMode);
+  const setViewMode = useUIStore((s) => s.setViewMode);
   const rawMessages = useChatStore((s) => s.messages);
   const activeConversationId = useChatStore((s) => s.activeConversationId);
   // This conversation's own live run — other conversations may be streaming
@@ -24,6 +30,7 @@ export default function ChatView() {
   const activeRun = useChatStore((s) => (activeConversationId ? s.streamingRuns[activeConversationId] : undefined));
   const isStreaming = !!activeRun;
   const streamingContent = activeRun?.content ?? '';
+  const streamingReasoning = activeRun?.reasoningContent ?? '';
   const streamingStatus = activeRun?.status ?? null;
   const streamingToolName = activeRun?.toolName ?? null;
   const error = useChatStore((s) => s.error);
@@ -38,17 +45,26 @@ export default function ChatView() {
   const queued = useChatStore((s) => (activeConversationId ? s.queuedMessages[activeConversationId] || [] : []));
   const dequeueMessage = useChatStore((s) => s.dequeueMessage);
   const getSelectedModel = useModelStore((s) => s.getSelectedModel);
+  const selectedModel = useModelStore((s) => s.getSelectedModel());
+  const health = useMemo(() => selectedModel ? responseHealth(rawMessages, selectedModel.providerId, selectedModel.id, !!(selectedModel.supportsReasoning || selectedModel.userEnabledReasoning)) : null, [rawMessages, selectedModel]);
   const [planDismissedId, setPlanDismissedId] = useState<string | null>(null);
   const [reviewCommandId, setReviewCommandId] = useState<string | null>(null);
+  const [dismissedSuggestionId, setDismissedSuggestionId] = useState<string | null>(null);
   // Compaction hides messages from the MODEL, never from the user. They stay
   // right where they were, folded behind the summary and one click away.
   const [showCompacted, setShowCompacted] = useState(false);
+  const [expandedProcesses, setExpandedProcesses] = useState<Set<string>>(() => new Set());
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const onEditMessage = useCallback((id: string) => setEditingMessageId(id), []);
   const onCancelEditMessage = useCallback(() => setEditingMessageId(null), []);
   const isEditing = rawMessages.some((m) => m.id === editingMessageId);
-  useEffect(() => { setEditingMessageId(null); }, [activeConversationId]);
+  useEffect(() => {
+    setEditingMessageId(null);
+    setExpandedProcesses(new Set());
+    setDismissedSuggestionId(null);
+  }, [activeConversationId]);
   const messages = useMemo(() => orderForDisplay(rawMessages), [rawMessages]);
+  const isNewChat = viewMode === 'chat' && messages.length === 0;
   const compactedIds = useMemo(() => {
     const lastSummaryIdx = messages.map((m) => !!m.isSummary).lastIndexOf(true);
     return lastSummaryIdx === -1
@@ -76,6 +92,17 @@ export default function ChatView() {
     () => new Set(changes.filter((c) => c.status === 'pending').map((c) => c.messageId).filter(Boolean) as string[]),
     [changes],
   );
+  const workProcesses = useMemo(
+    () => viewMode === 'work' ? completedWorkProcesses(messages, isStreaming || !!error, awaitingApproval) : [],
+    [viewMode, messages, isStreaming, error, awaitingApproval],
+  );
+  const processByMessage = useMemo(() => {
+    const index = new Map<string, typeof workProcesses[number]>();
+    for (const process of workProcesses) {
+      for (const id of process.messageIds) index.set(id, process);
+    }
+    return index;
+  }, [workProcesses]);
   const containerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const lastProcessedRef = useRef<string>('');
@@ -103,6 +130,38 @@ export default function ChatView() {
     if (!hasUserReply) return msg;
     return null;
   }, [rawMessages]);
+
+  // Find the latest assistant message to check for Work mode suggestion
+  const lastAssistantMessage = useMemo(() => {
+    for (let i = rawMessages.length - 1; i >= 0; i--) {
+      if (rawMessages[i].role === 'assistant' && !rawMessages[i].isToolResult) {
+        return rawMessages[i];
+      }
+    }
+    return null;
+  }, [rawMessages]);
+
+  const showWorkModeSuggestion = useMemo(() => {
+    if (viewMode !== 'chat' || !lastAssistantMessage) return false;
+    if (dismissedSuggestionId === lastAssistantMessage.id) return false;
+    const content = lastAssistantMessage.content;
+    return (
+      content.includes('[SUGGEST_WORK_MODE]') ||
+      /(建议|推荐|是否|可以).*(切换|使用).*(Work|工作模式)|switch to Work mode|Work mode is recommended/i.test(content)
+    );
+  }, [viewMode, lastAssistantMessage, dismissedSuggestionId]);
+
+  const handleSwitchToWorkMode = useCallback(async () => {
+    setViewMode('work');
+    const ws = useWorkspaceStore.getState();
+    if (activeConversationId) {
+      if (ws.rootPath) {
+        await useChatStore.getState().setConversationFolder(ws.rootPath);
+      } else {
+        await ws.openFolder();
+      }
+    }
+  }, [activeConversationId, setViewMode]);
 
   // Auto-open only when the pending queue changes. Closing a still-pending
   // dialog leaves it closed until the user clicks its compact transcript row.
@@ -135,7 +194,7 @@ export default function ChatView() {
   };
 
   const scrollToBottom = () => {
-    if (!isNearBottomRef.current) return;
+    if (isNewChat || !isNearBottomRef.current) return;
     bottomRef.current?.scrollIntoView({ behavior: 'instant' });
   };
 
@@ -160,7 +219,7 @@ export default function ChatView() {
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages, streamingContent]);
+  }, [messages, streamingContent, streamingReasoning, isStreaming]);
 
   useEffect(() => {
     const lastMsg = messages[messages.length - 1];
@@ -221,17 +280,50 @@ export default function ChatView() {
           </div>
         </div>
       )}
-      <div ref={containerRef} className="flex-1 overflow-y-auto py-6">
-        <div className="max-w-[900px] mx-auto w-full px-4">
-        {/* Nothing said yet — instead of an empty prompt, show the agent's own
-            reading of the workspace and offer concrete work to start. */}
-        {messages.length === 0 && <AgentHome />}
+      {health && (health.missingReasoning || health.repeatedInterruptions) && (
+        <details className="mx-4 mb-2 rounded-xl border border-[var(--warning-border)] bg-[var(--warning-bg)] px-3 py-2 text-xs text-[var(--text-primary)] shrink-0">
+          <summary className="cursor-pointer">{t('modelResponseAlert')} · {selectedModel?.name}</summary>
+          <p className="mt-2">{t('modelResponseEvidence')}: {health.samples} · {t('modelReasoningReturned')}: {health.reasoning} · {t('modelInterrupted')}: {health.interruptions}</p>
+          {health.missingReasoning && <p className="mt-1">{t('modelReasoningMissing')}</p>}
+          {health.repeatedInterruptions && <p className="mt-1">{t('modelInterruptionsHint')}</p>}
+          <p className="mt-1 text-[var(--text-secondary)]">{t('modelHealthLimit')}</p>
+        </details>
+      )}
+      <div ref={containerRef} className={`flex-1 overflow-y-auto py-6 ${isNewChat ? 'flex flex-col' : ''}`}>
+        {isNewChat ? (
+          <NewChatHero />
+        ) : (
+          <div className="max-w-[900px] mx-auto w-full px-4">
+            {/* Nothing said yet — in Work mode, show the agent's own
+                reading of the workspace and offer concrete work to start. */}
+            {messages.length === 0 && <AgentHome />}
 
         {messages.map((msg, i) => {
           const hidden = compactedIds.has(msg.id) && !showCompacted && !awaitingApproval.has(msg.id);
           if (hidden) return null;
+          const process = processByMessage.get(msg.id);
+          const processOpen = !!process && expandedProcesses.has(process.finalId);
+          if (process && !processOpen && process.startId !== msg.id) return null;
           return (
             <Fragment key={msg.id}>
+              {process?.startId === msg.id && (
+                <button
+                  type="button"
+                  aria-expanded={processOpen}
+                  onClick={() => setExpandedProcesses((previous) => {
+                    const next = new Set(previous);
+                    if (next.has(process.finalId)) next.delete(process.finalId);
+                    else next.add(process.finalId);
+                    return next;
+                  })}
+                  className="mt-5 flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-3)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
+                >
+                  {processOpen ? <FiChevronDown size={13} /> : <FiChevronRight size={13} />}
+                  <span>{t('workProcess')} · {process.messageIds.size}</span>
+                </button>
+              )}
+              {(!process || processOpen) && <>
+
               {/* The fold marker sits exactly where the context was compacted. */}
               {msg.isSummary && (
                 <button
@@ -255,6 +347,7 @@ export default function ChatView() {
                 onCancelEdit={onCancelEditMessage}
               />
               <MessageChanges messageId={msg.id} onReviewCommand={setReviewCommandId} />
+              </>}
             </Fragment>
           );
         })}
@@ -267,7 +360,7 @@ export default function ChatView() {
 
         {/* opencode-style queue: typed mid-run, sent when this turn ends. */}
         {queued.map((q) => (
-          <div key={q.id} className="mt-3 ml-auto max-w-[85%] min-w-0">
+          <div key={q.id} className="mt-3 ml-auto max-w-[85%] sm:max-w-[72%] min-w-0">
             <div className="rounded-2xl border border-dashed border-[var(--accent)]/50 bg-[var(--accent-soft)]/50 px-4 py-2.5">
               <div className="flex items-center gap-2 mb-1">
                 <span className="text-[11px] font-medium text-[var(--accent)]">{t('queuedTag')}</span>
@@ -286,6 +379,12 @@ export default function ChatView() {
         {isStreaming && (
           <div className={`${streamContinues ? 'mt-1.5' : 'mt-6'}`}>
             <div className="min-w-0">
+              {streamingReasoning && (
+                <details open className="mb-3 rounded-xl border border-[var(--glass-border)] bg-[var(--glass-card)] px-3 py-2">
+                  <summary className="cursor-pointer text-xs font-medium text-[var(--text-secondary)]">{t('thinkingProcess')}</summary>
+                  <div className="mt-2 max-h-72 overflow-y-auto whitespace-pre-wrap break-words text-sm leading-relaxed text-[var(--text-secondary)]">{streamingReasoning}</div>
+                </details>
+              )}
               {streamingContent
                 ? <MessageContent content={streamingContent} streaming />
                 : <span className="text-[15px] text-[var(--text-muted)] anim-caret">
@@ -299,13 +398,14 @@ export default function ChatView() {
 
         {error && (
           <div className="mt-3 p-3.5 rounded-xl bg-[var(--error)]/10 border border-[var(--error)]/20 text-[var(--error)] text-sm flex items-center justify-between">
-            <span>{error}</span>
+            <span><strong className="mr-2">ConeCode</strong>{error}</span>
             <button onClick={clearError} className="text-xs underline opacity-70 hover:opacity-100">{t('dismiss')}</button>
           </div>
         )}
 
         <div ref={bottomRef} />
         </div>
+        )}
       </div>
 
       {showPlanApproval && (
@@ -370,9 +470,21 @@ export default function ChatView() {
         </div>
       )}
 
-      <div hidden={isEditing}>
-        <ChatInput />
-      </div>
+      {/* Pinned Work Mode Suggestion Card - appears in Chat mode when project work is detected */}
+      {showWorkModeSuggestion && (
+        <div className="max-w-[900px] mx-auto w-full px-4 mb-2">
+          <WorkModeSuggestionCard
+            onSwitch={handleSwitchToWorkMode}
+            onDismiss={() => lastAssistantMessage && setDismissedSuggestionId(lastAssistantMessage.id)}
+          />
+        </div>
+      )}
+
+      {!isNewChat && (
+        <div hidden={isEditing}>
+          <ChatInput />
+        </div>
+      )}
     </div>
   );
 }

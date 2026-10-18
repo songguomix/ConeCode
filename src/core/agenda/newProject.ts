@@ -70,6 +70,148 @@ export const FALLBACK_IDEAS: Omit<ProjectIdea, 'id'>[] = [
   },
 ];
 
+export const FALLBACK_IDEAS_ZH: Omit<ProjectIdea, 'id'>[] = [
+  {
+    title: 'MCP 服务端',
+    description: '实现一个 Model Context Protocol 服务端，暴露若干可用工具供任意 AI 客户端调用。',
+    stack: 'TypeScript · Node',
+    tags: ['AI', 'tooling'],
+    scale: 'small',
+  },
+  {
+    title: 'CLI 命令行工具',
+    description: '具备参数解析、彩色输出和单元测试的轻量命令行实用工具。',
+    stack: 'TypeScript · Node',
+    tags: ['CLI'],
+    scale: 'small',
+  },
+  {
+    title: 'REST API 接口',
+    description: '包含路由管理、参数校验、内存存储和端点测试的轻量 JSON API 服务。',
+    stack: 'TypeScript · Hono',
+    tags: ['backend'],
+    scale: 'small',
+  },
+  {
+    title: 'Web 数据仪表盘',
+    description: '包含图表展示、数据筛选和响应式界面的现代化单页数据看板。',
+    stack: 'React · Vite · Tailwind',
+    tags: ['frontend'],
+    scale: 'medium',
+  },
+  {
+    title: 'Python 数据分析工具',
+    description: '自动读取 CSV 数据、计算统计指标并生成结构化分析报告的脚本。',
+    stack: 'Python',
+    tags: ['data'],
+    scale: 'small',
+  },
+  {
+    title: '浏览器扩展插件',
+    description: '具备弹窗界面（Popup）和内容脚本（Content Script）的 Manifest V3 扩展。',
+    stack: 'TypeScript · Vite',
+    tags: ['frontend'],
+    scale: 'medium',
+  },
+];
+
+export const FALLBACK_IDEAS_ZH_HANT: Omit<ProjectIdea, 'id'>[] = [
+  {
+    title: 'MCP 服務端',
+    description: '實現一個 Model Context Protocol 服務端，提供若干工具供任意 AI 客戶端調用。',
+    stack: 'TypeScript · Node',
+    tags: ['AI', 'tooling'],
+    scale: 'small',
+  },
+  {
+    title: 'CLI 命令行工具',
+    description: '具備參數解析、彩色輸出和單元測試的輕量命令行實用工具。',
+    stack: 'TypeScript · Node',
+    tags: ['CLI'],
+    scale: 'small',
+  },
+  {
+    title: 'REST API 接口',
+    description: '包含路由管理、參數校驗、內存存儲和端點測試的輕量 JSON API 服務。',
+    stack: 'TypeScript · Hono',
+    tags: ['backend'],
+    scale: 'small',
+  },
+  {
+    title: 'Web 數據儀表盤',
+    description: '包含圖表展示、數據篩選和響應式界面的現代化單頁數據看板。',
+    stack: 'React · Vite · Tailwind',
+    tags: ['frontend'],
+    scale: 'medium',
+  },
+  {
+    title: 'Python 數據分析工具',
+    description: '自動讀取 CSV 數據、計算統計指標並生成結構化分析報告的腳本。',
+    stack: 'Python',
+    tags: ['data'],
+    scale: 'small',
+  },
+  {
+    title: '瀏覽器擴展插件',
+    description: '具備彈窗界面（Popup）和內容腳本（Content Script）的 Manifest V3 擴展。',
+    stack: 'TypeScript · Vite',
+    tags: ['frontend'],
+    scale: 'medium',
+  },
+];
+
+export const FALLBACK_IDEAS_JA: Omit<ProjectIdea, 'id'>[] = [
+  {
+    title: 'MCP サーバー',
+    description: 'AI クライアントから呼び出せる便利なツールを提供する Model Context Protocol サーバー。',
+    stack: 'TypeScript · Node',
+    tags: ['AI', 'tooling'],
+    scale: 'small',
+  },
+  {
+    title: 'CLI ツール',
+    description: '引数解析、カラー出力、テストスイートを備えたコマンドラインユーティリティ。',
+    stack: 'TypeScript · Node',
+    tags: ['CLI'],
+    scale: 'small',
+  },
+  {
+    title: 'REST API',
+    description: 'ルーティング、バリデーション、インメモリストア、エンドポイントテストを備えた軽量 JSON API。',
+    stack: 'TypeScript · Hono',
+    tags: ['backend'],
+    scale: 'small',
+  },
+  {
+    title: 'Web ダッシュボード',
+    description: 'グラフ表示やサンプルデータのフィルタリングを備えたシングルページダッシュボード。',
+    stack: 'React · Vite · Tailwind',
+    tags: ['frontend'],
+    scale: 'medium',
+  },
+  {
+    title: 'Python データツール',
+    description: 'CSV を読み込み、統計情報を計算してレポートを出力するスクリプト。',
+    stack: 'Python',
+    tags: ['data'],
+    scale: 'small',
+  },
+  {
+    title: 'ブラウザ拡張機能',
+    description: 'ポップアップとページを変更するコンテンツスクリプトを備えた Manifest V3 拡張機能。',
+    stack: 'TypeScript · Vite',
+    tags: ['frontend'],
+    scale: 'medium',
+  },
+];
+
+export function getFallbackIdeas(locale: string = 'en'): Omit<ProjectIdea, 'id'>[] {
+  if (locale === 'zh') return FALLBACK_IDEAS_ZH;
+  if (locale === 'zhHant') return FALLBACK_IDEAS_ZH_HANT;
+  if (locale === 'ja') return FALLBACK_IDEAS_JA;
+  return FALLBACK_IDEAS;
+}
+
 export const IDEAS_SYSTEM_PROMPT = `You suggest starter projects for a coding agent that will build them completely on its own, unattended, in one run.
 
 Reply with JSON and nothing else:
@@ -83,6 +225,18 @@ Rules:
 - description: ONE sentence on what it does.
 - stack: the concrete stack, e.g. "TypeScript · Node" or "React · Vite · Tailwind". Mainstream and installable from a public registry.
 - scale: "small" if a focused single-purpose program, "medium" if it has a UI plus a couple of screens.`;
+
+export function buildIdeasSystemPrompt(locale: string = 'en'): string {
+  const langRule =
+    locale === 'zh'
+      ? '\n- IMPORTANT: Output the title and description in Simplified Chinese (简体中文).'
+      : locale === 'zhHant'
+      ? '\n- IMPORTANT: Output the title and description in Traditional Chinese (繁體中文).'
+      : locale === 'ja'
+      ? '\n- IMPORTANT: Output the title and description in Japanese (日本語).'
+      : '\n- IMPORTANT: Output the title and description in English.';
+  return IDEAS_SYSTEM_PROMPT + langRule;
+}
 
 /** How the agent must report the command that proves the project works. */
 export const VERIFY_MARKER = 'VERIFY_COMMAND:';

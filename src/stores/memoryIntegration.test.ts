@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useChatStore } from './chat.store';
+import { useUIStore } from './ui.store';
 import { useMemoryStore } from './memory.store';
 import { useModelStore } from './model.store';
 import { useSettingsStore } from './settings.store';
@@ -46,6 +47,9 @@ beforeEach(() => {
     },
   };
   vi.spyOn(console, 'log').mockImplementation(() => {});
+  // Chat Mode suppresses the memory block entirely; this suite pins the
+  // work-mode loop where learned facts shape the next conversation.
+  useUIStore.setState({ viewMode: 'work' });
   useModelStore.setState({ models: new Map([['p1', [model]]]), selectedModelId: 'm1' });
   useSettingsStore.setState({ toolCallMode: 'prompt', autoIncludeFileContext: false, approvalMode: 'suggest' });
   useWorkspaceStore.setState({ rootPath: '/proj', mcpTools: [], contextFiles: [], selectedFile: null, fileContent: null, agentsMd: null });

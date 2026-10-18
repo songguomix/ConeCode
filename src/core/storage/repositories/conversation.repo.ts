@@ -23,6 +23,11 @@ export const conversationRepo = {
       providerId: data.providerId || '',
       modelId: data.modelId || '',
       rootPath: data.rootPath ?? null,
+      // Chat/Work mode travels with the conversation: without persisting it,
+      // the renderer's in-memory flag would silently revert to Work after an
+      // app restart. Absent on pre-Chat-Mode records, which always worked with
+      // a workspace — so "undefined" must keep reading as Work mode.
+      ...(data.isChatMode === true ? { isChatMode: true } : data.isChatMode === false ? { isChatMode: false } : {}),
       createdAt: now,
       updatedAt: now,
     };

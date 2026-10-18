@@ -142,10 +142,10 @@ export default function CommandApprovalCard({
       className="w-full rounded-2xl border border-[var(--border)] bg-[var(--bg-2)] shadow-xl overflow-hidden outline-none select-text anim-slide-up"
       style={{ opacity: 1 }}
     >
-      {/* Top Header Bar - fully opaque */}
+      {/* Top Header Bar */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border)] bg-[var(--bg-1)]">
         <div className="flex items-center gap-2.5 min-w-0">
-          <div className="w-7 h-7 rounded-lg bg-[var(--warning-bg)] text-[var(--warning)] flex items-center justify-center shrink-0">
+          <div className="w-7 h-7 rounded-lg bg-[var(--warning-bg)] text-[var(--warning)] flex items-center justify-center shrink-0 shadow-2xs">
             <FiTerminal size={14} />
           </div>
           <div className="flex items-center gap-2 min-w-0">
@@ -153,7 +153,7 @@ export default function CommandApprovalCard({
               {t('commandExecution') || '申请运行命令'}
             </h3>
             {totalPending && totalPending > 1 && (
-              <span className="text-[10.5px] font-mono px-1.5 py-0.5 rounded-md bg-[var(--bg-3)] text-[var(--text-muted)]">
+              <span className="text-[10.5px] font-mono px-1.5 py-0.5 rounded-md bg-[var(--bg-2)] border border-[var(--border)] text-[var(--text-muted)]">
                 {(pendingIndex ?? 0) + 1} / {totalPending}
               </span>
             )}
@@ -165,7 +165,7 @@ export default function CommandApprovalCard({
           <button
             onClick={handleCopy}
             title={t('copy') || '复制命令'}
-            className="p-1.5 rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-3)] hover:text-[var(--text-primary)] transition-colors"
+            className="p-1.5 rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-2)] hover:text-[var(--text-primary)] transition-colors cursor-pointer"
           >
             {copied ? (
               <FiCheck size={13} className="text-[var(--success)]" />
@@ -178,19 +178,19 @@ export default function CommandApprovalCard({
             disabled={busy}
             title={t('close') || '收起'}
             aria-label={t('close')}
-            className="p-1.5 rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-3)] hover:text-[var(--text-primary)] transition-colors disabled:opacity-50"
+            className="p-1.5 rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-2)] hover:text-[var(--text-primary)] transition-colors disabled:opacity-50 cursor-pointer"
           >
             <FiX size={14} />
           </button>
         </div>
       </div>
 
-      {/* Card Content Area - fully opaque */}
+      {/* Card Content Area */}
       <div className="p-4 space-y-3 bg-[var(--bg-2)]">
-        {/* Monospace Command Preview - fully opaque */}
-        <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-1)] overflow-hidden">
+        {/* Monospace Command Preview */}
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-1)] overflow-hidden shadow-2xs">
           {change.cwd && (
-            <div className="flex items-center gap-1.5 px-3 py-1.5 border-b border-[var(--border)] bg-[var(--bg-3)] text-[11px] text-[var(--text-muted)] font-sans">
+            <div className="flex items-center gap-1.5 px-3 py-1.5 border-b border-[var(--border)] bg-[var(--bg-3)]/40 text-[11px] text-[var(--text-muted)] font-sans">
               <FiFolder size={12} className="shrink-0 text-[var(--warning)]" />
               <span className="shrink-0">{t('workingDirectory')}:</span>
               <code className="truncate font-mono text-[var(--text-secondary)]" title={change.cwd}>

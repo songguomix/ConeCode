@@ -177,6 +177,17 @@ export default function RsiView() {
   const activeRun = activeConversationId ? streamingRuns[activeConversationId] : undefined;
   const running = !!activeRun;
 
+  // Reload/crash reconciliation (view-level, zero store writes): a transcript
+  // whose persisted tail is an UNANSWERED user request is the fingerprint of a
+  // run that died without leaving any record at all (renderer restart
+  // mid-turn, stream death, cancelled turn). Show why the loop looks
+  // untouched and offer one-click resume — instead of "无征兆中断".
+  const danglingRequest = useMemo(() => {
+    if (running) return false;
+    const tail = rawMessages[rawMessages.length - 1];
+    return !!tail && tail.role === 'user' && !tail.isToolResult && !tail.isQuestion && !tail.isSummary && !tail.isLocalNotice;
+  }, [running, rawMessages]);
+
   const canStart =
     !busy &&
     !running &&
@@ -316,11 +327,12 @@ export default function RsiView() {
       await st.setEnabled(true);
       useSettingsStore.setState({ approvalOverride: 'fullAuto' });
       // A previous run may have died after persisting the kickoff (stream
-      // failure, turn cap, app restart — all surfaced as continuable). Pressing
-      // start again must CONTINUE that run, not stack a second kickoff onto
-      // the transcript.
-      if (continuableConvId && continuableConvId === activeConversationId) {
-        await continueGeneration(continuableConvId);
+      // failure, turn cap, app restart). In-memory continuable OR the
+      // dangling-request fingerprint (which survives no state at all — it is
+      // recomputed from the persisted transcript tail) must both RESUME the
+      // run instead of stacking a second kickoff onto the transcript.
+      if ((continuableConvId && continuableConvId === activeConversationId) || danglingRequest) {
+        await continueGeneration();
         return;
       }
       // Program-side search state on real disk (STRATEGY.md default + resume
@@ -659,6 +671,20 @@ export default function RsiView() {
               <span className="min-w-0 break-words">{chatError}</span>
               <button onClick={clearChatError} className="text-xs underline opacity-70 hover:opacity-100 shrink-0">
                 {t('dismiss')}
+              </button>
+            </div>
+          )}
+          {/* Unanswered-request fingerprint (reload/restart mid-turn): name the
+              silent interruption and offer the resume action beside it. */}
+          {danglingRequest && (
+            <div className="p-3 rounded-xl bg-[var(--warning)]/10 border border-[var(--warning)]/25 text-[var(--text-primary)] text-sm space-y-2.5">
+              <span className="block">⚠️ {t('unansweredRunNotice')}</span>
+              <button
+                onClick={() => void continueGeneration()}
+                className="w-full flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-[var(--accent)] text-white text-[13px] font-medium hover:bg-[var(--accent-hover)] active:scale-[0.99] transition-all"
+              >
+                <FiZap size={14} />
+                <span>{t('continueOutput')}</span>
               </button>
             </div>
           )}

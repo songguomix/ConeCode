@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useChatStore } from './chat.store';
+import { useUIStore } from './ui.store';
 import { useWorkspaceStore } from './workspace.store';
 import { useSettingsStore } from './settings.store';
 import { useModelStore } from './model.store';
@@ -64,10 +65,13 @@ beforeEach(() => {
       chat: { stream: async (p: any) => { streamCalls.push(p); return textResponse('done'); }, stop: async () => true },
       message: { create: async (m: any) => m, delete: async () => true, list: async () => [] },
       conversation: { create: async (d: any) => ({ id: 'c1', ...d }), update: async () => {}, list: async () => [] },
-      fs: { readFile: async () => null, exists: async () => false, glob: async () => [], search: async () => [] },
+      fs: { readFile: async () => null, exists: async () => false, glob: async () => ({ files: [], capped: false }), search: async () => ({ matches: [], capped: false }) },
     },
   };
   vi.spyOn(console, 'log').mockImplementation(() => {});
+  // Chat Mode narrows the prompt and toolset to conversation only. These tests
+  // pin the WORK-mode agent, so pin the view instead of inheriting the default.
+  useUIStore.setState({ viewMode: 'work' });
   useModelStore.setState({ models: new Map([['p1', [model]]]), selectedModelId: 'm1' });
   useWorkspaceStore.setState({ rootPath: '/proj', mcpTools: [], contextFiles: [], selectedFile: null, fileContent: null, agentsMd: null });
   useMemoryStore.setState({ enabled: false, entries: [], loaded: true, extracting: false, turnsSinceExtraction: 0 });

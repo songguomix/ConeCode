@@ -603,7 +603,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     const perRoot = await Promise.all(roots.map((root) =>
       window.electronAPI.fs.glob({ pattern: '**/*', dir: root, maxResults: budget }),
     ));
-    const rel = perRoot.flat().map((p) => displayPath(p, roots));
+    const rel = perRoot.flatMap((part) => part.files).map((p) => displayPath(p, roots));
     set({ fileList: rel });
     return rel;
   },

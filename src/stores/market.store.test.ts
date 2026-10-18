@@ -81,6 +81,20 @@ describe('pushRepo', () => {
     localStorage.removeItem('conecode.pluginToken');
   });
 
+  it('fails loudly on an invalid configured repo instead of silently pushing origin', async () => {
+    useWorkspaceStore.setState({ rootPath: '/proj' });
+    localStorage.setItem('conecode.pluginToken', 'tok');
+    useMarketStore.setState({ repo: 'songguomix/' });
+
+    const res = await useMarketStore.getState().pushRepo('fix');
+
+    expect(res.ok).toBe(false);
+    expect(res.message).toContain('not a valid owner/repo');
+    expect(pushProject).not.toHaveBeenCalled(); // no silent origin fallback
+    expect(useMarketStore.getState().lastPushAt).toBeNull();
+    localStorage.removeItem('conecode.pluginToken');
+  });
+
   it('surfaces a failed push without advancing the last-push time', async () => {
     useWorkspaceStore.setState({ rootPath: '/proj' });
     gitInfo.mockResolvedValue({ isRepo: true, branch: 'main', dirty: 0 });

@@ -81,6 +81,18 @@ describe('buildToolset', () => {
     const tools = buildToolset({ mcpTools: [tool, tool] });
     expect(tools.filter((tl) => tl.name === 'mcp__files__read_text')).toHaveLength(1);
   });
+
+  it('restricts tools to pure conversation and web lookup in Chat Mode', () => {
+    const names = buildToolset({ isChatMode: true }).map((tl) => tl.name);
+    expect(names).not.toContain('read_file');
+    expect(names).not.toContain('list_dir');
+    expect(names).not.toContain('search');
+    expect(names).not.toContain('glob');
+    expect(names).not.toContain('edit_file');
+    expect(names).not.toContain('exec');
+    expect(names).toContain('ask_user');
+    expect(names).toContain('web_search');
+  });
 });
 
 describe('MCP tool names', () => {

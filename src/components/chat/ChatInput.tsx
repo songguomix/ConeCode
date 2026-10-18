@@ -20,7 +20,11 @@ function mentionTokenAt(value: string, caret: number): string | null {
   return m ? m[1] : null;
 }
 
-export default function ChatInput() {
+interface ChatInputProps {
+  centered?: boolean;
+}
+
+export default function ChatInput({ centered = false }: ChatInputProps) {
   const [input, setInput] = useState('');
   const sendMessage = useChatStore((s) => s.sendMessage);
   const enqueueMessage = useChatStore((s) => s.enqueueMessage);
@@ -108,6 +112,12 @@ export default function ChatInput() {
     el.style.height = 'auto';
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
   }, [input]);
+
+  useEffect(() => {
+    if (centered) {
+      textareaRef.current?.focus();
+    }
+  }, [centered]);
 
   const resetHeight = () => { if (textareaRef.current) textareaRef.current.style.height = 'auto'; };
 
@@ -428,37 +438,40 @@ export default function ChatInput() {
   const getFileName = (path: string) => path.split('/').pop() || path;
 
   return (
-    <div className="bg-[var(--bg-0)]">
+    <div className={centered
+      ? "w-full max-w-[840px] mx-auto transition-colors"
+      : "bg-[var(--glass-surface)]/60 backdrop-blur-2xl border-t border-[var(--glass-border)] transition-colors"
+    }>
       {/* Context files indicator */}
       {(autoIncludeFileContext && selectedFile) || contextFiles.length > 0 || activeSkill ? (
-        <div className="max-w-[900px] mx-auto w-full px-4 pt-2 pb-1">
+        <div className="max-w-[900px] mx-auto w-full px-4 pt-2.5 pb-1">
           <div className="flex flex-wrap gap-1.5">
             {activeSkill && (
               <span title={activeSkill.description || activeSkill.name}
-                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[var(--accent-soft)] text-[var(--accent)] text-xs font-medium">
-                <FiTool size={10} />
+                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-[var(--accent-soft)] text-[var(--accent)] text-xs font-medium border border-[var(--accent)]/30 backdrop-blur-md shadow-2xs">
+                <FiTool size={11} />
                 {activeSkill.name}
                 <button onClick={() => setActiveSkillId(null)} className="ml-0.5 hover:opacity-70 transition-opacity">
-                  <FiX size={10} />
+                  <FiX size={11} />
                 </button>
               </span>
             )}
             {autoIncludeFileContext && selectedFile && (
-              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[var(--accent-soft)] text-[var(--accent)] text-xs font-medium">
-                <FiPaperclip size={10} />
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-[var(--glass-card)] text-[var(--accent)] text-xs font-medium border border-[var(--glass-border)] backdrop-blur-md shadow-2xs">
+                <FiPaperclip size={11} />
                 {getFileName(selectedFile)} (auto)
               </span>
             )}
             {contextFiles.map((file) => (
-              <span key={file.path} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[var(--bg-3)] text-[var(--text-secondary)] text-xs">
+              <span key={file.path} className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-[var(--glass-card)] text-[var(--text-secondary)] text-xs border border-[var(--glass-border)] backdrop-blur-md shadow-2xs">
                 {file.isImage && file.dataUrl ? (
-                  <img src={file.dataUrl} alt={getFileName(file.path)} className="h-8 w-8 object-cover rounded" title={file.path} />
+                  <img src={file.dataUrl} alt={getFileName(file.path)} className="h-8 w-8 object-cover rounded-lg shadow-2xs" title={file.path} />
                 ) : (
-                  <FiPaperclip size={10} />
+                  <FiPaperclip size={11} />
                 )}
                 {!file.isImage && getFileName(file.path)}
                 <button onClick={() => removeContextFile(file.path)} className="ml-0.5 hover:text-[var(--text-primary)] transition-colors">
-                  <FiX size={10} />
+                  <FiX size={11} />
                 </button>
               </span>
             ))}
@@ -469,20 +482,20 @@ export default function ChatInput() {
       {/* "#" capture — ask where it belongs rather than guessing. */}
       {pendingCapture && (
         <div className="max-w-[900px] mx-auto w-full px-4 pt-2">
-          <div className="rounded-xl border border-[var(--accent)] bg-[var(--accent-soft)] px-3 py-2.5">
-            <div className="text-[11px] text-[var(--text-muted)] mb-1">{t('captureWhere')}</div>
-            <div className="text-[13px] text-[var(--text-primary)] mb-2 break-words">{pendingCapture}</div>
+          <div className="rounded-2xl border border-[var(--accent)]/40 bg-[var(--glass-card)] backdrop-blur-xl px-4 py-3 shadow-lg">
+            <div className="text-[11px] text-[var(--text-muted)] mb-1 font-medium">{t('captureWhere')}</div>
+            <div className="text-[13px] text-[var(--text-primary)] mb-2.5 break-words font-medium">{pendingCapture}</div>
             <div className="flex items-center gap-2">
               <button onClick={() => commitCapture('project')} disabled={!rootPath}
-                className="px-2.5 py-1 rounded-lg bg-[var(--accent)] text-white text-xs hover:bg-[var(--accent-hover)] disabled:opacity-40">
+                className="px-3 py-1.5 rounded-xl bg-[var(--accent)] text-white text-xs font-medium hover:bg-[var(--accent-hover)] disabled:opacity-40 shadow-xs">
                 {t('captureProject')}
               </button>
               <button onClick={() => commitCapture('user')}
-                className="px-2.5 py-1 rounded-lg bg-[var(--bg-3)] text-[var(--text-secondary)] text-xs hover:bg-[var(--bg-4)]">
+                className="px-3 py-1.5 rounded-xl bg-[var(--glass-card)] border border-[var(--glass-border)] text-[var(--text-secondary)] text-xs font-medium hover:bg-[var(--bg-3)]">
                 {t('captureUser')}
               </button>
               <button onClick={() => setPendingCapture(null)}
-                className="ml-auto px-2 py-1 rounded-lg text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)]">
+                className="ml-auto px-2.5 py-1.5 rounded-xl text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)]">
                 {t('cancel')}
               </button>
             </div>
@@ -490,20 +503,20 @@ export default function ChatInput() {
         </div>
       )}
 
-      <div className="relative max-w-[900px] mx-auto w-full px-4 pt-2 pb-1">
+      <div className="relative max-w-[900px] mx-auto w-full px-4 pt-2 pb-1.5">
         {/* Slash-command palette */}
         {showSlash && (
-          <div className="absolute bottom-full left-6 right-6 mb-1 max-h-64 overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--bg-2)] shadow-lg z-50 py-1 anim-menu" style={{ ['--menu-origin' as any]: 'bottom left', ['--menu-shift' as any]: '6px' }}>
-            <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-[var(--text-muted)] font-medium">{t('commandsTitle')}</div>
+          <div className="absolute bottom-full left-6 right-6 mb-2 max-h-64 overflow-y-auto rounded-2xl border border-[var(--glass-border)] bg-[var(--glass-surface)] backdrop-blur-2xl shadow-2xl z-50 py-1.5 anim-menu ring-1 ring-black/5 dark:ring-white/10" style={{ ['--menu-origin' as any]: 'bottom left', ['--menu-shift' as any]: '6px' }}>
+            <div className="px-3.5 py-1.5 text-[10px] uppercase tracking-wider text-[var(--text-muted)] font-semibold">{t('commandsTitle')}</div>
             {slashMatches.map((c, i) => (
               <button
                 key={c.name}
                 onMouseEnter={() => setSlashIndex(i)}
                 onMouseDown={(e) => { e.preventDefault(); runCommand(c, ''); }}
-                className={`w-full text-left px-3 py-2 flex items-center gap-2 transition-colors ${i === slashIndex ? 'bg-[var(--accent-soft)]' : 'hover:bg-[var(--bg-3)]'}`}
+                className={`w-full text-left px-3.5 py-2 flex items-center gap-2.5 transition-colors ${i === slashIndex ? 'bg-[var(--accent-soft)] text-[var(--accent)] font-medium' : 'hover:bg-[var(--bg-3)]/60 text-[var(--text-secondary)]'}`}
               >
                 <span className="font-mono text-xs text-[var(--accent)] shrink-0">/{c.name}</span>
-                <span className="text-xs text-[var(--text-muted)] truncate">{c.custom ? c.description : t(c.description)}</span>
+                <span className="text-xs truncate">{c.custom ? c.description : t(c.description)}</span>
                 {c.custom && <span className="ml-auto text-[9px] px-1.5 py-0.5 rounded-md bg-[var(--bg-3)] text-[var(--text-muted)] shrink-0">{t('custom')}</span>}
               </button>
             ))}
@@ -512,34 +525,38 @@ export default function ChatInput() {
 
         {/* @-mention file palette */}
         {showMention && (
-          <div className="absolute bottom-full left-6 right-6 mb-1 max-h-64 overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--bg-2)] shadow-lg z-50 py-1 anim-menu" style={{ ['--menu-origin' as any]: 'bottom left', ['--menu-shift' as any]: '6px' }}>
-            <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-[var(--text-muted)] font-medium">{t('mentionFiles')}</div>
+          <div className="absolute bottom-full left-6 right-6 mb-2 max-h-64 overflow-y-auto rounded-2xl border border-[var(--glass-border)] bg-[var(--glass-surface)] backdrop-blur-2xl shadow-2xl z-50 py-1.5 anim-menu ring-1 ring-black/5 dark:ring-white/10" style={{ ['--menu-origin' as any]: 'bottom left', ['--menu-shift' as any]: '6px' }}>
+            <div className="px-3.5 py-1.5 text-[10px] uppercase tracking-wider text-[var(--text-muted)] font-semibold">{t('mentionFiles')}</div>
             {mentionMatches.map((f, i) => (
               <button
                 key={f}
                 onMouseEnter={() => setMentionIndex(i)}
                 onMouseDown={(e) => { e.preventDefault(); acceptMention(f); }}
-                className={`w-full text-left px-3 py-2 flex items-center gap-2 transition-colors ${i === mentionIndex ? 'bg-[var(--accent-soft)]' : 'hover:bg-[var(--bg-3)]'}`}
+                className={`w-full text-left px-3.5 py-2 flex items-center gap-2.5 transition-colors ${i === mentionIndex ? 'bg-[var(--accent-soft)] text-[var(--accent)] font-medium' : 'hover:bg-[var(--bg-3)]/60 text-[var(--text-secondary)]'}`}
               >
-                <FiFile size={12} className="text-[var(--text-muted)] shrink-0" />
-                <span className="text-xs text-[var(--text-primary)] truncate">{f}</span>
+                <FiFile size={13} className="text-[var(--text-muted)] shrink-0" />
+                <span className="text-xs truncate">{f}</span>
               </button>
             ))}
           </div>
         )}
 
         {/* Composer box */}
-        <div className="rounded-[28px] border border-[var(--border)] bg-[var(--bg-2)] pl-4 pr-2 py-2 focus-within:border-[var(--accent)]/50 transition-colors shadow-sm">
+        <div className={`rounded-[28px] border border-[var(--glass-border)] bg-[var(--glass-card)] backdrop-blur-2xl pl-4 pr-2.5 py-2.5 focus-within:border-[var(--accent)]/50 focus-within:ring-4 focus-within:ring-[var(--accent)]/15 transition-all ${
+          centered
+            ? 'shadow-[0_12px_44px_rgba(0,0,0,0.08)] dark:shadow-[0_16px_50px_rgba(0,0,0,0.4)]'
+            : 'shadow-[0_8px_32px_rgba(0,0,0,0.06)] dark:shadow-[0_12px_44px_rgba(0,0,0,0.35)]'
+        }`}>
           <div className="flex items-end gap-3">
             {/* + menu: upload + agent modes (no standalone plan/attach clutter). */}
             <div className="relative shrink-0 mb-0.5">
               <button
                 onClick={() => { setPlusOpen((v) => !v); setSkillPickerOpen(false); }}
                 title={t('modeMenu')}
-                className={`w-9 h-9 rounded-xl flex items-center justify-center transition-colors ${
+                className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all ${
                   plusOpen || agentMode !== 'standard' || activeSkill
-                    ? 'text-[var(--accent)] bg-[var(--accent-soft)]'
-                    : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-3)]'
+                    ? 'text-[var(--accent)] bg-[var(--accent-soft)] shadow-2xs border border-[var(--accent)]/30'
+                    : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-3)]/70'
                 }`}
               >
                 <FiPlus size={18} />
@@ -548,25 +565,25 @@ export default function ChatInput() {
                 <>
                   <div className="fixed inset-0 z-40" onClick={() => setPlusOpen(false)} />
                   <div
-                    className="absolute bottom-full left-0 mb-2 w-60 rounded-2xl border border-[var(--border)] bg-[var(--bg-2)] shadow-xl z-50 py-1.5 anim-menu"
+                    className="absolute bottom-full left-0 mb-2.5 w-64 rounded-2xl border border-[var(--glass-border)] bg-[var(--glass-surface)] backdrop-blur-2xl shadow-2xl z-50 py-1.5 anim-menu ring-1 ring-black/5 dark:ring-white/10"
                     style={{ ['--menu-origin' as any]: 'bottom left', ['--menu-shift' as any]: '6px' }}
                   >
                     <button
                       onClick={() => { void handleAttach(); setPlusOpen(false); }}
-                      className="w-full flex items-center gap-2.5 px-3 py-2.5 text-[13px] text-[var(--text-secondary)] hover:bg-[var(--bg-3)] transition-colors"
+                      className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] text-[var(--text-secondary)] hover:bg-[var(--bg-3)]/60 hover:text-[var(--text-primary)] transition-colors"
                     >
-                      <FiPaperclip size={14} />
-                      <span className="flex-1 text-left">{t('attachFiles')}</span>
+                      <FiPaperclip size={14} className="text-[var(--text-muted)]" />
+                      <span className="flex-1 text-left font-medium">{t('attachFiles')}</span>
                     </button>
                     <button
                       onClick={() => { setPlusOpen(false); setSkillPickerOpen(false); void startScreenshot(); }}
                       disabled={screenshotStarting}
-                      className="w-full flex items-center gap-2.5 px-3 py-2.5 text-[13px] text-[var(--text-secondary)] hover:bg-[var(--bg-3)] transition-colors disabled:opacity-50"
+                      className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] text-[var(--text-secondary)] hover:bg-[var(--bg-3)]/60 hover:text-[var(--text-primary)] transition-colors disabled:opacity-50"
                     >
-                      <FiCamera size={14} />
-                      <span className="flex-1 text-left">{t('screenshot')}</span>
+                      <FiCamera size={14} className="text-[var(--text-muted)]" />
+                      <span className="flex-1 text-left font-medium">{t('screenshot')}</span>
                       {screenshotShortcut && (
-                        <kbd className="text-[10px] px-1.5 py-0.5 rounded-md bg-[var(--bg-3)] text-[var(--text-muted)] font-sans shrink-0">
+                        <kbd className="text-[10px] px-1.5 py-0.5 rounded-md bg-[var(--glass-card)] border border-[var(--glass-border)] text-[var(--text-muted)] font-sans shrink-0">
                           {prettyShortcut(screenshotShortcut)}
                         </kbd>
                       )}
@@ -574,37 +591,37 @@ export default function ChatInput() {
                     <button
                       onClick={() => { void handleBackgroundSend(); setPlusOpen(false); }}
                       disabled={!input.trim() || !selectedModel}
-                      className="w-full flex items-center gap-2.5 px-3 py-2.5 text-[13px] text-[var(--text-secondary)] hover:bg-[var(--bg-3)] transition-colors disabled:opacity-50"
+                      className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] text-[var(--text-secondary)] hover:bg-[var(--bg-3)]/60 hover:text-[var(--text-primary)] transition-colors disabled:opacity-50"
                     >
-                      <FiClock size={14} />
-                      <span className="flex-1 text-left">{t('backgroundSend')}</span>
+                      <FiClock size={14} className="text-[var(--text-muted)]" />
+                      <span className="flex-1 text-left font-medium">{t('backgroundSend')}</span>
                     </button>
-                    <div className="my-1 border-t border-[var(--border)]" />
+                    <div className="my-1.5 border-t border-[var(--glass-border)]" />
                     {/* One row → popup with the full skill list. */}
                     <button
                       onClick={() => setSkillPickerOpen((v) => !v)}
-                      className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-[13px] transition-colors ${
+                      className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] transition-colors ${
                         skillPickerOpen || activeSkill
-                          ? 'text-[var(--accent)] bg-[var(--accent-soft)]'
-                          : 'text-[var(--text-secondary)] hover:bg-[var(--bg-3)]'
+                          ? 'text-[var(--accent)] bg-[var(--accent-soft)] font-medium'
+                          : 'text-[var(--text-secondary)] hover:bg-[var(--bg-3)]/60 hover:text-[var(--text-primary)]'
                       }`}
                     >
                       <FiTool size={14} />
-                      <span className="flex-1 text-left truncate">
+                      <span className="flex-1 text-left truncate font-medium">
                         {activeSkill ? activeSkill.name : t('selectSkill')}
                       </span>
                       <FiChevronRight size={13} className="shrink-0 text-[var(--text-muted)]" />
                     </button>
                     {skillPickerOpen && (
                       <div
-                        className="absolute left-full bottom-0 ml-2 w-64 rounded-2xl border border-[var(--border)] bg-[var(--bg-2)] shadow-xl z-50 py-1.5 anim-menu"
+                        className="absolute left-full bottom-0 ml-2.5 w-64 rounded-2xl border border-[var(--glass-border)] bg-[var(--glass-surface)] backdrop-blur-2xl shadow-2xl z-50 py-1.5 anim-menu ring-1 ring-black/5 dark:ring-white/10"
                         style={{ ['--menu-origin' as any]: 'bottom left', ['--menu-shift' as any]: '6px' }}
                       >
-                        <div className="px-3 pb-1 text-[10px] uppercase tracking-wider text-[var(--text-muted)]">
+                        <div className="px-3.5 pb-1 text-[10px] uppercase tracking-wider text-[var(--text-muted)] font-semibold">
                           {t('skills')}
                         </div>
                         {effectiveSkills.length === 0 ? (
-                          <div className="px-3 py-1.5 text-[12px] text-[var(--text-muted)] leading-snug">
+                          <div className="px-3.5 py-2 text-[12px] text-[var(--text-muted)] leading-snug">
                             {t('noSkillsYet')}
                           </div>
                         ) : (
@@ -616,13 +633,13 @@ export default function ChatInput() {
                                 title={skill.description || skill.name}
                                 className={`w-full flex items-center gap-2.5 px-3 py-2 text-[13px] transition-colors ${
                                   activeSkillId === skill.id
-                                    ? 'text-[var(--accent)] bg-[var(--accent-soft)]'
-                                    : 'text-[var(--text-secondary)] hover:bg-[var(--bg-3)]'
+                                    ? 'text-[var(--accent)] bg-[var(--accent-soft)] font-medium'
+                                    : 'text-[var(--text-secondary)] hover:bg-[var(--bg-3)]/60 hover:text-[var(--text-primary)]'
                                 }`}
                               >
                                 <FiTool size={13} className="shrink-0" />
                                 <span className="flex-1 text-left truncate">{skill.name}</span>
-                                <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-[var(--bg-3)] text-[var(--text-muted)] shrink-0">
+                                <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-[var(--glass-card)] border border-[var(--glass-border)] text-[var(--text-muted)] shrink-0">
                                   {skill.scope === 'project' ? t('skillProjectShort') : t('skillGlobalShort')}
                                 </span>
                                 {activeSkillId === skill.id && <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)] shrink-0" />}
@@ -655,19 +672,19 @@ export default function ChatInput() {
                     : t('typeMessage')
               }
               rows={1}
-              className="flex-1 bg-transparent border-0 py-2 text-[15px] resize-none outline-none max-h-[200px] overflow-y-auto placeholder:text-[var(--text-muted)]"
+              className="flex-1 bg-transparent border-0 py-2 text-[16px] font-[450] leading-relaxed resize-none outline-none max-h-[200px] overflow-y-auto placeholder:text-[var(--text-muted)]"
             />
 
             {isStreaming ? (
               <button onClick={() => stopGeneration()}
-                className="w-9 h-9 rounded-full bg-[var(--accent)] text-white flex items-center justify-center hover:bg-[var(--accent-hover)] transition-colors shrink-0 mb-0.5 anim-press">
+                className="w-9 h-9 rounded-full bg-[var(--accent)] text-white flex items-center justify-center hover:bg-[var(--accent-hover)] transition-all shadow-[0_4px_14px_rgba(201,100,66,0.35)] hover:scale-105 active:scale-95 shrink-0 mb-0.5 anim-press">
                 <FiSquare size={14} />
               </button>
             ) : (
               <button onClick={handleSend}
                 disabled={!input.trim() || isSavingEdit || installHolding}
                 title={sendWithEnter ? t('sendHintEnter') : t('sendHintCmd')}
-                className="w-9 h-9 rounded-full flex items-center justify-center transition-all bg-[var(--accent)] text-white disabled:opacity-30 hover:bg-[var(--accent-hover)] shrink-0 mb-0.5 anim-press">
+                className="w-9 h-9 rounded-full flex items-center justify-center transition-all bg-gradient-to-tr from-[var(--accent)] to-[#e88a6a] text-white shadow-[0_4px_14px_rgba(201,100,66,0.35)] disabled:opacity-30 disabled:shadow-none hover:shadow-[0_6px_20px_rgba(201,100,66,0.45)] hover:scale-105 active:scale-95 shrink-0 mb-0.5 anim-press">
                 <FiArrowUp size={18} />
               </button>
             )}

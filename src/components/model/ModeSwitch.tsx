@@ -61,15 +61,15 @@ export default function ModeSwitch({ value, onChange }: ModeSwitchProps) {
         aria-label={t('modeMenu')}
         aria-haspopup="dialog"
         aria-expanded={open}
-        className={`flex items-center h-8 pl-1.5 pr-2.5 rounded-xl border transition-colors ${
+        className={`flex items-center h-8 pl-1.5 pr-2.5 rounded-full border transition-all backdrop-blur-md shadow-2xs ${
           open || active
-            ? 'bg-[var(--accent-soft)] border-[var(--accent)]/50 text-[var(--accent)]'
-            : 'bg-[var(--bg-3)]/80 hover:bg-[var(--bg-3)] border-[var(--border)]/60 text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+            ? 'bg-[var(--accent-soft)] border-[var(--accent)]/50 text-[var(--accent)] font-medium shadow-xs'
+            : 'bg-[var(--glass-card)] hover:bg-[var(--bg-2)] border-[var(--glass-border)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
         }`}
       >
         {/* keyed remount → the label pops on every mode change */}
         <span key={value} className="flex items-center gap-2 anim-pop">
-          <span className="w-5 h-5 rounded-lg bg-[var(--accent-soft)] text-[var(--accent)] flex items-center justify-center shrink-0">
+          <span className="w-5 h-5 rounded-full bg-[var(--accent-soft)] text-[var(--accent)] flex items-center justify-center shrink-0">
             <Meta.Icon size={11} />
           </span>
           <span className="text-[11px] font-semibold whitespace-nowrap">{t(Meta.shortKey)}</span>
@@ -80,10 +80,7 @@ export default function ModeSwitch({ value, onChange }: ModeSwitchProps) {
         <div
           role="dialog"
           aria-label={t('modeMenu')}
-          className="absolute bottom-full right-0 mb-2 w-[200px] p-1.5 rounded-2xl bg-[var(--bg-2)]/95 backdrop-blur-xl border border-[var(--border)]/80 shadow-2xl z-50 anim-effort-pop"
-          style={{
-            backgroundImage: 'linear-gradient(165deg, rgba(255,255,255,0.05), transparent 45%)',
-          }}
+          className="absolute bottom-full right-0 mb-2.5 w-[210px] p-1.5 rounded-2xl bg-[var(--glass-surface)] backdrop-blur-2xl border border-[var(--glass-border)] shadow-2xl z-50 anim-effort-pop ring-1 ring-black/5 dark:ring-white/10"
         >
           <div className="px-2 pt-1 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
             {t('modeMenu')}

@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { v4 as uuidv4 } from 'uuid';
 import type { Conversation, Message, ReasoningEffort, ChatMessage, ToolCall, ThinkingBlock } from '../types';
 import { useWorkspaceStore } from './workspace.store';
+import { useUIStore } from './ui.store';
 import { useSettingsStore, effectiveApprovalMode } from './settings.store';
 import { useLanguageStore } from './language.store';
 import { useTodosStore, type TodoStatus } from './todos.store';
@@ -233,19 +234,41 @@ async function persistMessage(message: Message): Promise<void> {
 const MAX_LIVE_SCREENSHOTS = 2;
 
 /**
- * Run a search or glob over every open folder when the model didn't name one.
- * With a single folder this is exactly what it always did; with several, results
- * are labelled by folder so two files with the same relative path stay
- * distinguishable in the answer.
+ * Search or glob the open workspace. When the model didn't name a folder, every
+ * open root is scanned (one call per root, run together) and the results merged;
+ * with a single folder that is exactly what it always did. A merged list is
+ * marked capped when ANY root stopped at its cap, so the model knows the list
+ * is incomplete instead of trusting "(200)" as everything there is. With no
+ * folder open there is nothing to scan — the old call fell through to the main
+ * process's own working directory, which was never the folder anyone meant.
  */
-async function searchAllRoots<T>(
-  explicitDir: string | undefined,
-  roots: string[],
-  run: (dir: string | undefined) => Promise<T[]>,
-): Promise<T[]> {
-  if (explicitDir || roots.length <= 1) return run(explicitDir || roots[0]);
-  const perRoot = await Promise.all(roots.map((root) => run(root)));
-  return perRoot.flat();
+async function searchWorkspace(action: FileAction, ws: ReturnType<typeof useWorkspaceStore.getState>): Promise<string> {
+  const dirs = action.path ? [action.path] : ws.allRoots();
+  if (!dirs.length) {
+    return 'Error: no project folder is open — open a folder first, or pass an absolute path to search.';
+  }
+  const parts = await Promise.all(dirs.map((dir) =>
+    window.electronAPI.fs.search({ query: action.query!, dir, isRegex: action.isRegex })));
+  const matches = parts.flatMap((part) => part.matches);
+  if (!matches.length) return `No matches for "${action.query}".`;
+  const capped = parts.some((part) => part.capped);
+  return `Search results for "${action.query}" (${matches.length}):\n` +
+    matches.map((match) => `${match.file}:${match.line}: ${match.text}`).join('\n') +
+    (capped ? '\n[The list stopped at the cap — refine the query or narrow the path for the rest.]' : '');
+}
+
+async function globWorkspace(action: FileAction, ws: ReturnType<typeof useWorkspaceStore.getState>): Promise<string> {
+  const dirs = action.path ? [action.path] : ws.allRoots();
+  if (!dirs.length) {
+    return 'Error: no project folder is open — open a folder first, or pass an absolute path to search.';
+  }
+  const parts = await Promise.all(dirs.map((dir) =>
+    window.electronAPI.fs.glob({ pattern: action.pattern!, dir })));
+  const files = parts.flatMap((part) => part.files);
+  if (!files.length) return `No files match "${action.pattern}".`;
+  const capped = parts.some((part) => part.capped);
+  return `Files matching "${action.pattern}" (${files.length}):\n` + files.join('\n') +
+    (capped ? '\n[The list stopped at the cap — narrow the pattern for the rest.]' : '');
 }
 
 /**
@@ -404,7 +427,15 @@ async function runCostSnapshot(convId?: string): Promise<string> {
  * model's `run_background` tool build on this; registration (if any) is the
  * caller's job.
  */
-async function startDetachedRun(content: string, providerId: string, modelId: string): Promise<string | null> {
+async function startDetachedRun(
+  content: string,
+  providerId: string,
+  modelId: string,
+  // Background children inherit the requesting conversation's mode; callers
+  // that have no parent context (manual "run in background") default to the
+  // view the user is looking at.
+  isChatMode = useUIStore.getState().viewMode === 'chat',
+): Promise<string | null> {
   if (isHolding(useInstallGateStore.getState().jobs)) return null;
   if (!content.trim() || !providerId || !modelId) return null;
   const set = useChatStore.setState;
@@ -415,6 +446,7 @@ async function startDetachedRun(content: string, providerId: string, modelId: st
     providerId,
     modelId,
     rootPath: ws.rootPath,
+    isChatMode,
   });
   const userMsg: Message = {
     id: uuidv4(),
@@ -428,7 +460,7 @@ async function startDetachedRun(content: string, providerId: string, modelId: st
   await window.electronAPI.conversation.update(conv.id, { title });
   const now = Date.now();
   set((s) => ({
-    conversations: [{ ...conv, title, updatedAt: now }, ...s.conversations],
+    conversations: [{ ...conv, title, updatedAt: now, isChatMode }, ...s.conversations],
   }));
   // runAgentLoop already isolates non-active runs (reloads its own persisted
   // transcript, guards all writes by conversation id) — fire and forget.
@@ -475,8 +507,8 @@ async function githubPluginGate(): Promise<string | null> {
 export async function runGithubPushText(message?: string): Promise<string> {
   const blocked = await githubPluginGate();
   if (blocked) return blocked;
-  const { useMarketStore } = await import('./market.store');
-  const res = await useMarketStore.getState().pushRepo(message);
+  const { useGithubPushStore } = await import('./githubPush.store');
+  const res = await useGithubPushStore.getState().request(message);
   return res.message;
 }
 
@@ -582,21 +614,10 @@ async function executeIndependentRead(
       return `Listing of ${action.path}:\n` +
         items.map((item: any) => `${item.isDirectory ? '[dir] ' : '      '}${item.name}`).join('\n');
     }
-    case 'search': {
-      const matches = await searchAllRoots(action.path, ws.allRoots(), (dir) =>
-        window.electronAPI.fs.search({ query: action.query!, dir, isRegex: action.isRegex }));
-      return matches.length
-        ? `Search results for "${action.query}" (${matches.length}):\n` +
-          matches.map((match: any) => `${match.file}:${match.line}: ${match.text}`).join('\n')
-        : `No matches for "${action.query}".`;
-    }
-    case 'glob': {
-      const files = await searchAllRoots(action.path, ws.allRoots(), (dir) =>
-        window.electronAPI.fs.glob({ pattern: action.pattern!, dir }));
-      return files.length
-        ? `Files matching "${action.pattern}" (${files.length}):\n` + files.join('\n')
-        : `No files match "${action.pattern}".`;
-    }
+    case 'search':
+      return searchWorkspace(action, ws);
+    case 'glob':
+      return globWorkspace(action, ws);
     case 'system_info':
       return `System info:\n${JSON.stringify(await window.electronAPI.app.getSystemInfo(), null, 2)}`;
     case 'background_status':
@@ -1323,14 +1344,16 @@ function buildSystemMessages(
   reviewMode = false,
   workspace = useWorkspaceStore.getState(),
   agentMode: AgentMode = 'standard',
+  isChatMode = useUIStore.getState().viewMode === 'chat',
 ): ChatMessage[] {
   const settings = useSettingsStore.getState();
   const ws = workspace;
   const systemMessages: ChatMessage[] = [];
   const promptToolset = nativeTools ? [] : buildToolset({
     planMode,
-    computerControl: useComputerStore.getState().enabled,
-    projectOpen: !!ws.rootPath,
+    computerControl: isChatMode ? false : useComputerStore.getState().enabled,
+    projectOpen: !isChatMode && !!ws.rootPath,
+    isChatMode,
   });
 
   // With native function calling the API carries the tool schemas, so the prompt
@@ -1419,22 +1442,38 @@ ${parallelRule}
 - ${closingRule}${sandboxNote}`,
   });
 
-  // Project memory (AGENTS.md / CLAUDE.md) — the project's house rules. Inject
-  // high in the prompt so the model treats them as authoritative instructions.
-  const memoryFileBlock = formatMemoryFiles(ws.memoryFiles || []);
-  if (memoryFileBlock) {
-    systemMessages.push({ role: 'system', content: memoryFileBlock });
-  } else if (ws.agentsMd && ws.agentsMd.trim()) {
+  if (isChatMode) {
     systemMessages.push({
       role: 'system',
-      content: `Project instructions from ${ws.agentsMdPath?.split('/').pop() || 'AGENTS.md'} — follow them unless the user overrides:\n\n${ws.agentsMd.trim()}`,
+      content: `# Mode: Chat Mode (对话模式)
+You are currently in Chat Mode. In Chat Mode, your sole responsibility is conversation, technical discussion, Q&A, and concept explanations ("chat只负责对话").
+- DO NOT read, inspect, or search the local workspace or project files without explicit user approval ("不要读取工作区").
+- You do NOT have automatic access to the user's workspace files in Chat Mode.
+- If answering the user's request requires reading or inspecting their local workspace (such as checking project files, viewing directory structures, searching the codebase, inspecting git changes, or executing commands):
+  1. DO NOT silently read the workspace.
+  2. Clearly explain to the user what you need to read from the workspace and ask for their approval ("读取工作区需要获得批准").
+  3. Ask the user whether they would like to switch to Work mode ("然后询问是否切换work模式"), and ALWAYS include the marker \`[SUGGEST_WORK_MODE]\` at the end of your response. ConeCode will render an interactive card allowing the user to approve and switch to Work mode with a single click.`,
     });
   }
 
-  // Long-term memory: what previous sessions learned about this user. Placed
-  // high so tone/process guidance shapes the whole reply, not just its ending.
-  const memoryBlock = useMemoryStore.getState().promptBlock(ws.rootPath);
-  if (memoryBlock) systemMessages.push({ role: 'system', content: memoryBlock });
+  // Project memory (AGENTS.md / CLAUDE.md) — the project's house rules. Inject
+  // high in the prompt so the model treats them as authoritative instructions.
+  if (!isChatMode) {
+    const memoryFileBlock = formatMemoryFiles(ws.memoryFiles || []);
+    if (memoryFileBlock) {
+      systemMessages.push({ role: 'system', content: memoryFileBlock });
+    } else if (ws.agentsMd && ws.agentsMd.trim()) {
+      systemMessages.push({
+        role: 'system',
+        content: `Project instructions from ${ws.agentsMdPath?.split('/').pop() || 'AGENTS.md'} — follow them unless the user overrides:\n\n${ws.agentsMd.trim()}`,
+      });
+    }
+
+    // Long-term memory: what previous sessions learned about this user. Placed
+    // high so tone/process guidance shapes the whole reply, not just its ending.
+    const memoryBlock = useMemoryStore.getState().promptBlock(ws.rootPath);
+    if (memoryBlock) systemMessages.push({ role: 'system', content: memoryBlock });
+  }
 
   // Installed skills: ids + descriptions only. Bodies are pulled on demand by
   // use_skill, so the library can grow without eating the context window.
@@ -1496,16 +1535,20 @@ Investigate the request thoroughly, then present a concise, numbered implementat
     if (overlay) systemMessages.push({ role: 'system', content: overlay });
   }
 
+  const now = new Date();
+  const localDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const localTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
   systemMessages.push({
     role: 'system',
     content: `Runtime context (may change between turns):
-Environment: ${platformLabel()} · ${new Date().toISOString().slice(0, 10)}
-Workspace: ${describeRoots(ws)}
-Open file: ${ws.selectedFile || 'None'}`,
+Environment: ${platformLabel()} · ${localDate} ${localTime}
+Workspace: ${isChatMode ? 'None (Chat Mode)' : describeRoots(ws)}
+Open file: ${isChatMode ? 'None' : (ws.selectedFile || 'None')}`,
   });
 
   // Auto-include the currently open file.
-  if (settings.autoIncludeFileContext && ws.selectedFile && ws.fileContent != null) {
+  if (!isChatMode && settings.autoIncludeFileContext && ws.selectedFile && ws.fileContent != null) {
     if (ws.selectedFileIsImage) {
       // The open file is an image — its fileContent is a base64 data URL, so
       // send it as a vision message rather than dumping the base64 as text.
@@ -1808,8 +1851,34 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
 
   const turnStartTime = Date.now();
   const workspaceAtStart = useWorkspaceStore.getState();
-  const workspaceRoots = workspaceAtStart.allRoots();
-  const taskWorkspace = { ...workspaceAtStart, allRoots: () => workspaceRoots };
+  const convRecord = get().conversations.find((c) => c.id === convId);
+  const viewMode = useUIStore.getState().viewMode;
+  // A conversation that EXISTS decides its own mode. The flag was introduced
+  // with Chat Mode, so every conversation saved before it — and any background
+  // child created before the flag is stamped — lacks the field: interpreting
+  // the missing flag as "whatever the UI shows right now" downgraded old coding
+  // conversations to a workspace-less chat the moment the app updated. A
+  // missing flag therefore reads as Work mode (the only behaviour that
+  // existed); only a conversation with no record at all falls back to the
+  // current view mode.
+  const isChatMode = convRecord
+    ? (convRecord.isChatMode ?? false)
+    : (viewMode === 'chat');
+  const workspaceRoots = isChatMode ? [] : workspaceAtStart.allRoots();
+  const taskWorkspace = isChatMode
+    ? {
+        ...workspaceAtStart,
+        rootPath: null,
+        files: [],
+        extraRoots: [],
+        selectedFile: null,
+        fileContent: null,
+        agentsMd: null,
+        agentsMdPath: null,
+        memoryFiles: [],
+        allRoots: () => [] as string[],
+      }
+    : { ...workspaceAtStart, allRoots: () => workspaceRoots };
   const planMode = get().planMode;
   const reviewMode = get().reviewMode;
   const agentMode = get().agentMode;
@@ -1854,16 +1923,17 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
     for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
       if (abortController.signal.aborted || !ownsRun()) break;
       capCandidate = false;
-
+ 
       const selectedModel = resolveModel();
       const modelName = selectedModel?.name || modelId;
       const sessionKey = `${providerId}:${modelId}`;
       const toolset = shouldUseNativeTools(selectedModel, sessionKey)
         ? buildToolset({
             planMode: planMode || reviewMode,
-            mcpTools: taskWorkspace.mcpTools,
-            computerControl: useComputerStore.getState().enabled,
-            projectOpen: !!taskWorkspace.rootPath,
+            mcpTools: isChatMode ? [] : taskWorkspace.mcpTools,
+            computerControl: isChatMode ? false : useComputerStore.getState().enabled,
+            projectOpen: !isChatMode && !!taskWorkspace.rootPath,
+            isChatMode,
           })
         : [];
       const useNativeTools = toolset.length > 0;
@@ -1883,6 +1953,7 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
           reviewMode,
           taskWorkspace,
           agentMode,
+          isChatMode,
         ),
         // Local UI notices (/help, /diff output, etc.) are shown in the
         // transcript but must not be replayed to the model as context; tool
@@ -2329,7 +2400,20 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
 
         let image: string | undefined;
         try {
-        switch (action.action) {
+          // Chat mode is dialogue-only. Deny by DEFAULT here rather than
+          // listing what is forbidden: the action protocol is an open surface
+          // (a new tool would otherwise arrive in chat before anyone thought
+          // to gate it). Only proven-safe, workspace-free actions pass.
+          const CHAT_ALLOWED_ACTIONS = new Set([
+            'ask_user', 'update_todos', 'background_status',
+            'web_search', 'web_fetch', 'system_info',
+            'perf_snapshot', 'perf_monitor', 'perf_inspect', 'cost_snapshot',
+          ]);
+          if (isChatMode && !CHAT_ALLOWED_ACTIONS.has(action.action)) {
+            result = `Permission denied: In Chat mode, reading or accessing the workspace (or driving the machine) is blocked and requires user approval. Please explain to the user why you need to read the workspace, ask for their approval, and suggest switching to Work mode by appending [SUGGEST_WORK_MODE] to your response.`;
+            break;
+          }
+          switch (action.action) {
           case 'read_file': {
             const fileContent = await window.electronAPI.fs.readFile(action.path!);
             result = fileContent !== null
@@ -2344,20 +2428,11 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
             break;
           }
           case 'search': {
-            const matches = await searchAllRoots(action.path, ws.allRoots(), (dir) =>
-              window.electronAPI.fs.search({ query: action.query!, dir, isRegex: action.isRegex }));
-            result = matches.length
-              ? `Search results for "${action.query}" (${matches.length}):\n` +
-                matches.map((m: any) => `${m.file}:${m.line}: ${m.text}`).join('\n')
-              : `No matches for "${action.query}".`;
+            result = await searchWorkspace(action, ws);
             break;
           }
           case 'glob': {
-            const files = await searchAllRoots(action.path, ws.allRoots(), (dir) =>
-              window.electronAPI.fs.glob({ pattern: action.pattern!, dir }));
-            result = files.length
-              ? `Files matching "${action.pattern}" (${files.length}):\n` + files.join('\n')
-              : `No files match "${action.pattern}".`;
+            result = await globWorkspace(action, ws);
             break;
           }
           case 'create_file': {
@@ -2423,7 +2498,7 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
               break;
             }
             const title = task.replace(/\s+/g, ' ').slice(0, 50);
-            const childId = await startDetachedRun(task, providerId, modelId);
+            const childId = await startDetachedRun(task, providerId, modelId, isChatMode);
             if (!childId) {
               result = 'Error: the background run could not start (an install may be holding the model).';
               shouldContinue = true;
@@ -2969,7 +3044,7 @@ interface ChatStore {
   togglePlanMode: () => void;
   setReviewMode: (on: boolean) => void;
   fetchConversations: () => Promise<void>;
-  createConversation: (providerId: string, modelId: string) => Promise<string>;
+  createConversation: (providerId: string, modelId: string, folderPath?: string | null) => Promise<string>;
   setActiveConversation: (id: string) => Promise<void>;
   setConversationFolder: (rootPath: string | null) => Promise<void>;
   /**
@@ -3065,10 +3140,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     set({ conversations });
   },
 
-  createConversation: async (providerId, modelId) => {
+  createConversation: async (providerId, modelId, folderPath) => {
     const state = get();
     conversationLoadRequest++;
     const ws = useWorkspaceStore.getState();
+    const viewMode = useUIStore.getState().viewMode;
 
     // One folder supports many conversations: a new chat inherits whatever
     // folder is currently open instead of starting from "Open Folder". The
@@ -3081,14 +3157,21 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       set({ workspaceSnapshots: newSnapshots });
     }
 
-    // Always adopt the current folder (possibly null). Persisting it on the
-    // record keeps the binding across app restarts, and several records may
-    // legitimately point at the same folder.
+    const isChat = viewMode === 'chat';
+    const rootPath = folderPath !== undefined
+      ? folderPath
+      : (isChat ? null : ws.rootPath);
+
     const conv = await window.electronAPI.conversation.create({
       providerId,
       modelId,
-      rootPath: ws.rootPath,
+      rootPath,
+      // Persist the mode with the conversation: without this it silently
+      // reverts to whatever the renderer guesses after a restart (the storage
+      // layer only keeps what it is told about).
+      isChatMode: isChat,
     });
+    conv.isChatMode = isChat;
     useTodosStore.getState().clearTodos();
     set((s) => ({ conversations: [conv, ...s.conversations], activeConversationId: conv.id, messages: [] }));
     return conv.id;
@@ -3169,9 +3252,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     // Extra folders are part of the workspace too, so a conversation that had
     // three folders open comes back with three, not one.
     const extraRoots = useWorkspaceStore.getState().extraRoots.map((r) => r.path);
-    await window.electronAPI.conversation.update(convId, { rootPath, extraRoots });
+    // A conversation that opens a folder is a Work-mode conversation from here
+    // on — persist that too, or the flag would revert after a restart.
+    await window.electronAPI.conversation.update(convId, { rootPath, extraRoots, isChatMode: false });
     set((s) => ({
-      conversations: s.conversations.map((c) => c.id === convId ? { ...c, rootPath } : c),
+      conversations: s.conversations.map((c) => c.id === convId ? { ...c, rootPath, isChatMode: false } : c),
     }));
   },
 
@@ -3330,8 +3415,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     } catch {
       return;
     }
-    // Re-check after the awaits: a run may have started meanwhile.
-    if (get().streamingRuns[conversationId] || get().messageEdits[conversationId]) return;
+    // Another flush may have acquired the delivery lock during these reads.
+    if (flushingQueues.has(conversationId)
+      || get().streamingRuns[conversationId] || get().messageEdits[conversationId]) return;
     const head = get().queuedMessages[conversationId]?.[0];
     if (!head) return;
     flushingQueues.add(conversationId);
@@ -3346,6 +3432,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     } finally {
       flushingQueues.delete(conversationId);
     }
+    // endRun fires before delivery resolves, while this flush still owns its
+    // lock. Resume after releasing it so the next queued turn cannot get stuck.
+    await get().flushQueue(conversationId);
   },
 
   feedToolResults: async (conversationId, providerId, modelId, content) => {

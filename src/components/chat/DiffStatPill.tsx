@@ -1,5 +1,6 @@
+import { useConversationChanges } from './useConversationChanges';
 import { useMemo } from 'react';
-import { useCodeChangesStore, useLanguageStore } from '../../stores';
+import { useLanguageStore } from '../../stores';
 import type { CodeChange } from '../../stores/codeChanges.store';
 
 // Line-level diff via LCS — returns how many lines were added/removed.
@@ -30,7 +31,7 @@ function statsFor(c: CodeChange): { added: number; removed: number } {
 // Small floating pill above the input box summarizing the files the agent has
 // edited this session and the total lines added/removed.
 export default function DiffStatPill() {
-  const changes = useCodeChangesStore((s) => s.changes);
+  const changes = useConversationChanges();
   const { t } = useLanguageStore();
 
   const { files, added, removed } = useMemo(() => {
@@ -51,13 +52,12 @@ export default function DiffStatPill() {
 
   return (
     <div className="max-w-[900px] mx-auto w-full px-4 mb-2 flex justify-center">
-      {/* Themed via variables, not literals: this floats over the chat in both
-          light and dark, and a hardcoded dark chip stayed dark on cream. */}
-      <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-medium shadow-lg
-        bg-[var(--bg-2)] text-[var(--text-primary)] border border-[var(--border)]">
-        <span>{files} {t('filesChanged')}</span>
-        {added > 0 && <span className="text-[var(--success)]">+{added}</span>}
-        {removed > 0 && <span className="text-[var(--error)]">-{removed}</span>}
+      {/* Themed via variables, floating frosted pill */}
+      <div className="inline-flex items-center gap-2.5 px-4 py-1.5 rounded-full text-xs font-medium shadow-md
+        bg-[var(--glass-card)]/90 backdrop-blur-xl text-[var(--text-primary)] border border-[var(--glass-border)] ring-1 ring-black/5 dark:ring-white/10">
+        <span className="font-medium">{files} {t('filesChanged')}</span>
+        {added > 0 && <span className="text-[var(--success)] font-semibold">+{added}</span>}
+        {removed > 0 && <span className="text-[var(--error)] font-semibold">-{removed}</span>}
       </div>
     </div>
   );

@@ -37,26 +37,27 @@ export default function SkillsPanel({ t }: { t: (k: string) => string }) {
   useEffect(() => { if (!loaded) void load(); }, [loaded, load]);
 
   return (
-    <div className="bg-[var(--bg-2)] border border-[var(--border)] rounded-xl p-4">
-      <div className="flex items-center gap-2 mb-1">
-        <FiPackage size={14} className="text-[var(--accent)]" />
-        <span className="font-medium text-sm">{t('skills')}</span>
-        {installed.length > 0 && (
-          <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--accent-soft)] text-[var(--accent)]">
-            {installed.length}
-          </span>
-        )}
+    <div className="bg-[var(--bg-2)] border border-[var(--border)] rounded-2xl p-4 shadow-2xs">
+      <div className="flex items-center justify-between gap-2 mb-3">
+        <div className="flex items-center gap-2">
+          <FiPackage size={14} className="text-[var(--accent)]" />
+          <span className="font-semibold text-sm text-[var(--text-primary)]">{t('skills')}</span>
+          {installed.length > 0 && (
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-[var(--accent-soft)] text-[var(--accent)] border border-[var(--accent)]/30 font-medium">
+              {installed.length}
+            </span>
+          )}
+        </div>
         <button
           onClick={() => setEditing({})}
-          className="ml-auto inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-[var(--bg-3)] text-[10px] font-medium text-[var(--text-secondary)] hover:text-[var(--accent)] border border-[var(--border)] hover:border-[var(--accent)] transition-colors"
+          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-[var(--bg-1)] text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--accent)] border border-[var(--border)] hover:border-[var(--accent)] transition-all shadow-2xs cursor-pointer"
         >
-          <FiPlus size={10} /> {t('skillNew')}
+          <FiPlus size={11} /> {t('skillNew')}
         </button>
       </div>
-      <p className="text-xs text-[var(--text-muted)] mb-3">{t('skillsHint')}</p>
 
       {editing && (
-        <div className="mb-3">
+        <div className="mb-3.5">
           <SkillEditor
             t={t}
             initial={editing.draft}
@@ -69,13 +70,13 @@ export default function SkillsPanel({ t }: { t: (k: string) => string }) {
 
       {/* ---- Installed ---- */}
       {installed.length > 0 && (
-        <ul className="space-y-1 mb-3">
+        <ul className="space-y-1.5 mb-3.5">
           {installed.map((skill) => {
             const disabled = skill.enabled === false;
             const shadowed = skill.scope === 'global'
               && installed.some((other) => other.scope === 'project' && other.id === skill.id);
             return (
-            <li key={`${skill.scope}:${skill.id}`} className={`group rounded-lg bg-[var(--bg-3)]/50 px-2.5 py-1.5 ${disabled ? 'opacity-60' : ''}`}>
+            <li key={`${skill.scope}:${skill.id}`} className={`group rounded-xl bg-[var(--bg-1)]/70 border border-[var(--border)] px-3 py-2 ${disabled ? 'opacity-60' : ''} hover:border-[var(--accent)]/40 transition-all`}>
               <div className="flex items-start gap-2">
                 <span className="mt-0.5 shrink-0 text-[var(--text-muted)]" title={t(skill.scope === 'global' ? 'skillGlobal' : 'skillProject')}>
                   {skill.scope === 'global' ? <FiGlobe size={11} /> : <FiFolder size={11} />}

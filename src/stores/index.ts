@@ -3,7 +3,7 @@ export { useModelStore } from './model.store';
 export { useChatStore } from './chat.store';
 export { useSettingsStore } from './settings.store';
 export { useUIStore } from './ui.store';
-export { useLanguageStore } from './language.store';
+export { useLanguageStore, LOCALES, type Locale } from './language.store';
 export { useThemeStore } from './theme.store';
 export { useWorkspaceStore } from './workspace.store';
 export { useCodeChangesStore } from './codeChanges.store';

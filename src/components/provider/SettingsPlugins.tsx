@@ -92,105 +92,116 @@ export default function SettingsPlugins({ t }: { t: (k: string) => string }) {
     <div className="min-w-0">
       {view.kind === 'list' && (
         <>
-          <div className="flex items-center gap-1 mb-1">
-            <h3 className="text-xl font-semibold text-[var(--text-primary)]">{t('pluginsTitle')}</h3>
-            <div className="flex-1" />
-            <button
-              onClick={() => void useMarketStore.getState().refresh()}
-              title={t('pluginRefresh')}
-              className="w-8 h-8 rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:bg-[var(--bg-3)] transition-colors"
-            >
-              <FiRefreshCw size={14} />
-            </button>
-            <div className="relative">
+          <div className="flex items-center justify-between gap-2.5 mb-4">
+            <div className="relative flex-1">
+              <FiSearch size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[var(--text-muted)]" />
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder={t('pluginSearchPh')}
+                spellCheck={false}
+                className="w-full pl-9 pr-3.5 py-2 rounded-xl bg-[var(--bg-1)] border border-[var(--border)] text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] outline-none focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/20 transition-all shadow-2xs"
+              />
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
               <button
-                onClick={() => setAddOpen((v) => !v)}
-                className="h-8 px-3 rounded-lg bg-[var(--text-primary)] text-[var(--bg-0)] text-[13px] font-medium flex items-center gap-1 hover:opacity-90 transition-opacity"
+                onClick={() => void useMarketStore.getState().refresh()}
+                title={t('pluginRefresh')}
+                className="w-8 h-8 rounded-xl flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-1)] border border-[var(--border)] transition-all shadow-2xs cursor-pointer"
               >
-                {t('pluginAdd')} <FiChevronDown size={13} />
+                <FiRefreshCw size={13} />
               </button>
-              {addOpen && (
-                <>
-                  <div className="fixed inset-0 z-40" onClick={() => setAddOpen(false)} />
-                  <div className="absolute right-0 top-full mt-1.5 w-44 rounded-2xl border border-[var(--border)] bg-[var(--bg-2)] shadow-xl z-50 py-1.5 anim-menu">
-                    <button
-                      onClick={() => { setAddOpen(false); setView({ kind: 'create' }); }}
-                      className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] text-[var(--text-secondary)] hover:bg-[var(--bg-3)] transition-colors"
-                    >
-                      <FiPlus size={14} />{t('pluginCreate')}
-                    </button>
-                    <button
-                      onClick={() => { setAddOpen(false); setView({ kind: 'sync' }); }}
-                      className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] text-[var(--text-secondary)] hover:bg-[var(--bg-3)] transition-colors"
-                    >
-                      <FiGithub size={14} />{t('pluginAddGithub')}
-                    </button>
-                  </div>
-                </>
-              )}
+              <div className="relative">
+                <button
+                  onClick={() => setAddOpen((v) => !v)}
+                  className="h-8 px-3 rounded-xl bg-gradient-to-r from-[var(--accent)] to-[#e88a6a] text-white text-xs font-medium flex items-center gap-1.5 hover:opacity-95 shadow-2xs transition-all cursor-pointer"
+                >
+                  <FiPlus size={13} /> {t('pluginAdd')} <FiChevronDown size={12} />
+                </button>
+                {addOpen && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setAddOpen(false)} />
+                    <div className="absolute right-0 top-full mt-1.5 w-44 rounded-2xl border border-[var(--border)] bg-[var(--bg-2)] shadow-2xl z-50 py-1.5 anim-menu ring-1 ring-black/5 dark:ring-white/10">
+                      <button
+                        onClick={() => { setAddOpen(false); setView({ kind: 'create' }); }}
+                        className="w-full flex items-center gap-2.5 px-3.5 py-2 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-3)] transition-colors cursor-pointer"
+                      >
+                        <FiPlus size={13} />{t('pluginCreate')}
+                      </button>
+                      <button
+                        onClick={() => { setAddOpen(false); setView({ kind: 'sync' }); }}
+                        className="w-full flex items-center gap-2.5 px-3.5 py-2 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-3)] transition-colors cursor-pointer"
+                      >
+                        <FiGithub size={13} />{t('pluginAddGithub')}
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
           </div>
-          <p className="text-[13px] text-[var(--text-muted)] mb-3">{t('pluginsDesc')}</p>
 
-          <div className="relative mb-3">
-            <FiSearch size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[var(--text-muted)]" />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder={t('pluginSearchPh')}
-              spellCheck={false}
-              className="w-full pl-9 pr-3.5 py-2.5 rounded-full bg-[var(--bg-2)] border border-[var(--border)] text-[13px] outline-none focus:border-[var(--accent)]/50"
-            />
-          </div>
-
-          <div className="flex items-center gap-2 mb-1">
-            <h4 className="text-[15px] font-semibold text-[var(--text-primary)]">{t('pluginInstalled')}</h4>
-            <div className="flex-1" />
-            {(['all', 'builtin', 'market', 'custom'] as Chip[]).map((c) => (
-              <button
-                key={c}
-                onClick={() => setChip(c)}
-                className={`px-2.5 py-1 rounded-lg text-[12px] transition-colors ${
-                  chip === c
-                    ? 'bg-[var(--bg-3)] text-[var(--text-primary)] font-medium'
-                    : 'text-[var(--text-muted)] hover:bg-[var(--bg-3)]/60'
-                }`}
-              >
-                {t(`pluginChip_${c}`)}
-              </button>
-            ))}
-          </div>
-          <div className="divide-y divide-[var(--border)] mb-4">
-            {installed.length === 0 && (
-              <p className="py-3 text-[13px] text-[var(--text-muted)]">{t('pluginEmpty')}</p>
-            )}
-            {installed.map((p) => (
-              <InstalledRow key={p.id} plugin={p} t={t} onOpen={() => setView({ kind: 'detail', id: p.id })} />
-            ))}
-          </div>
-
-          <h4 className="text-[15px] font-semibold text-[var(--text-primary)] mb-2">{t('pluginHot')}</h4>
-          <div className="grid grid-cols-2 gap-x-6 gap-y-4">
-            {hot.map((p) => (
-              <button
-                key={p.id}
-                onClick={() => setView({ kind: 'detail', id: p.id })}
-                className="flex items-center gap-2.5 text-left min-w-0 group"
-              >
-                <IconTile icon={p.icon} />
-                <span className="flex-1 min-w-0">
-                  <span className="block text-[14px] font-medium text-[var(--text-primary)] truncate group-hover:text-[var(--accent)] transition-colors">
-                    {pluginDisplayName(p, t)}
-                  </span>
-                  <span className="block text-[12px] text-[var(--text-muted)] truncate">{pluginDisplayDesc(p, t)}</span>
-                </span>
-                {p.skillInstalled && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--accent-soft)] text-[var(--accent)] font-medium shrink-0">
-                    {t('pluginInstalled')}
+          <div className="bg-[var(--bg-2)] border border-[var(--border)] rounded-2xl p-4 shadow-2xs mb-4">
+            <div className="flex items-center justify-between gap-2 mb-3 pb-2.5 border-b border-[var(--border)]/60">
+              <div className="flex items-center gap-2">
+                <FiBox size={14} className="text-[var(--accent)]" />
+                <h4 className="font-semibold text-sm text-[var(--text-primary)]">{t('pluginInstalled')}</h4>
+                {installed.length > 0 && (
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-[var(--accent-soft)] text-[var(--accent)] border border-[var(--accent)]/30 font-medium font-mono">
+                    {installed.length}
                   </span>
                 )}
-              </button>
-            ))}
+              </div>
+              <div className="inline-flex p-0.5 bg-[var(--bg-1)] border border-[var(--border)] rounded-lg gap-0.5">
+                {(['all', 'builtin', 'market', 'custom'] as Chip[]).map((c) => (
+                  <button
+                    key={c}
+                    onClick={() => setChip(c)}
+                    className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-all cursor-pointer ${
+                      chip === c
+                        ? 'bg-[var(--bg-2)] text-[var(--accent)] font-semibold shadow-2xs border border-[var(--border)]/70'
+                        : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] border border-transparent'
+                    }`}
+                  >
+                    {t(`pluginChip_${c}`)}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="divide-y divide-[var(--border)]">
+              {installed.length === 0 && (
+                <p className="py-4 text-xs text-[var(--text-muted)] text-center">{t('pluginEmpty')}</p>
+              )}
+              {installed.map((p) => (
+                <InstalledRow key={p.id} plugin={p} t={t} onOpen={() => setView({ kind: 'detail', id: p.id })} />
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-2.5">
+            <h4 className="text-xs font-semibold text-[var(--text-secondary)] uppercase tracking-wider px-1">{t('pluginHot')}</h4>
+            <div className="grid grid-cols-2 gap-3">
+              {hot.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => setView({ kind: 'detail', id: p.id })}
+                  className="flex items-center gap-3 p-3.5 rounded-2xl bg-[var(--bg-2)] border border-[var(--border)] text-left min-w-0 group hover:border-[var(--accent)]/50 hover:bg-[var(--bg-3)]/30 transition-all shadow-2xs cursor-pointer"
+                >
+                  <IconTile icon={p.icon} />
+                  <span className="flex-1 min-w-0">
+                    <span className="block text-xs font-semibold text-[var(--text-primary)] truncate group-hover:text-[var(--accent)] transition-colors">
+                      {pluginDisplayName(p, t)}
+                    </span>
+                    <span className="block text-[11px] text-[var(--text-muted)] truncate mt-0.5">{pluginDisplayDesc(p, t)}</span>
+                  </span>
+                  {p.skillInstalled && (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-[var(--accent-soft)] text-[var(--accent)] font-medium border border-[var(--accent)]/30 shrink-0">
+                      {t('pluginInstalled')}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
           </div>
         </>
       )}
@@ -220,31 +231,31 @@ function InstalledRow({ plugin: p, t, onOpen }: { plugin: PluginEntry; t: (k: st
   const setEnabled = usePluginStore((s) => s.setEnabled);
   const removeCustom = usePluginStore((s) => s.removeCustom);
   return (
-    <div className="flex items-center gap-2.5 py-2.5 min-w-0">
+    <div className="flex items-center gap-3 py-2.5 min-w-0">
       <IconTile icon={p.icon} size="w-9 h-9" />
       <div className="flex-1 min-w-0">
-        <p className="text-[14px] font-medium text-[var(--text-primary)] truncate">{pluginDisplayName(p, t)}</p>
-        <p className="text-[12px] text-[var(--text-muted)] truncate">{pluginDisplayDesc(p, t)}</p>
+        <p className="text-sm font-medium text-[var(--text-primary)] truncate">{pluginDisplayName(p, t)}</p>
+        <p className="text-xs text-[var(--text-muted)] truncate mt-0.5">{pluginDisplayDesc(p, t)}</p>
       </div>
-      <span className={`text-[10px] px-1.5 py-0.5 rounded-md shrink-0 ${KIND_BADGE[p.kind]}`}>
+      <span className={`text-[10px] px-2 py-0.5 rounded-full shrink-0 font-medium ${KIND_BADGE[p.kind]}`}>
         {t(`pluginChip_${p.kind}`)}
       </span>
       {p.view && (
         <button onClick={onOpen} title={t('pluginOpen')}
-          className="px-2.5 py-1 rounded-lg text-[12px] text-[var(--accent)] hover:bg-[var(--accent-soft)] transition-colors shrink-0">
+          className="px-2.5 py-1 rounded-lg text-xs text-[var(--accent)] hover:bg-[var(--accent-soft)] transition-colors shrink-0 cursor-pointer">
           {t('pluginOpen')}
         </button>
       )}
       <button
         onClick={() => setEnabled(p.id, !p.enabled)}
         title={t(p.enabled ? 'pluginDisable' : 'pluginEnable')}
-        className={`w-9 h-5 rounded-full transition-colors shrink-0 relative ${p.enabled ? 'bg-[var(--accent)]' : 'bg-[var(--bg-4)]'}`}
+        className={`w-9 h-5 rounded-full transition-colors shrink-0 relative cursor-pointer ${p.enabled ? 'bg-[var(--accent)]' : 'bg-[var(--bg-4)]'}`}
       >
         <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${p.enabled ? 'left-[18px]' : 'left-0.5'}`} />
       </button>
       {p.kind === 'custom' && (
         <button onClick={() => removeCustom(p.id)} title={t('pluginRemove')}
-          className="w-7 h-7 rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--error)] transition-colors shrink-0">
+          className="w-7 h-7 rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--error)] transition-colors shrink-0 cursor-pointer">
           <FiX size={13} />
         </button>
       )}

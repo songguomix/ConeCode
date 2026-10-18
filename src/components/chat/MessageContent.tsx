@@ -294,21 +294,21 @@ function MarkdownText({ text }: { text: string }) {
         switch (block.type) {
           case 'heading': {
             const sz =
-              block.level <= 1 ? 'text-[16px]'
-              : block.level === 2 ? 'text-[15px]'
-              : block.level === 3 ? 'text-[14px]'
-              : 'text-[13px]';
+              block.level <= 1 ? 'text-[22px]'
+              : block.level === 2 ? 'text-[19px]'
+              : block.level === 3 ? 'text-[17px]'
+              : 'text-[15.5px]';
             return (
-              <div key={k} className={`font-semibold mt-2 mb-0.5 ${sz}`}>
+              <div key={k} className={`font-serif font-bold mt-4 mb-2 ${sz} tracking-tight text-[var(--text-primary)]`}>
                 <InlineText text={block.text} k={`${k}-h`} />
               </div>
             );
           }
           case 'hr':
-            return <hr key={k} className="my-2 border-[var(--border)]" />;
+            return <hr key={k} className="my-2.5 border-[var(--border)]" />;
           case 'quote':
             return (
-              <blockquote key={k} className="border-l-2 border-[var(--accent)] pl-3 my-1 text-[var(--text-secondary)] space-y-0.5">
+              <blockquote key={k} className="font-serif font-bold border-l-[3px] border-[var(--accent)] pl-3.5 my-3 text-[15.5px] text-[var(--text-primary)] italic space-y-1 bg-[var(--bg-1)]/40 py-2 rounded-r-xl">
                 {block.text.split('\n').map((line, li) => (
                   <div key={li}><InlineText text={line} k={`${k}-q-${li}`} /></div>
                 ))}
@@ -321,7 +321,7 @@ function MarkdownText({ text }: { text: string }) {
           default: {
             const lines = block.text.split('\n');
             return (
-              <p key={k} className="leading-relaxed">
+              <p key={k} className="leading-relaxed font-[450]">
                 {lines.map((l, li) => (
                   <span key={li}>{li > 0 && <br />}<InlineText text={l} k={`${k}-p-${li}`} /></span>
                 ))}
@@ -350,10 +350,11 @@ function MessageContent({
   // cards after the prose.
   toolCalls?: { id: string; name: string; arguments: Record<string, any> }[];
 }) {
-  const segments = useMemo(() => parseSegments(content), [content]);
+  const cleanContent = useMemo(() => content.replace(/\[SUGGEST_WORK_MODE\]/g, '').trimEnd(), [content]);
+  const segments = useMemo(() => parseSegments(cleanContent), [cleanContent]);
 
   return (
-    <div className="text-[15px] leading-[1.6] text-[var(--text-primary)]">
+    <div className="text-[16px] leading-[1.68] font-[450] text-[var(--text-primary)]">
       {segments.map((seg, i) => {
         if (seg.type === 'action') return <ActionCard key={i} action={seg.action} />;
         if (seg.type === 'code') return <CodeBlock key={i} lang={seg.lang} code={seg.code} />;

@@ -87,13 +87,13 @@ export default function QuestionPromptCard({ message }: QuestionPromptCardProps)
       className="w-full rounded-2xl border border-[var(--border)] bg-[var(--bg-2)] shadow-xl overflow-hidden outline-none select-text anim-slide-up"
       style={{ opacity: 1 }}
     >
-      {/* Top Header Bar - fully opaque */}
+      {/* Top Header Bar */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border)] bg-[var(--bg-1)]">
         <div className="flex items-center gap-2.5 min-w-0">
-          <div className="w-7 h-7 rounded-lg bg-[var(--accent-bg)] text-[var(--accent)] flex items-center justify-center shrink-0">
+          <div className="w-7 h-7 rounded-lg bg-[var(--accent-bg)] text-[var(--accent)] flex items-center justify-center shrink-0 shadow-2xs">
             <FiHelpCircle size={14} />
           </div>
-          <h3 className="text-[13px] font-semibold text-[var(--text-primary)] truncate">
+          <h3 className="text-[14.5px] font-bold text-[var(--text-primary)] font-serif tracking-tight truncate">
             {t('aiAsking') || 'AI 正在提问'}
           </h3>
         </div>
@@ -104,10 +104,10 @@ export default function QuestionPromptCard({ message }: QuestionPromptCardProps)
         </span>
       </div>
 
-      {/* Question Content & Interaction Body - fully opaque */}
+      {/* Question Content & Interaction Body */}
       <div className="p-4 space-y-3.5 bg-[var(--bg-2)]">
         {/* Question Text */}
-        <div className="text-[14px] text-[var(--text-primary)] font-medium leading-relaxed whitespace-pre-wrap max-h-[35vh] overflow-y-auto">
+        <div className="text-[16px] text-[var(--text-primary)] font-serif font-bold leading-relaxed whitespace-pre-wrap max-h-[35vh] overflow-y-auto">
           {message.content}
         </div>
 
@@ -123,7 +123,7 @@ export default function QuestionPromptCard({ message }: QuestionPromptCardProps)
                   key={index}
                   onClick={() => void handleAnswer(option)}
                   disabled={submitting}
-                  className="px-3.5 py-1.5 rounded-xl border border-[var(--border)] bg-[var(--bg-1)] hover:bg-[var(--accent-bg)] hover:border-[var(--accent-border)] text-[var(--text-primary)] hover:text-[var(--accent)] text-[12.5px] font-medium transition-all shadow-2xs flex items-center gap-1.5 active:scale-[0.98] disabled:opacity-50 cursor-pointer"
+                  className="px-3.5 py-1.5 rounded-xl border border-[var(--border)] bg-[var(--bg-1)] hover:bg-[var(--accent-bg)] hover:border-[var(--accent-border)] text-[var(--text-primary)] hover:text-[var(--accent)] text-[13.5px] font-semibold transition-all shadow-2xs flex items-center gap-1.5 active:scale-[0.98] disabled:opacity-50 cursor-pointer"
                 >
                   <span>{option}</span>
                 </button>
@@ -132,7 +132,7 @@ export default function QuestionPromptCard({ message }: QuestionPromptCardProps)
           </div>
         )}
 
-        {/* Custom Input Field (支持用户自定义输入) - textarea with full opacity */}
+        {/* Custom Input Field (支持用户自定义输入) */}
         <div className="space-y-1.5 pt-1">
           {hasOptions && (
             <div className="text-[11px] font-medium text-[var(--text-muted)]">
@@ -164,7 +164,7 @@ export default function QuestionPromptCard({ message }: QuestionPromptCardProps)
             <button
               onClick={() => void handleAnswer(customAnswer)}
               disabled={!customAnswer.trim() || submitting}
-              className="px-4 py-2 rounded-xl bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-[12px] font-medium transition-colors disabled:opacity-40 flex items-center gap-1.5 shrink-0 shadow-xs self-start mt-1"
+              className="px-4 py-2 rounded-xl bg-gradient-to-r from-[var(--accent)] to-[#e88a6a] hover:opacity-95 text-white text-[12px] font-medium transition-all disabled:opacity-40 flex items-center gap-1.5 shrink-0 shadow-sm self-start mt-1 cursor-pointer"
             >
               {submitting ? (
                 <>

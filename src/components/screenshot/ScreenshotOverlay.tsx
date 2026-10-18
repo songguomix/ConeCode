@@ -116,7 +116,10 @@ export default function ScreenshotOverlay({ onClose, onConfirm }: {
   const workRef = useRef<HTMLCanvasElement>(null);
   const barRef = useRef<HTMLDivElement>(null);
   const [img, setImg] = useState<HTMLImageElement | null>(null);
-  const [box, setBox] = useState({ w: 0, h: 0 });
+  const [box, setBox] = useState(() => ({
+    w: typeof window !== 'undefined' ? window.innerWidth : 0,
+    h: typeof window !== 'undefined' ? window.innerHeight : 0,
+  }));
   const [phase, setPhase] = useState<'select' | 'annotate'>('select');
   const [anchor, setAnchor] = useState<{ x: number; y: number } | null>(null);
   const [sel, setSel] = useState<Rect | null>(null);
@@ -164,9 +167,27 @@ export default function ScreenshotOverlay({ onClose, onConfirm }: {
     return () => window.removeEventListener('keydown', onKey, true);
   }, [handleClose]);
 
-  const fit = img && box.w > 0 ? contain(img.naturalWidth, img.naturalHeight, box.w, box.h) : null;
+  const isFullscreen = useMemo(() => {
+    if (typeof window === 'undefined') return false;
+    return (
+      window.location.hash.includes('screenshot') ||
+      onConfirm != null ||
+      (box.w > 0 && Math.abs(box.w - window.innerWidth) <= 2)
+    );
+  }, [box.w, onConfirm]);
+
+  const fit = useMemo(() => {
+    if (!img || box.w <= 0 || box.h <= 0) return null;
+    if (isFullscreen) {
+      // In fullscreen overlay mode, cover the full display edge-to-edge without letterboxing
+      return { x: 0, y: 0, w: box.w, h: box.h };
+    }
+    return contain(img.naturalWidth, img.naturalHeight, box.w, box.h);
+  }, [img, box.w, box.h, isFullscreen]);
+
   // Native px per display px (keeps the export sharp on retina).
-  const scale = img && fit && fit.w > 0 ? img.naturalWidth / fit.w : 1;
+  const scaleX = img && fit && fit.w > 0 ? img.naturalWidth / fit.w : 1;
+  const scaleY = img && fit && fit.h > 0 ? img.naturalHeight / fit.h : 1;
 
   // Floating bar follows the pixels behind it: sample the displayed image
   // region under the bar (24px thumbnail), dim it like the overlay does
@@ -190,14 +211,15 @@ export default function ScreenshotOverlay({ onClose, onConfirm }: {
         setBarDark(true);
         return;
       }
-      const s = img.naturalWidth / fit.w;
+      const sx = img.naturalWidth / fit.w;
+      const sy = img.naturalHeight / fit.h;
       const c = document.createElement('canvas');
       const N = 24;
       c.width = N;
       c.height = N;
       const ctx = c.getContext('2d', { willReadFrequently: true });
       if (!ctx) return;
-      ctx.drawImage(img, (ix - fit.x) * s, (iy - fit.y) * s, (ix2 - ix) * s, (iy2 - iy) * s, 0, 0, N, N);
+      ctx.drawImage(img, (ix - fit.x) * sx, (iy - fit.y) * sy, (ix2 - ix) * sx, (iy2 - iy) * sy, 0, 0, N, N);
       const d = ctx.getImageData(0, 0, N, N).data;
       let sum = 0;
       for (let i = 0; i < d.length; i += 4) {
@@ -303,10 +325,11 @@ export default function ScreenshotOverlay({ onClose, onConfirm }: {
     canvas.height = Math.max(1, Math.round(sel.h));
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    const s = img.naturalWidth / fit.w;
+    const sx = img.naturalWidth / fit.w;
+    const sy = img.naturalHeight / fit.h;
     ctx.drawImage(
       img,
-      (sel.x - fit.x) * s, (sel.y - fit.y) * s, sel.w * s, sel.h * s,
+      (sel.x - fit.x) * sx, (sel.y - fit.y) * sy, sel.w * sx, sel.h * sy,
       0, 0, sel.w, sel.h,
     );
     for (const sh of shapes) drawShape(ctx, sh, color);
@@ -315,15 +338,16 @@ export default function ScreenshotOverlay({ onClose, onConfirm }: {
 
   const exportPNG = useCallback((): string | null => {
     if (!img || !sel || !fit) return null;
-    const s = img.naturalWidth / fit.w;
+    const sx = img.naturalWidth / fit.w;
+    const sy = img.naturalHeight / fit.h;
     const c = document.createElement('canvas');
-    c.width = Math.max(1, Math.round(sel.w * s));
-    c.height = Math.max(1, Math.round(sel.h * s));
+    c.width = Math.max(1, Math.round(sel.w * sx));
+    c.height = Math.max(1, Math.round(sel.h * sy));
     const ctx = c.getContext('2d');
     if (!ctx) return null;
     ctx.drawImage(
       img,
-      (sel.x - fit.x) * s, (sel.y - fit.y) * s, sel.w * s, sel.h * s,
+      (sel.x - fit.x) * sx, (sel.y - fit.y) * sy, sel.w * sx, sel.h * sy,
       0, 0, c.width, c.height,
     );
     ctx.scale(c.width / sel.w, c.height / sel.h);
@@ -414,10 +438,10 @@ export default function ScreenshotOverlay({ onClose, onConfirm }: {
     return <div ref={boxRef} className="fixed inset-0 z-[100] bg-black/60 cursor-wait" onClick={close} />;
   }
 
-  const selLabel = sel ? `${Math.round(sel.w * scale)} × ${Math.round(sel.h * scale)}` : '';
+  const selLabel = sel ? `${Math.round(sel.w * scaleX)} × ${Math.round(sel.h * scaleY)}` : '';
 
   return (
-    <div ref={boxRef} className="fixed inset-0 z-[100] select-none">
+    <div ref={boxRef} className="fixed inset-0 z-[100] select-none overflow-hidden">
       {/* Dimmed screen */}
       <img
         src={image.dataUrl}
@@ -441,23 +465,30 @@ export default function ScreenshotOverlay({ onClose, onConfirm }: {
               className="absolute pointer-events-none"
               style={{
                 left: sel.x, top: sel.y, width: sel.w, height: sel.h,
-                boxShadow: '0 0 0 9999px rgba(0,0,0,0.45)',
               }}
             >
-              <img
-                src={image.dataUrl}
-                alt=""
-                draggable={false}
-                className="absolute"
-                style={{
-                  width: fit.w, height: fit.h,
-                  left: fit.x - sel.x, top: fit.y - sel.y,
-                  maxWidth: 'none',
-                }}
-              />
+              <div className="absolute inset-0 overflow-hidden">
+                <img
+                  src={image.dataUrl}
+                  alt=""
+                  draggable={false}
+                  className="absolute"
+                  style={{
+                    width: fit.w, height: fit.h,
+                    left: fit.x - sel.x, top: fit.y - sel.y,
+                    maxWidth: 'none',
+                  }}
+                />
+              </div>
               <div className="absolute inset-0 border-2 rounded-[2px]" style={{ borderColor: color }} />
-              <div className="absolute -top-7 left-0 px-2 py-0.5 rounded-md text-[12px] font-semibold text-white whitespace-nowrap"
-                style={{ backgroundColor: color }}>
+              <div
+                className="absolute px-2 py-0.5 rounded-md text-[12px] font-semibold text-white whitespace-nowrap shadow-sm"
+                style={{
+                  backgroundColor: color,
+                  left: 0,
+                  top: sel.y > 28 ? -28 : 4,
+                }}
+              >
                 {selLabel}
               </div>
             </div>
@@ -475,8 +506,18 @@ export default function ScreenshotOverlay({ onClose, onConfirm }: {
               onPointerMove={onWorkMove}
               onPointerUp={onWorkUp}
             />
-            <div className="absolute px-2 py-0.5 rounded-md text-[12px] font-semibold text-white whitespace-nowrap"
-              style={{ left: sel.x, top: Math.max(4, sel.y - 30), backgroundColor: color }}>
+            <div
+              className="absolute pointer-events-none border-2 rounded-[2px]"
+              style={{ left: sel.x, top: sel.y, width: sel.w, height: sel.h, borderColor: color }}
+            />
+            <div
+              className="absolute px-2 py-0.5 rounded-md text-[12px] font-semibold text-white whitespace-nowrap shadow-sm"
+              style={{
+                left: sel.x,
+                top: sel.y > 28 ? sel.y - 28 : Math.min(sel.y + sel.h + 6, box.h - 28),
+                backgroundColor: color,
+              }}
+            >
               {selLabel}
             </div>
             {/* 7 tools only: rect ellipse arrow pen | save | cancel confirm */}

@@ -27,6 +27,7 @@ export default function ModelSelector() {
   const [editingLimits, setEditingLimits] = useState<{ providerId: string; modelId: string } | null>(null);
   const [refreshingLimits, setRefreshingLimits] = useState(false);
   const [limitDraft, setLimitDraft] = useState<{ context: string; maxOutput: string }>({ context: '', maxOutput: '' });
+  const [dropDirection, setDropDirection] = useState<'up' | 'down'>('up');
   const searchRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -132,6 +133,19 @@ export default function ModelSelector() {
     setLimitDraft({ context: String(model.contextWindow ?? ''), maxOutput: String(model.maxOutputTokens ?? '') });
   };
 
+  useEffect(() => {
+    if (isOpen && containerRef.current) {
+      const rect = containerRef.current.getBoundingClientRect();
+      const spaceBelow = window.innerHeight - rect.bottom;
+      const spaceAbove = rect.top;
+      if (spaceBelow > 340 && spaceBelow > spaceAbove) {
+        setDropDirection('down');
+      } else {
+        setDropDirection('up');
+      }
+    }
+  }, [isOpen]);
+
   const saveLimits = () => {
     if (!editingLimits) return;
     const ctx = parseInt(limitDraft.context, 10);
@@ -189,8 +203,8 @@ export default function ModelSelector() {
     <div ref={containerRef} className="relative max-w-[900px] mx-auto w-full px-4 pb-3">
       <div className="flex items-center gap-2">
         <button onClick={toggleModelSelector}
-          className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-sm hover:bg-[var(--bg-3)] transition-colors ${showThinking ? 'flex-1 min-w-0' : 'flex-1'}`}>
-          <span className="truncate text-[var(--text-secondary)] text-[13px]">{selectedModel?.name || t('selectModel')}</span>
+          className={`flex items-center gap-2 px-3.5 py-1.5 rounded-full text-sm bg-[var(--glass-card)] hover:bg-[var(--bg-2)] border border-[var(--glass-border)] hover:border-[var(--accent)]/40 shadow-2xs backdrop-blur-md transition-all ${showThinking ? 'flex-1 min-w-0' : 'flex-1'}`}>
+          <span className="truncate text-[var(--text-secondary)] text-[13px] font-medium">{selectedModel?.name || t('selectModel')}</span>
           {selectedModel && getCapIcons(selectedModel).map((c) => (
             <span key={c} className="text-xs shrink-0">{c === 'reasoning' ? '🧠' : CAP_ICONS[c]}</span>
           ))}
@@ -210,34 +224,36 @@ export default function ModelSelector() {
         <ContextMeter />
 
         <button onClick={toggleTheme}
-          className="w-8 h-8 rounded-xl flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-3)] transition-colors shrink-0"
+          className="w-8 h-8 rounded-full flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] bg-[var(--glass-card)] hover:bg-[var(--bg-2)] border border-[var(--glass-border)] shadow-2xs backdrop-blur-md transition-all shrink-0"
           title={resolved === 'dark' ? t('lightMode') : t('darkMode')}>
-          {resolved === 'dark' ? <FiSun size={14} /> : <FiMoon size={14} />}
+          {resolved === 'dark' ? <FiSun size={14} className="text-amber-400" /> : <FiMoon size={14} className="text-indigo-400" />}
         </button>
       </div>
 
       {isOpen && (
-        <div className="absolute bottom-full left-6 right-6 mb-1 bg-[var(--bg-2)] border border-[var(--border)] rounded-xl shadow-lg overflow-hidden z-50 anim-menu"
-          style={{ ['--menu-origin' as any]: 'bottom center', ['--menu-shift' as any]: '6px' }}
+        <div className={`absolute left-6 right-6 bg-[var(--glass-surface)] backdrop-blur-2xl border border-[var(--glass-border)] rounded-2xl shadow-2xl overflow-hidden z-50 anim-menu ring-1 ring-black/5 dark:ring-white/10 ${
+          dropDirection === 'down' ? 'top-full mt-2' : 'bottom-full mb-2'
+        }`}
+          style={{ ['--menu-origin' as any]: dropDirection === 'down' ? 'top center' : 'bottom center', ['--menu-shift' as any]: '6px' }}
           onKeyDown={handleKeyDown}>
-          <div className="p-2 border-b border-[var(--border)]">
-            <div className="flex items-center gap-2 px-3 py-2 bg-[var(--bg-0)] rounded-xl">
+          <div className="p-2.5 border-b border-[var(--glass-border)] bg-[var(--glass-surface)]">
+            <div className="flex items-center gap-2 px-3 py-2 bg-[var(--glass-card)] border border-[var(--glass-border)] rounded-xl shadow-2xs">
               <FiSearch size={14} className="text-[var(--text-muted)]" />
               <input ref={searchRef} value={search} onChange={(e) => { setSearch(e.target.value); setSelectedIndex(0); }}
-                placeholder={t('searchModels')} className="flex-1 bg-transparent text-sm outline-none" />
+                placeholder={t('searchModels')} className="flex-1 bg-transparent text-sm outline-none placeholder:text-[var(--text-muted)]" />
               <button onClick={() => fetchAllModels()} disabled={modelsLoading}
-                className="p-1 rounded-lg hover:bg-[var(--bg-3)] text-[var(--text-muted)] disabled:opacity-50"
+                className="p-1 rounded-lg hover:bg-[var(--bg-3)]/80 text-[var(--text-muted)] disabled:opacity-50 transition-colors"
                 title={t('refresh')}>
                 <FiRefreshCw size={13} className={modelsLoading ? 'animate-spin' : ''} />
               </button>
             </div>
           </div>
 
-          <div className="max-h-80 overflow-y-auto">
+          <div className="max-h-80 overflow-y-auto py-1">
             {grouped.map((group) => (
               <div key={group.label}>
-                <div className="px-3 py-1.5 text-[11px] font-semibold text-[var(--text-muted)] uppercase tracking-wider">
-                  {group.label === t('favorites') && <FiStar size={10} className="inline mr-1" />}
+                <div className="px-3.5 py-1.5 text-[11px] font-semibold text-[var(--text-muted)] uppercase tracking-wider">
+                  {group.label === t('favorites') && <FiStar size={10} className="inline mr-1 text-amber-500" />}
                   {group.label}
                 </div>
                 {group.models.map((model) => {
@@ -253,9 +269,9 @@ export default function ModelSelector() {
                         onClick={() => { selectModel(model.id, model.providerId); closeModelSelector(); }}
                         onMouseEnter={() => { setSelectedIndex(idx); setTooltipKey({ providerId: model.providerId, modelId: model.id }); }}
                         onMouseLeave={() => setTooltipKey(null)}
-                        className={`flex items-center gap-2 px-3 py-2.5 cursor-pointer text-sm transition-colors ${
-                          idx === selectedIndex ? 'bg-[var(--bg-3)]' : 'hover:bg-[var(--bg-3)]/50'
-                        } ${isSelected ? 'text-[var(--accent)]' : 'text-[var(--text-primary)]'}`}>
+                        className={`flex items-center gap-2 px-3.5 py-2.5 cursor-pointer text-sm transition-all rounded-xl mx-1.5 my-0.5 ${
+                          idx === selectedIndex ? 'bg-[var(--glass-card)] shadow-xs' : 'hover:bg-[var(--bg-3)]/50'
+                        } ${isSelected ? 'text-[var(--accent)] font-medium' : 'text-[var(--text-primary)]'}`}>
                         <button onClick={(e) => { e.stopPropagation(); toggleFavorite(model.id); }}
                           className={`text-xs ${favorites.includes(model.id) ? 'text-[var(--accent)]' : 'text-[var(--text-muted)]'}`}>
                           <FiStar size={12} fill={favorites.includes(model.id) ? 'currentColor' : 'none'} />

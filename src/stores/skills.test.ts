@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useSkillsStore } from './skills.store';
 import { useChatStore } from './chat.store';
+import { useUIStore } from './ui.store';
 import { useWorkspaceStore } from './workspace.store';
 import { useSettingsStore } from './settings.store';
 import { useModelStore } from './model.store';
@@ -71,11 +72,13 @@ beforeEach(() => {
       },
       message: { create: async (m: any) => m, delete: async () => true, list: async () => [] },
       conversation: { create: async (d: any) => ({ id: 'c1', ...d }), update: async () => {}, list: async () => [] },
-      fs: { readFile: async () => null, exists: async () => false, glob: async () => [], search: async () => [] },
+      fs: { readFile: async () => null, exists: async () => false, glob: async () => ({ files: [], capped: false }), search: async () => ({ matches: [], capped: false }) },
     },
   };
 
   vi.spyOn(console, 'log').mockImplementation(() => {});
+  // use_skill is a work-mode tool; Chat Mode hides the whole toolset it lives in.
+  useUIStore.setState({ viewMode: 'work' });
   useModelStore.setState({ models: new Map([['p1', [model]]]), selectedModelId: 'm1' });
   useSettingsStore.setState({ toolCallMode: 'auto', approvalMode: 'suggest', autoIncludeFileContext: false });
   useWorkspaceStore.setState({ rootPath: '/proj', mcpTools: [], contextFiles: [], selectedFile: null, fileContent: null, agentsMd: null });

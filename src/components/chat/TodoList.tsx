@@ -15,9 +15,9 @@ export default function TodoList() {
   const { done, total, percent, allDone, current } = summarizeTodos(todos);
 
   return (
-    <div className="max-w-[900px] mx-auto w-full px-4 mb-1">
-    <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-2)] overflow-hidden group/todos shadow-sm">
-      <div className="w-full flex items-center gap-2 px-2.5 py-1 text-xs text-[var(--text-secondary)] min-h-8">
+    <div className="max-w-[900px] mx-auto w-full px-4 mb-1.5">
+    <div className="rounded-2xl border border-[var(--glass-border)] bg-[var(--glass-surface)]/85 backdrop-blur-xl overflow-hidden group/todos shadow-xs">
+      <div className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-[var(--text-secondary)] min-h-8">
         <button
           onClick={() => setExpanded((value) => !value)}
           aria-expanded={expanded}

@@ -10,7 +10,7 @@ import type { ProjectIdea } from '../../core/agenda/newProject';
  * builds the project, runs it, and fixes what fails — unattended.
  */
 export default function ProjectIdeas() {
-  const { t } = useLanguageStore();
+  const { t, locale } = useLanguageStore();
   const ideas = useAutopilotStore((s) => s.ideas);
   const loadingIdeas = useAutopilotStore((s) => s.loadingIdeas);
   const usingFallback = useAutopilotStore((s) => s.usingFallback);
@@ -27,7 +27,9 @@ export default function ProjectIdeas() {
   const model = useModelStore((s) => s.getSelectedModel)();
   const selectFile = useWorkspaceStore((s) => s.selectFile);
 
-  useEffect(() => { void loadIdeas(model?.providerId, model?.id); }, [model?.providerId, model?.id, loadIdeas]);
+  useEffect(() => {
+    void loadIdeas(model?.providerId, model?.id, false, locale);
+  }, [model?.providerId, model?.id, locale, loadIdeas]);
 
   const busy = phase !== 'idle' && phase !== 'done' && phase !== 'failed';
 
@@ -51,23 +53,23 @@ export default function ProjectIdeas() {
   return (
     <div>
       <div className="flex items-center gap-2 mb-2.5">
-        <h2 className="text-sm font-semibold text-[var(--text-primary)]">{t('autopilotTitle')}</h2>
+        <h2 className="text-[16px] font-bold text-[var(--text-primary)] font-serif tracking-tight">{t('autopilotTitle')}</h2>
         {loadingIdeas && (
           <span className="text-[11px] text-[var(--text-muted)]">{t('autopilotThinking')}</span>
         )}
         <button
-          onClick={() => loadIdeas(model?.providerId, model?.id, true)}
+          onClick={() => loadIdeas(model?.providerId, model?.id, true, locale)}
           disabled={loadingIdeas}
-          className="ml-auto inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-[var(--bg-3)] text-[var(--text-secondary)] border border-[var(--border)] hover:border-[var(--accent)] hover:text-[var(--accent)] transition-colors disabled:opacity-40"
+          className="ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium bg-[var(--glass-card)] text-[var(--text-secondary)] border border-[var(--glass-border)] hover:border-[var(--accent)] hover:text-[var(--accent)] backdrop-blur-md transition-all shadow-2xs disabled:opacity-40"
         >
           <FiRefreshCw size={11} className={loadingIdeas ? 'animate-spin' : ''} />
           {t('autopilotMore')}
         </button>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
         {loadingIdeas && ideas.length === 0 && [0, 1, 2].map((i) => (
-          <div key={i} className="rounded-xl border border-[var(--border)] bg-[var(--bg-2)] p-3 min-h-[112px] anim-shimmer min-w-0">
+          <div key={i} className="rounded-2xl border border-[var(--glass-border)] bg-[var(--glass-card)] backdrop-blur-md p-3.5 min-h-[116px] anim-shimmer min-w-0 shadow-2xs">
             <div className="h-3 w-2/3 rounded bg-[var(--bg-3)]" />
             <div className="mt-2.5 h-2.5 w-full rounded bg-[var(--bg-3)]" />
             <div className="mt-1.5 h-2.5 w-4/5 rounded bg-[var(--bg-3)]" />
@@ -93,19 +95,19 @@ function IdeaCard({
     <button
       onClick={onPick}
       disabled={disabled}
-      className="group text-left rounded-xl border border-[var(--border)] bg-[var(--bg-2)] p-3 hover:border-[var(--accent)] hover:bg-[var(--bg-3)]/40 transition-all disabled:opacity-40 flex flex-col gap-1.5 min-h-[112px] min-w-0 overflow-hidden"
+      className="group text-left rounded-2xl border border-[var(--glass-border)] bg-[var(--glass-card)]/80 hover:bg-[var(--glass-surface)] backdrop-blur-xl p-4 hover:border-[var(--accent)]/50 hover:shadow-[0_8px_24px_rgba(201,100,66,0.08)] hover:-translate-y-0.5 transition-all disabled:opacity-40 flex flex-col gap-2 min-h-[110px] min-w-0 overflow-hidden shadow-2xs cursor-pointer"
     >
       <div className="flex items-start gap-2 min-w-0">
-        <span className="text-sm font-medium text-[var(--text-primary)] leading-snug flex-1 min-w-0 break-words">{idea.title}</span>
-        <FiPlay size={12} className="shrink-0 mt-1 text-[var(--text-muted)] opacity-0 group-hover:opacity-100 group-hover:text-[var(--accent)] transition-all" />
+        <span className="text-[15px] font-bold text-[var(--text-primary)] font-serif leading-snug flex-1 min-w-0 truncate">{idea.title}</span>
+        <FiPlay size={12} className="shrink-0 mt-0.5 text-[var(--text-muted)] opacity-0 group-hover:opacity-100 group-hover:text-[var(--accent)] transition-all" />
       </div>
-      <p className="text-[11px] text-[var(--text-muted)] leading-relaxed line-clamp-3 break-words">{idea.description}</p>
+      <p className="text-[13px] text-[var(--text-secondary)] leading-relaxed line-clamp-2 break-words">{idea.description}</p>
       <div className="mt-auto flex items-center gap-1.5 flex-wrap">
         {idea.stack && (
           <span className="text-[10px] font-mono text-[var(--text-secondary)] truncate max-w-full">{idea.stack}</span>
         )}
         {idea.scale === 'medium' && (
-          <span className="text-[10px] px-1 rounded bg-[var(--bg-3)] text-[var(--text-muted)]">{t('autopilotMedium')}</span>
+          <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-[var(--bg-3)] text-[var(--text-muted)]">{t('autopilotMedium')}</span>
         )}
       </div>
     </button>

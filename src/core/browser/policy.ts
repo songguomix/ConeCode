@@ -121,17 +121,26 @@ function stripTags(s: string): string {
  */
 export function parseDuckResults(html: string, limit = 8): WebResult[] {
   const out: WebResult[] = [];
-  // One result block: the title link, optionally followed by its snippet.
-  const re = /<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>(?:[\s\S]*?<a[^>]*class="result__snippet"[^>]*>([\s\S]*?)<\/a>)?/gi;
-  let m: RegExpExecArray | null;
+  // Bound each snippet to its title's region; optional regex tails used to
+  // consume the next result when the current result had no snippet.
+  const attribute = (tag: string, name: string): string => {
+    const match = new RegExp(`\\b${name}\\s*=\\s*(["'])([\\s\\S]*?)\\1`, 'i').exec(tag);
+    return match?.[2] || '';
+  };
+  const titles = [...html.matchAll(/<a\b[^>]*>[\s\S]*?<\/a>/gi)]
+    .filter((match) => attribute(match[0].split('>')[0], 'class').split(/\s+/).includes('result__a'));
   const seen = new Set<string>();
-  while ((m = re.exec(html)) && out.length < limit) {
-    const link = stripTrackingParams(decodeDuckLink(m[1]));
-    if (!/^https?:\/\//i.test(link) || seen.has(link)) continue;
+  for (let i = 0; i < titles.length && out.length < limit; i++) {
+    const match = titles[i];
+    const tagEnd = match[0].indexOf('>');
+    const href = stripTags(attribute(match[0].slice(0, tagEnd), 'href'));
+    const link = stripTrackingParams(decodeDuckLink(href));
+    const title = stripTags(match[0].slice(tagEnd + 1, -4));
+    if (!/^https?:\/\//i.test(link) || !title || seen.has(link)) continue;
     seen.add(link);
-    const title = stripTags(m[2]);
-    if (!title) continue;
-    const snippet = m[3] ? stripTags(m[3]) : undefined;
+    const region = html.slice(match.index! + match[0].length, titles[i + 1]?.index ?? html.length);
+    const snippetMatch = /<(a|div|span)\b[^>]*class\s*=\s*(["'])[^"']*\bresult__snippet\b[^"']*\2[^>]*>([\s\S]*?)<\/\1>/i.exec(region);
+    const snippet = snippetMatch ? stripTags(snippetMatch[3]) : '';
     out.push(snippet ? { title, link, snippet } : { title, link });
   }
   return out;

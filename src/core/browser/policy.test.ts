@@ -67,6 +67,15 @@ const DUCK_HTML = `
 </div>`;
 
 describe('parseDuckResults', () => {
+  it('accepts reordered attributes and keeps snippets with their own result', () => {
+    const html = `<a href="https://first.com/" class="result__a extra">First result</a>
+      <a class='result__a' href='https://second.com/'>Second result</a>
+      <div class='result__snippet'>Only the second snippet.</div>`;
+    expect(parseDuckResults(html)).toEqual([
+      { title: 'First result', link: 'https://first.com/' },
+      { title: 'Second result', link: 'https://second.com/', snippet: 'Only the second snippet.' },
+    ]);
+  });
   it('extracts titles, decoded links and snippets, deduped', () => {
     const out = parseDuckResults(DUCK_HTML);
     expect(out).toHaveLength(2);

@@ -230,3 +230,4 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
   },
 });
+// Trigger renderer reload for settings UI update

@@ -46,8 +46,8 @@ export default function GoalProgressRow() {
   };
 
   return (
-    <div className="max-w-[900px] mx-auto w-full px-4 mb-1">
-      <div className="flex items-center gap-2 px-3 py-2 rounded-xl border border-[var(--accent)]/25 bg-[var(--accent-soft)]/60">
+    <div className="max-w-[900px] mx-auto w-full px-4 mb-1.5">
+      <div className="flex items-center gap-2.5 px-3.5 py-2 rounded-2xl border border-[var(--accent)]/30 bg-[var(--glass-surface)]/85 backdrop-blur-xl shadow-xs">
         <FiTarget size={14} className="text-[var(--accent)] shrink-0" />
         {editing ? (
           <input
@@ -57,7 +57,7 @@ export default function GoalProgressRow() {
               if (event.key === 'Enter' && !(event.nativeEvent as any).isComposing) void save();
               if (event.key === 'Escape') setEditing(false);
             }}
-            className="flex-1 min-w-0 bg-[var(--bg-2)] border border-[var(--accent)] rounded-lg px-2 py-1 text-xs outline-none"
+            className="flex-1 min-w-0 bg-[var(--glass-card)] border border-[var(--accent)] rounded-xl px-2.5 py-1 text-xs outline-none"
             autoFocus
           />
         ) : (

@@ -10,6 +10,8 @@ export interface Conversation {
   extraRoots?: string[];
   createdAt: number;
   updatedAt: number;
+  /** Explicitly marks a conversation created in Chat mode (dialogue only). */
+  isChatMode?: boolean;
 }
 
 export interface Message {

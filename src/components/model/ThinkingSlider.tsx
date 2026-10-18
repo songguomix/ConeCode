@@ -125,15 +125,15 @@ export default function ThinkingSlider({ value, onChange, levels }: ThinkingSlid
         aria-label={t('thinkingEffort')}
         aria-haspopup="dialog"
         aria-expanded={open}
-        className={`flex items-center h-8 pl-1.5 pr-2.5 rounded-xl border transition-colors ${
+        className={`flex items-center h-8 pl-1.5 pr-2.5 rounded-full border transition-all backdrop-blur-md shadow-2xs ${
           open
-            ? 'bg-[var(--bg-3)] border-[var(--accent)]/50 text-[var(--text-primary)]'
-            : 'bg-[var(--bg-3)]/80 hover:bg-[var(--bg-3)] border-[var(--border)]/60 text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+            ? 'bg-[var(--accent-soft)] border-[var(--accent)]/50 text-[var(--accent)] font-medium shadow-xs'
+            : 'bg-[var(--glass-card)] hover:bg-[var(--bg-2)] border-[var(--glass-border)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
         }`}
       >
         {/* keyed remount → the label pops on every level change (calm while dragging) */}
         <span key={shown} className={`flex items-center gap-2 ${dragging ? '' : 'anim-pop'}`}>
-          <span className="w-5 h-5 rounded-lg bg-[var(--accent-soft)] text-[var(--accent)] flex items-center justify-center shrink-0">
+          <span className="w-5 h-5 rounded-full bg-[var(--accent-soft)] text-[var(--accent)] flex items-center justify-center shrink-0">
             <Meta.Icon size={11} />
           </span>
           <span className="text-[11px] font-semibold whitespace-nowrap">{t(Meta.shortKey)}</span>
@@ -144,10 +144,7 @@ export default function ThinkingSlider({ value, onChange, levels }: ThinkingSlid
         <div
           role="dialog"
           aria-label={t('thinkingEffort')}
-          className="absolute bottom-full right-0 mb-2 w-[260px] p-3.5 rounded-2xl bg-[var(--bg-2)]/95 backdrop-blur-xl border border-[var(--border)]/80 shadow-2xl z-50 anim-effort-pop"
-          style={{
-            backgroundImage: 'linear-gradient(165deg, rgba(255,255,255,0.05), transparent 45%)',
-          }}
+          className="absolute bottom-full right-0 mb-2.5 w-[260px] p-3.5 rounded-2xl bg-[var(--glass-surface)] backdrop-blur-2xl border border-[var(--glass-border)] shadow-2xl z-50 anim-effort-pop ring-1 ring-black/5 dark:ring-white/10"
         >
           <div className="flex items-center justify-between mb-3">
             <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">

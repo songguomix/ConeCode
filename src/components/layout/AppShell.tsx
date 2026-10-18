@@ -1,3 +1,4 @@
+import GithubPushDialog from '../plugins/GithubPushDialog';
 import { useRef, useState, useEffect } from 'react';
 import { FiMenu } from 'react-icons/fi';
 import { useUIStore, useWorkspaceStore, useLanguageStore, useChatStore } from '../../stores';
@@ -23,6 +24,9 @@ export default function AppShell() {
   const settingsOpen = useUIStore((s) => s.settingsOpen);
   const terminalOpen = useUIStore((s) => s.terminalOpen);
   const changedFilesOpen = useUIStore((s) => s.changedFilesOpen);
+  const closeChangedFiles = useUIStore((s) => s.closeChangedFiles);
+  const activeConversationId = useChatStore((s) => s.activeConversationId);
+  useEffect(() => { closeChangedFiles(); }, [activeConversationId, closeChangedFiles]);
   const reviewOpen = useUIStore((s) => s.reviewOpen);
   const worktreesOpen = useUIStore((s) => s.worktreesOpen);
   const backgroundOpen = useUIStore((s) => s.backgroundOpen);
@@ -55,6 +59,10 @@ export default function AppShell() {
   // easy to miss).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'r') {
+        window.location.reload();
+        return;
+      }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b') {
         // The screenshot overlay owns the keyboard while it is up.
         if (useScreenshotStore.getState().open) return;
@@ -123,9 +131,13 @@ export default function AppShell() {
   };
 
   return (
-    <div className="flex h-screen relative">
+    <div className="flex h-screen relative overflow-hidden bg-[var(--bg-0)] select-none">
+      {/* Atmospheric ambient lighting behind glass layers */}
+      <div className="ambient-glow-1" aria-hidden="true" />
+      <div className="ambient-glow-2" aria-hidden="true" />
+
       {sidebarOpen && (
-        <div className="relative shrink-0 flex min-h-0" style={{ width: sidebarWidthPx }}>
+        <div className="relative shrink-0 flex min-h-0 z-20" style={{ width: sidebarWidthPx }}>
           <Sidebar />
           <div
             onMouseDown={(e) => dragPixels(e, sidebarWidthPx, 1, setSidebarWidthPx)}
@@ -138,12 +150,11 @@ export default function AppShell() {
           </div>
         </div>
       )}
-      {/* Floating sidebar reopen — no header rows anywhere, so the top blank
-          is truly zero. Mid-left edge keeps it clear of the traffic lights. */}
+      {/* Floating sidebar reopen — modern frosted glass pill button */}
       {!sidebarOpen && (
         <button onClick={toggleSidebar} title={t('toggleSidebar')}
-          className="absolute left-2 top-1/2 -translate-y-1/2 z-40 w-10 h-10 rounded-full bg-[var(--accent-soft)] backdrop-blur border border-[var(--accent)]/50 shadow-[0_4px_16px_rgba(0,0,0,0.18)] flex items-center justify-center text-[var(--accent)] hover:bg-[var(--accent)] hover:text-white hover:border-[var(--accent)] transition-all">
-          <FiMenu size={17} strokeWidth={2.5} />
+          className="absolute left-3 top-1/2 -translate-y-1/2 z-40 w-10 h-10 rounded-full glass-dock flex items-center justify-center text-[var(--accent)] hover:bg-[var(--accent)] hover:text-white hover:border-[var(--accent)] hover:scale-105 active:scale-95 transition-all shadow-[0_8px_24px_rgba(0,0,0,0.12)]">
+          <FiMenu size={17} strokeWidth={2.2} />
         </button>
       )}
       <div className="flex-1 flex flex-col min-w-0">
@@ -214,6 +225,7 @@ export default function AppShell() {
           )}
         </div>
       </div>
+      <GithubPushDialog />
       {settingsOpen && <SettingsModal />}
       {shotOpen && <ScreenshotOverlay />}
       {backgroundOpen && <BackgroundPanel />}

@@ -62,8 +62,8 @@ function installStubs() {
         exists: async () => false,
         createDir: async () => true,
         stat: async () => ({ size: 1, isDirectory: false, isFile: true, createdAt: '', modifiedAt: '' }),
-        search: async () => [],
-        glob: async () => [],
+        search: async () => ({ matches: [], capped: false }),
+        glob: async () => ({ files: [], capped: false }),
       },
       git: { status: async () => '', diff: async () => '' },
       net: { fetch: async () => '', search: async () => '', download: async () => '' },
@@ -124,6 +124,41 @@ describe('mid-run message queue', () => {
     useChatStore.getState().stopGeneration('conv1');
     await vi.waitFor(() => expect(streamCalls).toHaveLength(1));
     expect(created.some((m) => m.content === 'queued behind stop')).toBe(true);
+  });
+
+  it('immediately drains multiple queued turns in FIFO order after completion', async () => {
+    useChatStore.setState({ streamingRuns: { conv1: fakeRun() } });
+    for (const content of ['first follow-up', 'second follow-up', 'third follow-up']) {
+      useChatStore.getState().enqueueMessage('conv1', content, 'p1', 'gpt-test');
+    }
+    queued = [textResponse('first done'), textResponse('second done'), textResponse('third done')];
+    useChatStore.setState({ streamingRuns: {} });
+    await useChatStore.getState().flushQueue('conv1');
+    await vi.waitFor(() => expect(streamCalls).toHaveLength(3));
+    expect(created.filter((m) => m.role === 'user' && !m.isToolResult).map((m) => m.content))
+      .toEqual(['first follow-up', 'second follow-up', 'third follow-up']);
+    expect(useChatStore.getState().queuedMessages.conv1).toHaveLength(0);
+  });
+
+  it('serializes concurrent flushes while the first queued response is pending', async () => {
+    useChatStore.setState({ streamingRuns: { conv1: fakeRun() } });
+    useChatStore.getState().enqueueMessage('conv1', 'first', 'p1', 'gpt-test');
+    useChatStore.getState().enqueueMessage('conv1', 'second', 'p1', 'gpt-test');
+    useChatStore.setState({ streamingRuns: {} });
+    let finish!: (value: any) => void;
+    window.electronAPI.chat.stream = vi.fn(async (params: any) => {
+      streamCalls.push(params);
+      if (streamCalls.length === 1) return await new Promise((resolve) => { finish = resolve; });
+      return textResponse('done');
+    });
+    const firstFlush = useChatStore.getState().flushQueue('conv1');
+    const secondFlush = useChatStore.getState().flushQueue('conv1');
+    await vi.waitFor(() => expect(streamCalls).toHaveLength(1));
+    expect(useChatStore.getState().queuedMessages.conv1.map((m) => m.content)).toEqual(['second']);
+    finish(textResponse('first done'));
+    await Promise.all([firstFlush, secondFlush]);
+    expect(streamCalls).toHaveLength(2);
+    expect(created.filter((m) => m.role === 'user').map((m) => m.content)).toEqual(['first', 'second']);
   });
 
   it('holds the queue while approval or an answer is owed', async () => {

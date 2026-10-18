@@ -97,7 +97,7 @@ export default function ContextMeter() {
       <button
         onClick={() => setOpen((o) => !o)}
         title={window > 0 ? `${remainingPct}% ${t('contextLeft')}` : t('contextUsage')}
-        className="w-8 h-8 rounded-xl flex items-center justify-center hover:bg-[var(--bg-3)] transition-colors"
+        className="w-8 h-8 rounded-full flex items-center justify-center bg-[var(--glass-card)] hover:bg-[var(--bg-2)] border border-[var(--glass-border)] shadow-2xs backdrop-blur-md transition-all"
       >
         <svg width="18" height="18" viewBox="0 0 36 36" className="-rotate-90">
           <circle cx="18" cy="18" r={RADIUS} fill="none" stroke="var(--border)" strokeWidth="4" />
@@ -112,7 +112,7 @@ export default function ContextMeter() {
       </button>
 
       {open && (
-        <div className="absolute bottom-full right-0 mb-2 w-60 p-3 bg-[var(--bg-1)] border border-[var(--border)] rounded-xl shadow-2xl z-50 text-xs anim-menu" style={{ ['--menu-origin' as any]: 'bottom right', ['--menu-shift' as any]: '6px' }}>
+        <div className="absolute bottom-full right-0 mb-2.5 w-64 p-3.5 bg-[var(--glass-surface)] backdrop-blur-2xl border border-[var(--glass-border)] rounded-2xl shadow-2xl z-50 text-xs anim-menu ring-1 ring-black/5 dark:ring-white/10" style={{ ['--menu-origin' as any]: 'bottom right', ['--menu-shift' as any]: '6px' }}>
           <div className="flex items-center justify-between mb-2">
             <span className="font-semibold text-sm text-[var(--text-primary)]">{t('contextUsage')}</span>
             {window > 0 && (

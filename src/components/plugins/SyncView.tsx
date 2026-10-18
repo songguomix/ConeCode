@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { FiRefreshCw, FiKey, FiUpload } from 'react-icons/fi';
+import { FiRefreshCw, FiKey, FiUpload, FiExternalLink } from 'react-icons/fi';
 import { useMarketStore } from '../../stores/market.store';
 import { useLanguageStore, useWorkspaceStore } from '../../stores';
 
@@ -25,6 +25,15 @@ export default function SyncView() {
   const { t } = useLanguageStore();
   const [repoDraft, setRepoDraft] = useState(repo);
   const [tokenDraft, setTokenDraft] = useState('');
+
+  // Two SyncView instances can be mounted at once (RSI card + the settings
+  // modal detail) and each keeps its own input draft. useState(repo) initialises
+  // only on mount, so a repo edited in one instance stayed stale in the other —
+  // the "RSI and settings plugins are not synced" report. Follow the store
+  // whenever it changes; typing keeps working because setRepo fires on blur.
+  useEffect(() => {
+    setRepoDraft(repo);
+  }, [repo]);
 
   // Show the open project's git state as soon as a folder is chosen.
   useEffect(() => {
@@ -88,6 +97,22 @@ export default function SyncView() {
             {t('pluginClearToken')}
           </button>
         )}
+      </div>
+
+      <div className="mb-3 rounded-xl border border-[var(--border)] bg-[var(--bg-2)] px-3 py-2.5">
+        <a
+          href="https://github.com/settings/tokens"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1.5 rounded text-[12px] font-medium text-[var(--accent)] hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
+        >
+          {t('pluginGetToken')} <FiExternalLink size={12} aria-hidden="true" />
+        </a>
+        <ol className="mt-2 list-decimal pl-4 space-y-1 text-[12px] leading-relaxed text-[var(--text-secondary)]">
+          <li>{t('pluginTokenStepGenerate')}</li>
+          <li>{t('pluginTokenStepPermissions')}</li>
+          <li>{t('pluginTokenStepSave')}</li>
+        </ol>
       </div>
 
       {/* What will be pushed: the open project's branch and uncommitted count. */}

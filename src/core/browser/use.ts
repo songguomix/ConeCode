@@ -1,3 +1,4 @@
+import { bingSearchUrl, parseBingResults } from './bing';
 /**
  * Headless BrowserUse — the built-in browser for the open web.
  *
@@ -9,7 +10,7 @@
  *
  *   web_search ──fetch fast path──▶ results (ms, ~0 tokens of overhead)
  *        │  empty / blocked
- *        └──▶ browserSearch: render DDG lite in Chromium, parse anchors
+ *        └──▶ browserSearch: render Bing in Chromium, parse organic results
  *
  *   web_fetch ──fetch fast path──▶ text
  *        │  JS shell / failure
@@ -24,7 +25,7 @@
  */
 
 import {
-  normalizeWebUrl, parseDuckResults, parseLiteResults,
+  normalizeWebUrl,
   parseResultRef, resolveSearchRef,
   type WebResult,
 } from './policy';
@@ -152,27 +153,15 @@ async function guestHtml(w: BrowserWindowLike, maxChars = 500000): Promise<strin
 // Search + read fallbacks (used when the fetch fast-path comes up empty).
 // ---------------------------------------------------------------------------
 
-/**
- * Render a search page in Chromium and parse results. Lite first (no JS, ~1s
- * to first paint); the full html endpoint (with snippets) as backup.
- */
+/** Render the same Bing query when the fast fetch path cannot return results. */
 export async function browserSearch(query: string, limit = 8): Promise<WebResult[]> {
-  const lite = `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`;
-  const full = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-  for (const [url, parse] of [
-    [lite, parseLiteResults],
-    [full, parseDuckResults],
-  ] as const) {
-    try {
-      const { win: w } = await load(url, 20000);
-      const html = await guestHtml(w);
-      const results = parse(html, limit);
-      if (results.length) return results;
-    } catch {
-      // Next candidate.
-    }
+  const { win: w } = await load(bingSearchUrl(query), 20000);
+  const html = await guestHtml(w);
+  const results = parseBingResults(html, limit);
+  if (!results.length && /captcha|verify you are human|challenge-form/i.test(html)) {
+    throw new Error('Bing requires human verification. Open Bing in your browser and try again later.');
   }
-  return [];
+  return results;
 }
 
 export interface BrowserReadout {

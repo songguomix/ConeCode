@@ -32,8 +32,8 @@ beforeEach(() => {
         diff: async () => '--- a\n+++ b',
       },
       fs: {
-        search: async () => [{ file: '/proj/src/a.ts', line: 7, text: '// TODO: fix' }],
-        glob: async () => ['/proj/src/a.ts', '/proj/src/a.test.ts', '/proj/main.py'],
+        search: async () => ({ matches: [{ file: '/proj/src/a.ts', line: 7, text: '// TODO: fix' }], capped: false }),
+        glob: async () => ({ files: ['/proj/src/a.ts', '/proj/src/a.test.ts', '/proj/main.py'], capped: false }),
         readFile: async (p: string) =>
           p.endsWith('package.json') ? '{"name":"demo","scripts":{"test":"vitest"}}' :
           p.endsWith('README.md') ? '# demo project' : null,

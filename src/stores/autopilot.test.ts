@@ -48,7 +48,7 @@ beforeEach(() => {
         createDir: async (p: string) => { createdDirs.push(p); return true; },
         writeFile: async (path: string, content: string) => { writtenFiles.push({ path, content }); return true; },
         readDir: async () => existingProjects.map((name) => ({ name, path: `/x/${name}`, isDirectory: true })),
-        glob: async () => ['/proj/package.json'],
+        glob: async () => ({ files: ['/proj/package.json'], capped: false }),
         readFile: async () => null,
         exists: async () => false,
       },

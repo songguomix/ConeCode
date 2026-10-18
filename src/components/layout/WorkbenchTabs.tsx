@@ -64,7 +64,7 @@ export default function WorkbenchTabs({ active, subtitle, actions }: Props) {
 
   return (
     <div
-      className="flex items-center bg-[var(--bg-1)] border-b border-[var(--border)] shrink-0 min-w-0"
+      className="flex items-center bg-[var(--glass-surface)]/80 backdrop-blur-xl border-b border-[var(--glass-border)] shrink-0 min-w-0"
       style={{ WebkitAppRegion: 'drag', ...(!sidebarOpen && IS_MAC ? { paddingLeft: 74 } : null) } as any}
     >
       <div ref={stripRef} className="flex items-center shrink min-w-0 overflow-x-auto" role="tablist" style={{ WebkitAppRegion: 'no-drag' } as any}>
@@ -120,7 +120,7 @@ export default function WorkbenchTabs({ active, subtitle, actions }: Props) {
           onClick={openFile}
           title={t('openFile')}
           aria-label={t('openFile')}
-          className="w-7 h-7 ml-1 rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-3)] transition-colors shrink-0"
+          className="w-7 h-7 ml-1 rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--glass-card)] transition-colors shrink-0"
         >
           <FiPlus size={14} />
         </button>
@@ -136,7 +136,7 @@ export default function WorkbenchTabs({ active, subtitle, actions }: Props) {
 
       {menu && (
         <div onClick={(e) => e.stopPropagation()}
-          className="fixed z-50 w-[190px] rounded-xl border border-[var(--border)] bg-[var(--bg-2)] shadow-xl py-1 overflow-hidden"
+          className="fixed z-50 w-[190px] rounded-2xl border border-[var(--glass-border)] bg-[var(--glass-surface)]/95 backdrop-blur-2xl shadow-2xl py-1.5 overflow-hidden ring-1 ring-black/5 dark:ring-white/10 anim-fade-in"
           style={{ left: Math.min(menu.x, window.innerWidth - 200), top: Math.min(menu.y, window.innerHeight - 160) }}>
           <MenuBtn label={t('close')} onClick={() => { void closeTab(menu.path); setMenu(null); }} />
           <MenuBtn label={t('closeOthers')} onClick={() => { void closeOtherTabs(menu.path); setMenu(null); }} />
@@ -151,7 +151,7 @@ export default function WorkbenchTabs({ active, subtitle, actions }: Props) {
 function MenuBtn({ label, onClick }: { label: string; onClick: () => void }) {
   return (
     <button onClick={onClick}
-      className="w-full text-left px-3 py-1.5 text-[12px] text-[var(--text-secondary)] hover:bg-[var(--bg-3)] transition-colors">
+      className="w-full text-left px-3.5 py-1.5 text-[12px] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--glass-card)] transition-colors">
       {label}
     </button>
   );
@@ -176,10 +176,10 @@ function Tab({ active, icon, label, badge, title, closeLabel, onSelect, onClose,
       title={title}
       data-active={active}
       onContextMenu={onMenu}
-      className={`group flex items-center gap-2 pl-3 pr-2 py-1.5 border-r border-[var(--border)] text-[13px] transition-colors shrink-0 ${
+      className={`group relative flex items-center gap-2 pl-3.5 pr-2.5 py-1.5 border-r border-[var(--glass-border)] text-[12.5px] transition-all shrink-0 cursor-pointer ${
         active
-          ? 'bg-[var(--bg-0)] border-t-2 border-t-[var(--accent)] text-[var(--text-primary)] font-medium'
-          : 'border-t-2 border-t-transparent text-[var(--text-secondary)] hover:bg-[var(--bg-0)]/60'
+          ? 'bg-[var(--glass-card)]/90 text-[var(--text-primary)] font-medium shadow-2xs after:absolute after:bottom-0 after:left-0 after:right-0 after:h-[2px] after:bg-[var(--accent)]'
+          : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--glass-card)]/40'
       }`}
     >
       <button role="tab" aria-selected={active} onClick={onSelect} className="flex items-center gap-2 min-w-0 outline-none">
@@ -194,7 +194,7 @@ function Tab({ active, icon, label, badge, title, closeLabel, onSelect, onClose,
           aria-label={closeLabel}
           // Always offered on the tab you are looking at — closing the open file
           // should not depend on discovering a hover state.
-          className={`p-0.5 rounded text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-3)] focus:opacity-100 transition-opacity ${
+          className={`p-0.5 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--glass-card)] focus:opacity-100 transition-opacity ${
             active ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
           }`}
         >

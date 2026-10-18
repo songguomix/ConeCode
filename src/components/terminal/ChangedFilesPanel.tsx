@@ -1,11 +1,12 @@
+import { useConversationChanges } from '../chat/useConversationChanges';
 import { FiX, FiFolder, FiTrash2, FiEdit3, FiCopy, FiCornerUpRight, FiFilePlus } from 'react-icons/fi';
 import type { ChangeKind } from '../../stores/codeChanges.store';
-import { useCodeChangesStore, useWorkspaceStore, useUIStore, useLanguageStore } from '../../stores';
+import { useWorkspaceStore, useUIStore, useLanguageStore } from '../../stores';
 
 // Floating popover listing every file the agent has touched this session, in a
 // single column. Toggled from the sidebar; click a row to open it in the editor.
 export default function ChangedFilesPanel() {
-  const changes = useCodeChangesStore((s) => s.changes);
+  const changes = useConversationChanges();
   const selectFile = useWorkspaceStore((s) => s.selectFile);
   const selectedFile = useWorkspaceStore((s) => s.selectedFile);
   const closeChangedFiles = useUIStore((s) => s.closeChangedFiles);

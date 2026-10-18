@@ -1,14 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { ReactNode } from 'react';
-import { FiPlus, FiSettings, FiTrash2, FiGlobe, FiEdit3, FiMenu, FiTerminal, FiFileText, FiSmartphone, FiMonitor, FiCpu, FiGrid, FiShield, FiGitBranch, FiLoader, FiFolder, FiMessageSquare, FiChevronDown, FiChevronRight, FiClock, FiShare2 } from 'react-icons/fi';
-import { useChatStore, useUIStore, useLanguageStore, usePreviewStore, useComputerStore, useModelStore, useCodeChangesStore, useWorkspaceStore, useAiHighlightsStore } from '../../stores';
+import { FiPlus, FiSettings, FiTrash2, FiGlobe, FiEdit3, FiMenu, FiTerminal, FiFileText, FiSmartphone, FiMonitor, FiCpu, FiGrid, FiShield, FiGitBranch, FiLoader, FiFolder, FiMessageSquare, FiBriefcase, FiChevronDown, FiChevronRight, FiClock, FiShare2 } from 'react-icons/fi';
+import { useChatStore, useUIStore, useLanguageStore, usePreviewStore, useComputerStore, useModelStore, useCodeChangesStore, useWorkspaceStore, useAiHighlightsStore, useSettingsStore, LOCALES, type Locale } from '../../stores';
 import { useBackgroundStore } from '../../stores/background.store';
 import { groupConversationsByFolder } from '../../core/workspace/conversations';
 import HandoffPanel from '../handoff/HandoffPanel';
 import { mostUrgentDot, type DotKind } from './panelDot';
 import FileTree from './FileTree';
-import type { Locale } from '../../stores/language.store';
 
 interface PanelItem {
   key: string;
@@ -30,15 +29,9 @@ function StatusDot({ kind, className = '' }: { kind: DotKind; className?: string
   return <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${style[kind]} ${className}`} />;
 }
 
-const LOCALES: { value: Locale; label: string }[] = [
-  { value: 'en', label: 'English' },
-  { value: 'zh', label: '中文（简体）' },
-  { value: 'zhHant', label: '中文（繁體）' },
-  { value: 'ja', label: '日本語' },
-];
-
 export default function Sidebar() {
-  const [langOpen, setLangOpen] = useState(false);
+  const viewMode = useUIStore((s) => s.viewMode);
+  const setViewMode = useUIStore((s) => s.setViewMode);
   const [panelsOpen, setPanelsOpen] = useState(false);
   // The panels menu lives in body coordinates (portal): sidebar width,
   // overflow, or backdrop-blur must never clip or squeeze it. Right-aligned
@@ -177,25 +170,24 @@ export default function Sidebar() {
   };
 
   return (
-    <div className="w-full flex flex-col bg-[var(--bg-1)]/70 backdrop-blur-2xl border-r border-[var(--glass-border)] min-h-0">
-      {/* Drag region — tall enough to clear macOS traffic lights with a
-          comfortable gap below them before the toolbar starts. */}
-      <div className="h-[58px] shrink-0" style={{ WebkitAppRegion: 'drag' } as any} />
+    <div className="w-full flex flex-col bg-[var(--glass-surface)] backdrop-blur-3xl border-r border-[var(--glass-border)] min-h-0 relative shadow-[inset_-1px_0_0_0_var(--glass-border)]">
+      {/* Clean drag spacer for macOS traffic lights with no corner badge */}
+      <div className="h-[44px] shrink-0" style={{ WebkitAppRegion: 'drag' } as any} />
       {/* Toolbar — the row itself drags the window; buttons opt out. */}
-      <div className="flex items-center gap-1 px-3 pb-2 shrink-0" style={{ WebkitAppRegion: 'drag' } as any}>
+      <div className="flex items-center gap-1.5 px-3 pb-2.5 shrink-0" style={{ WebkitAppRegion: 'drag' } as any}>
         <button onClick={toggleSidebar}
           style={{ WebkitAppRegion: 'no-drag' } as any}
-          className="w-8 h-8 rounded-xl flex items-center justify-center text-[var(--text-muted)] hover:bg-[var(--bg-3)] transition-colors">
+          className="w-8 h-8 rounded-xl flex items-center justify-center text-[var(--text-muted)] hover:bg-[var(--glass-card)] hover:text-[var(--text-primary)] hover:shadow-2xs border border-transparent hover:border-[var(--glass-border)] transition-all">
           <FiMenu size={16} />
         </button>
         <div className="flex-1" />
 
         <div ref={panelsBtnRef} className="relative" style={{ WebkitAppRegion: 'no-drag' } as any}>
           <button onClick={() => setPanelsOpen(!panelsOpen)}
-            className={`relative w-8 h-8 rounded-xl flex items-center justify-center transition-colors ${
+            className={`relative w-8 h-8 rounded-xl flex items-center justify-center transition-all ${
               panelsOpen || anyPanelOpen
-                ? 'text-[var(--accent)] bg-[var(--accent-soft)]'
-                : 'text-[var(--text-muted)] hover:bg-[var(--bg-3)] hover:text-[var(--text-primary)]'
+                ? 'text-[var(--accent)] bg-[var(--accent-soft)] shadow-2xs border border-[var(--accent)]/30'
+                : 'text-[var(--text-muted)] hover:bg-[var(--glass-card)] hover:text-[var(--text-primary)] border border-transparent hover:border-[var(--glass-border)]'
             }`}
             title={t('panels')}
             aria-haspopup="menu"
@@ -207,28 +199,28 @@ export default function Sidebar() {
             <>
               <div className="fixed inset-0 z-40" onClick={() => setPanelsOpen(false)} />
               <div role="menu"
-                className="fixed w-44 bg-[var(--bg-2)] border border-[var(--border)] rounded-xl shadow-xl z-50 overflow-hidden py-1 anim-menu"
+                className="fixed w-48 bg-[var(--glass-surface)] backdrop-blur-2xl border border-[var(--glass-border)] rounded-2xl shadow-2xl z-50 overflow-hidden py-1.5 anim-menu ring-1 ring-black/5 dark:ring-white/10"
                 style={{ top: panelsPos.top, left: panelsPos.left }}>
                 {primaryPanels.map((p) => (
                   <button key={p.key} role="menuitem" aria-pressed={p.open}
                     onClick={() => p.toggle()}
                     className={`w-full flex items-center gap-2.5 px-3 py-2 text-[13px] transition-colors ${
-                      p.open ? 'bg-[var(--accent-soft)] text-[var(--accent)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-3)]'
+                      p.open ? 'bg-[var(--accent-soft)] text-[var(--accent)] font-medium' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-3)]/60 hover:text-[var(--text-primary)]'
                     }`}>
                     {p.icon}
                     <span className="flex-1 text-left truncate">{p.label}</span>
                     {p.dot && <StatusDot kind={p.dot} />}
                   </button>
                 ))}
-                <div className="my-1 border-t border-[var(--border)]" />
-                <div className="px-3 pb-1 text-[10px] uppercase tracking-wider text-[var(--text-muted)]">
+                <div className="my-1.5 border-t border-[var(--glass-border)]" />
+                <div className="px-3 pb-1 text-[10px] uppercase tracking-wider text-[var(--text-muted)] font-semibold">
                   {t('panelsMore')}
                 </div>
                 {extraPanels.map((p) => (
                   <button key={p.key} role="menuitem" aria-pressed={p.open}
                     onClick={() => p.toggle()}
                     className={`w-full flex items-center gap-2.5 px-3 py-2 text-[13px] transition-colors ${
-                      p.open ? 'bg-[var(--accent-soft)] text-[var(--accent)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-3)]'
+                      p.open ? 'bg-[var(--accent-soft)] text-[var(--accent)] font-medium' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-3)]/60 hover:text-[var(--text-primary)]'
                     }`}>
                     {p.icon}
                     <span className="flex-1 text-left truncate">{p.label}</span>
@@ -243,13 +235,13 @@ export default function Sidebar() {
 
         <button onClick={() => createConversation(selectedModel?.providerId || '', selectedModel?.id || '')}
           style={{ WebkitAppRegion: 'no-drag' } as any}
-          className="w-8 h-8 rounded-xl flex items-center justify-center text-[var(--text-muted)] hover:bg-[var(--bg-3)] hover:text-[var(--text-primary)] transition-colors"
+          className="w-8 h-8 rounded-xl flex items-center justify-center text-[var(--text-muted)] hover:bg-[var(--glass-card)] hover:text-[var(--text-primary)] hover:shadow-2xs border border-transparent hover:border-[var(--glass-border)] transition-all"
           title={t('newChat')}>
           <FiPlus size={16} />
         </button>
         <button onClick={() => setHandoffOpen(true)}
           style={{ WebkitAppRegion: 'no-drag' } as any}
-          className="w-8 h-8 rounded-xl flex items-center justify-center text-[var(--text-muted)] hover:bg-[var(--bg-3)] hover:text-[var(--text-primary)] transition-colors"
+          className="w-8 h-8 rounded-xl flex items-center justify-center text-[var(--text-muted)] hover:bg-[var(--glass-card)] hover:text-[var(--text-primary)] hover:shadow-2xs border border-transparent hover:border-[var(--glass-border)] transition-all"
           title={t('handoffButton')}>
           <FiShare2 size={15} />
         </button>
@@ -273,28 +265,32 @@ export default function Sidebar() {
                 <div
                   onClick={folderKey ? () => void closeFolderGroup(folderKey) : undefined}
                   title={folderKey ? t('closeFolder') : undefined}
-                  className={`flex items-center gap-1 px-2.5 py-2 rounded-xl min-w-0 border backdrop-blur-md transition-all shadow-[0_2px_10px_rgba(0,0,0,0.06)] hover:shadow-[0_4px_14px_rgba(0,0,0,0.10)] ${
+                  className={`flex items-center gap-1 px-2.5 py-2 rounded-xl min-w-0 border backdrop-blur-xl transition-all shadow-2xs hover:shadow-md ${
                     folderKey ? 'cursor-pointer' : ''
                   } ${
                     isCurrent
-                      ? 'bg-[var(--accent-soft)] border-[var(--accent)]/35 text-[var(--accent)]'
-                      : 'bg-[var(--bg-2)]/85 border-[var(--border)] text-[var(--text-secondary)]'
+                      ? 'bg-[var(--accent-soft)]/80 border-[var(--accent)]/40 text-[var(--accent)] shadow-[0_2px_12px_rgba(201,100,66,0.12)]'
+                      : 'bg-[var(--glass-card)] border-[var(--glass-border)] text-[var(--text-secondary)] hover:border-[var(--border)] hover:bg-[var(--bg-2)]/90'
                   }`}
                 >
                   <button
                     onClick={(e) => { e.stopPropagation(); toggleGroup(folderKey || '__nofolder__'); }}
                     aria-expanded={!collapsed}
                     title={t('collapseAll')}
-                    className="p-0.5 -ml-1 rounded hover:bg-[var(--bg-3)] text-[var(--text-muted)] shrink-0"
+                    className="p-0.5 -ml-1 rounded-lg hover:bg-[var(--bg-3)]/80 text-[var(--text-muted)] shrink-0 transition-colors"
                   >
                     {collapsed ? <FiChevronRight size={12} /> : <FiChevronDown size={12} />}
                   </button>
-                  <FiFolder size={13} className={`shrink-0 ${folderKey ? 'text-amber-500' : 'text-[var(--text-muted)]'}`} />
-                  <span className="flex-1 truncate text-[11px] font-semibold uppercase tracking-wide min-w-0">
-                    {folderKey ? folderKey.split('/').pop() || folderKey : t('noFolderGroup')}
+                  {folderKey ? (
+                    <FiFolder size={13} className="shrink-0 text-amber-500" />
+                  ) : (
+                    <FiMessageSquare size={13} className="shrink-0 text-[var(--accent)]" />
+                  )}
+                  <span className="flex-1 truncate text-[12px] font-bold uppercase tracking-wide min-w-0 font-serif">
+                    {folderKey ? folderKey.split('/').pop() || folderKey : t('chat')}
                   </span>
                   <span className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
-                    isCurrent ? 'bg-[var(--accent)] text-white' : 'bg-[var(--bg-3)] text-[var(--text-muted)]'
+                    isCurrent ? 'bg-[var(--accent)] text-white shadow-2xs' : 'bg-[var(--bg-3)] text-[var(--text-muted)]'
                   }`}>
                     {items.length}
                   </span>
@@ -304,11 +300,16 @@ export default function Sidebar() {
                 <div className="ml-3 pl-2.5 border-l border-[var(--border)] mt-1.5 space-y-0.5">
                   {items.map((conv) => (
                     <div key={conv.id}
-                      onClick={() => { if (editingId !== conv.id) setActiveConversation(conv.id); }}
-                      className={`group flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer text-[13px] transition-all min-w-0 ${
+                      onClick={() => {
+                        if (editingId !== conv.id) {
+                          setActiveConversation(conv.id);
+                          setViewMode(conv.rootPath ? 'work' : 'chat');
+                        }
+                      }}
+                      className={`group flex items-center gap-2 px-2.5 py-1.5 rounded-xl cursor-pointer text-[13px] transition-all min-w-0 ${
                         activeConversationId === conv.id
-                          ? 'bg-[var(--bg-3)] text-[var(--text-primary)] font-medium shadow-sm'
-                          : 'text-[var(--text-secondary)] hover:bg-[var(--bg-3)]/50'
+                          ? 'bg-[var(--glass-card)] text-[var(--text-primary)] font-medium shadow-xs border border-[var(--glass-border)] ring-1 ring-[var(--accent)]/20'
+                          : 'text-[var(--text-secondary)] hover:bg-[var(--glass-card)]/60 hover:text-[var(--text-primary)] border border-transparent'
                       }`}>
                       {editingId === conv.id ? (
                         <input
@@ -381,36 +382,66 @@ export default function Sidebar() {
         </div>
       </div>
 
-      <div className="p-3 border-t border-[var(--border)]">
-        <div className="flex gap-1">
-          <button onClick={toggleSettings}
-            className="flex-1 flex items-center gap-2 px-3 py-2 rounded-xl text-[var(--text-secondary)] hover:bg-[var(--bg-3)] text-[13px] transition-colors">
-            <FiSettings size={14} /> {t('settings')}
-          </button>
-          <div className="relative">
-            <button onClick={() => setLangOpen(!langOpen)}
-              className="flex items-center justify-center px-2.5 py-2 h-full rounded-xl text-[var(--text-secondary)] hover:bg-[var(--bg-3)] text-sm transition-colors"
-              title={t('language')}>
-              <FiGlobe size={14} />
+      <div className="p-2.5 border-t border-[var(--glass-border)] bg-[var(--glass-subtle)]/30">
+        <div className="flex items-center gap-1.5">
+          {/* Chat / Work capsule pill */}
+          <div className="flex-1 flex items-center p-0.5 rounded-xl bg-[var(--bg-2)]/80 border border-[var(--glass-border)] shadow-2xs">
+            <button
+              onClick={() => {
+                setViewMode('chat');
+                const store = useChatStore.getState();
+                const current = store.conversations.find((c) => c.id === store.activeConversationId);
+                if (current?.rootPath) {
+                  const unbound = store.conversations.find((c) => !c.rootPath);
+                  if (unbound) {
+                    store.setActiveConversation(unbound.id);
+                  } else {
+                    createConversation(selectedModel?.providerId || '', selectedModel?.id || '', null);
+                  }
+                }
+              }}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-lg text-[12px] font-medium transition-all ${
+                viewMode === 'chat'
+                  ? 'bg-[var(--glass-card)] text-[var(--accent)] shadow-xs font-semibold'
+                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+              }`}
+              title={t('chat')}
+            >
+              <FiMessageSquare size={13} className={viewMode === 'chat' ? 'text-[var(--accent)]' : 'text-[var(--text-muted)]'} />
+              <span>{t('chat')}</span>
             </button>
-            {langOpen && (
-              <>
-                <div className="fixed inset-0 z-40" onClick={() => setLangOpen(false)} />
-                <div className="absolute bottom-full right-0 mb-1 w-36 bg-[var(--bg-2)] border border-[var(--border)] rounded-xl shadow-xl z-50 overflow-hidden py-1">
-                  {LOCALES.map((l) => (
-                    <button key={l.value}
-                      onClick={() => { setLocale(l.value); setLangOpen(false); }}
-                      className={`w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors ${
-                        locale === l.value ? 'bg-[var(--accent-soft)] text-[var(--accent)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-3)]'
-                      }`}>
-                      <span className="flex-1 text-left truncate">{l.label}</span>
-                      {locale === l.value && <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)] shrink-0" />}
-                    </button>
-                  ))}
-                </div>
-              </>
-            )}
+            <button
+              onClick={() => {
+                setViewMode('work');
+                const store = useChatStore.getState();
+                const current = store.conversations.find((c) => c.id === store.activeConversationId);
+                if (!current?.rootPath) {
+                  const workConv = store.conversations.find((c) => !!c.rootPath);
+                  if (workConv) {
+                    store.setActiveConversation(workConv.id);
+                  }
+                }
+              }}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-lg text-[12px] font-medium transition-all ${
+                viewMode === 'work'
+                  ? 'bg-[var(--glass-card)] text-[var(--accent)] shadow-xs font-semibold'
+                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+              }`}
+              title={t('work')}
+            >
+              <FiBriefcase size={13} className={viewMode === 'work' ? 'text-[var(--accent)]' : 'text-[var(--text-muted)]'} />
+              <span>{t('work')}</span>
+            </button>
           </div>
+
+          {/* Settings button */}
+          <button
+            onClick={toggleSettings}
+            className="w-8 h-8 rounded-xl flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--glass-card)] hover:text-[var(--text-primary)] border border-transparent hover:border-[var(--glass-border)] transition-all shadow-2xs shrink-0"
+            title={t('settings')}
+          >
+            <FiSettings size={15} />
+          </button>
         </div>
       </div>
       {handoffOpen && <HandoffPanel onClose={() => setHandoffOpen(false)} />}

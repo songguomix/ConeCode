@@ -50,6 +50,14 @@
         }
       ]
     },
+    "linux": {
+      "extraResources": [
+        {
+          "from": "resources/bin/cloudflared-linux-x64",
+          "to": "bin/cloudflared-linux-x64"
+        }
+      ]
+    },
     "nsis": {
       "oneClick": false,
       "perMachine": false,

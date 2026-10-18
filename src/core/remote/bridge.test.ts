@@ -19,6 +19,14 @@ describe('remote approval scope', () => {
     expect(scoped.map((item) => item.id)).toEqual(['active', 'legacy-visible']);
   });
 
+  it('shows nothing in a new chat and restores only the selected chat history', () => {
+    const history = [change({ id: 'a', conversationId: 'conv-a' }), change({ id: 'b', conversationId: 'conv-b' })];
+    expect(changesForActiveConversation(history, null, new Set())).toEqual([]);
+    expect(changesForActiveConversation(history, 'new-chat', new Set())).toEqual([]);
+    expect(changesForActiveConversation(history, 'conv-b', new Set()).map((c) => c.id)).toEqual(['b']);
+    expect(changesForActiveConversation(history, 'conv-a', new Set()).map((c) => c.id)).toEqual(['a']);
+  });
+
   it('never bulk-approves commands or resolved changes', () => {
     expect(bulkApprovableChanges([
       change({ id: 'file' }),
