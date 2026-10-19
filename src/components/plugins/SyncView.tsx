@@ -1,3 +1,4 @@
+import GithubReleaseView from './GithubReleaseView';
 import { useEffect, useState } from 'react';
 import { FiRefreshCw, FiKey, FiUpload, FiExternalLink } from 'react-icons/fi';
 import { useMarketStore } from '../../stores/market.store';
@@ -150,6 +151,8 @@ export default function SyncView() {
           {result.message}
         </p>
       )}
+      <GithubReleaseView />
+
       {lastPushAt && (
         <p className="px-1 text-[11px] text-[var(--text-muted)]">
           {t('pluginLastPush')}: {new Date(lastPushAt).toLocaleString()}

@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
-import { FiChevronDown, FiSearch, FiStar, FiSun, FiMoon, FiRefreshCw, FiCpu, FiSliders } from 'react-icons/fi';
+import { FiChevronDown, FiSearch, FiStar, FiSun, FiMoon, FiRefreshCw, FiCpu, FiSliders, FiShield } from 'react-icons/fi';
 import { useModelStore, useProviderStore, useUIStore, useLanguageStore, useThemeStore, useChatStore } from '../../stores';
 import { modelLimitKey } from '../../stores/model.store';
 import { formatPrice } from '../../core/pricing/cost';
+import { FREE_PROVIDER_ID } from '../../core/providers/free.adapter';
 import ThinkingSlider from './ThinkingSlider';
 import ModeSwitch from './ModeSwitch';
 import ContextMeter from './ContextMeter';
@@ -60,22 +61,35 @@ export default function ModelSelector() {
     const q = search.toLowerCase();
     const filtered = q ? all.filter((m) => m.name.toLowerCase().includes(q) || m.id.toLowerCase().includes(q)) : all;
 
-    const groups: { label: string; models: AIModel[] }[] = [];
+    const groups: { label: string; isOfficial?: boolean; models: AIModel[] }[] = [];
 
-    const favModels = filtered.filter((m) => favorites.includes(m.id));
+    // 1. 提供的官方免费模型始终排在最上面
+    const officialModels = filtered.filter((m) => m.providerId === FREE_PROVIDER_ID);
+    if (officialModels.length) {
+      groups.push({ label: t('officialFreeModels'), isOfficial: true, models: officialModels });
+    }
+
+    const officialKeys = new Set(officialModels.map((m) => modelLimitKey(m.providerId, m.id)));
+
+    // 2. 收藏
+    const favModels = filtered.filter(
+      (m) => favorites.includes(m.id) && !officialKeys.has(modelLimitKey(m.providerId, m.id))
+    );
     if (favModels.length) groups.push({ label: t('favorites'), models: favModels });
 
-    const recentM = filtered.filter((m) => recentModels.includes(m.id) && !favorites.includes(m.id));
+    // 3. 最近使用
+    const recentM = filtered.filter(
+      (m) => recentModels.includes(m.id) && !favorites.includes(m.id) && !officialKeys.has(modelLimitKey(m.providerId, m.id))
+    );
     if (recentM.length) groups.push({ label: t('recent'), models: recentM });
 
-    // A favorite/recent model already has a prominent section. Repeating it in
-    // its provider section inflated the menu and made keyboard selection jump
-    // between duplicate rows that represented the same model.
-    const featured = new Set([...favModels, ...recentM].map((m) => modelLimitKey(m.providerId, m.id)));
+    const featured = new Set([...officialModels, ...favModels, ...recentM].map((m) => modelLimitKey(m.providerId, m.id)));
 
+    // 4. 其余服务商
     for (const p of providers) {
-      const pModels = filtered.filter((m) =>
-        m.providerId === p.id && !featured.has(modelLimitKey(m.providerId, m.id)),
+      if (p.id === FREE_PROVIDER_ID) continue;
+      const pModels = filtered.filter(
+        (m) => m.providerId === p.id && !featured.has(modelLimitKey(m.providerId, m.id)),
       );
       if (pModels.length) groups.push({ label: p.name, models: pModels });
     }
@@ -204,6 +218,12 @@ export default function ModelSelector() {
       <div className="flex items-center gap-2">
         <button onClick={toggleModelSelector}
           className={`flex items-center gap-2 px-3.5 py-1.5 rounded-full text-sm bg-[var(--glass-card)] hover:bg-[var(--bg-2)] border border-[var(--glass-border)] hover:border-[var(--accent)]/40 shadow-2xs backdrop-blur-md transition-all ${showThinking ? 'flex-1 min-w-0' : 'flex-1'}`}>
+          {selectedModel?.providerId === FREE_PROVIDER_ID && (
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-[var(--accent)]/15 text-[var(--accent)] border border-[var(--accent)]/30 shrink-0 shadow-2xs">
+              <FiShield size={9} className="shrink-0" />
+              <span>{t('official')}</span>
+            </span>
+          )}
           <span className="truncate text-[var(--text-secondary)] text-[13px] font-medium">{selectedModel?.name || t('selectModel')}</span>
           {selectedModel && getCapIcons(selectedModel).map((c) => (
             <span key={c} className="text-xs shrink-0">{c === 'reasoning' ? '🧠' : CAP_ICONS[c]}</span>
@@ -252,12 +272,14 @@ export default function ModelSelector() {
           <div className="max-h-80 overflow-y-auto py-1">
             {grouped.map((group) => (
               <div key={group.label}>
-                <div className="px-3.5 py-1.5 text-[11px] font-semibold text-[var(--text-muted)] uppercase tracking-wider">
+                <div className="px-3.5 py-1.5 text-[11px] font-semibold text-[var(--text-muted)] uppercase tracking-wider flex items-center gap-1.5">
+                  {group.isOfficial && <FiShield size={11} className="text-[var(--accent)] shrink-0" />}
                   {group.label === t('favorites') && <FiStar size={10} className="inline mr-1 text-amber-500" />}
-                  {group.label}
+                  <span>{group.label}</span>
                 </div>
                 {group.models.map((model) => {
                   const idx = flatModels.indexOf(model);
+                  const isOfficial = model.providerId === FREE_PROVIDER_ID;
                   const hasReasoning = model.supportsReasoning || model.userEnabledReasoning;
                   const scopedLimitKey = modelLimitKey(model.providerId, model.id);
                   const hasLimitOverride = !!(limitOverrides[scopedLimitKey] ?? limitOverrides[model.id]);
@@ -276,6 +298,12 @@ export default function ModelSelector() {
                           className={`text-xs ${favorites.includes(model.id) ? 'text-[var(--accent)]' : 'text-[var(--text-muted)]'}`}>
                           <FiStar size={12} fill={favorites.includes(model.id) ? 'currentColor' : 'none'} />
                         </button>
+                        {isOfficial && (
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-[var(--accent)]/15 text-[var(--accent)] border border-[var(--accent)]/30 shrink-0 shadow-2xs">
+                            <FiShield size={10} className="shrink-0" />
+                            <span>{t('official')}</span>
+                          </span>
+                        )}
                         <span className="flex-1 truncate">{model.name}</span>
                         {model.pricing && (
                           <span className="text-[10.5px] tabular-nums text-[var(--text-muted)] shrink-0"

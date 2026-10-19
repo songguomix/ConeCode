@@ -1,3 +1,4 @@
+import { FREE_PROVIDER_ID, FREE_WEEKLY_TOKEN_LIMIT } from '../core/providers/free.adapter';
 import { create } from 'zustand';
 import { v4 as uuidv4 } from 'uuid';
 import type { Conversation, Message, ReasoningEffort, ChatMessage, ToolCall, ThinkingBlock } from '../types';
@@ -7,6 +8,7 @@ import { useSettingsStore, effectiveApprovalMode } from './settings.store';
 import { useLanguageStore } from './language.store';
 import { useTodosStore, type TodoStatus } from './todos.store';
 import { useMemoryStore } from './memory.store';
+import { useFreeStore } from './free.store';
 import type { MemoryEntry } from '../core/memory/memory';
 import { formatMemoryFiles } from '../core/memory/memoryFiles';
 import { agentModePrompt, type AgentMode } from '../core/agents/modePrompts';
@@ -535,6 +537,10 @@ const flushingQueues = new Set<string>();
  */
 async function deliverToConversation(convId: string, content: string, providerId: string, modelId: string): Promise<void> {
   const set = useChatStore.setState;
+  if (providerId === FREE_PROVIDER_ID && useFreeStore.getState().weeklyUsed >= FREE_WEEKLY_TOKEN_LIMIT) {
+    set({ error: 'ConeCode Free has reached its weekly usage limit of 2B tokens.' });
+    return;
+  }
   const get = useChatStore.getState;
   if (content.trim()) {
     const userMsg: Message = {
@@ -2225,6 +2231,15 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
       set((s) => s.activeConversationId === convId
         ? { messages: [...s.messages, assistantMsg] }
         : {});
+
+      // Track weekly usage for the gifted free model. Self-provided providers
+      // are never capped or accounted for here.
+      if (providerId === FREE_PROVIDER_ID) {
+        const used = stitch.tokens || ((stitch.promptTokens || 0) + (stitch.completionTokens || 0));
+        if (used > 0) {
+          try { useFreeStore.getState().recordUsage(used); } catch {}
+        }
+      }
 
       if (!ownsRun()) break;
 

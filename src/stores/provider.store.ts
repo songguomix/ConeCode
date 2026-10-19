@@ -34,6 +34,10 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
     try {
       const provider = await window.electronAPI.provider.create(config);
       set((s) => ({ providers: [...s.providers, provider] }));
+      if (provider && provider.enabled !== false) {
+        const { useModelStore } = await import('./model.store');
+        await useModelStore.getState().fetchModels(provider.id);
+      }
     } catch (e: any) {
       set({ error: e.message });
     }

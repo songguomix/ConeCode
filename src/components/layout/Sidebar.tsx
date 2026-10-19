@@ -247,8 +247,10 @@ export default function Sidebar() {
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-2 min-w-0">
-        {/* Section 1 — conversations, grouped by folder. */}
+      <div className="flex-1 flex flex-col min-h-0 px-2 min-w-0 overflow-hidden">
+        {/* Bound the conversation list so Chat cannot displace the file explorer. */}
+        <div className="min-h-0 max-h-[50%] shrink-0 overflow-y-auto">
+        {/* Section 1 — Work folders followed by Chat. */}
         <div className="px-1 pt-1 pb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)] flex items-center gap-1.5">
           <FiMessageSquare size={10} />
           {t('conversations')} · {conversations.length}
@@ -371,10 +373,11 @@ export default function Sidebar() {
           )}
         </div>
 
-        {/* Section 2 — the open folder's file tree, labelled so it never reads
-            as part of the conversation list above. */}
-        <div className="border-t border-[var(--border)] mt-3">
-          <div className="px-1 pt-1.5 pb-0.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)] flex items-center gap-1.5">
+        </div>
+
+        {/* The file explorer keeps its own space and scroll position. */}
+        <div className="flex-1 min-h-0 flex flex-col border-t border-[var(--border)] mt-3">
+          <div className="shrink-0 px-1 pt-1.5 pb-0.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)] flex items-center gap-1.5">
             <FiFolder size={10} className="text-amber-500" />
             {t('files')}
           </div>

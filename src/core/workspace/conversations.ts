@@ -3,8 +3,8 @@ import type { Conversation } from '../../types';
 /**
  * Group conversations by their bound folder so one folder can hold many chats.
  * Pure helper — extracted for testing and to keep Sidebar rendering cheap.
- * Order: current folder first, then most-recent group first; chats keep their
- * incoming order inside each group.
+ * Order: current folder first, then most-recent Work folders, with unbound
+ * Chat always last. Conversations keep their incoming order inside each group.
  */
 export function groupConversationsByFolder(
   conversations: Conversation[],
@@ -21,6 +21,8 @@ export function groupConversationsByFolder(
   const latest = (items: Conversation[]) =>
     items.reduce((m, c) => Math.max(m, c.updatedAt), 0);
   entries.sort((a, b) => {
+    if (!a[0]) return 1;
+    if (!b[0]) return -1;
     if (a[0] && a[0] === currentRootPath) return -1;
     if (b[0] && b[0] === currentRootPath) return 1;
     return latest(b[1]) - latest(a[1]);

@@ -27,6 +27,12 @@ describe('groupConversationsByFolder', () => {
     expect(groups[0][0]).toBe('/proj/foo');
   });
 
+  it('keeps Chat below every Work group even when Chat is most recent', () => {
+    const list = [conv('chat', null, 1000), conv('work', '/other', 2), conv('current', '/current', 1)];
+    expect(groupConversationsByFolder(list, '/current').map(([key]) => key)).toEqual(['/current', '/other', '']);
+    expect(groupConversationsByFolder(list, null).map(([key]) => key)).toEqual(['/other', '/current', '']);
+  });
+
   it('keeps unbound chats in their own group', () => {
     const list = [conv('a', null, 1), conv('b', '/x', 2)];
     const groups = groupConversationsByFolder(list, '/x');

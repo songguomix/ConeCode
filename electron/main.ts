@@ -1,3 +1,4 @@
+import { publishGithubRelease } from './githubRelease';
 import { app, BrowserWindow, ipcMain, dialog, Menu, clipboard, shell, Notification, powerSaveBlocker, desktopCapturer, screen, systemPreferences, globalShortcut, nativeImage } from 'electron';
 import path from 'path';
 import fs from 'fs';
@@ -7,6 +8,7 @@ import { providerRepo } from '../src/core/storage/repositories/provider.repo';
 import { modelRepo } from '../src/core/storage/repositories/model.repo';
 import { conversationRepo, messageRepo } from '../src/core/storage/repositories/conversation.repo';
 import { providerRegistry } from '../src/core/providers/registry';
+import { FREE_PROVIDER, FREE_PROVIDER_ID, freeStatus } from '../src/core/providers/free.adapter';
 import { readJSON, writeJSON } from '../src/core/storage/database';
 import { mcpManager, type McpServerConfig } from '../src/core/mcp/client';
 import {
@@ -684,7 +686,8 @@ app.on('activate', () => {
 });
 
 function initProviders() {
-  const providers = providerRepo.findAll();
+  providerRegistry.register(FREE_PROVIDER);
+  const providers = providerRepo.findAll().filter((p) => p.id !== FREE_PROVIDER_ID && p.type !== 'conecode-free');
   for (const p of providers) {
     if (p.enabled) {
       // Local endpoints (Ollama / LM Studio / vLLM…) need no key. Skipping
@@ -735,8 +738,10 @@ function registerIPC() {
     return powerSaveBlockerId != null;
   });
 
-  ipcMain.handle('provider:list', () => providerRepo.findAll());
+  ipcMain.handle('provider:list', () => [FREE_PROVIDER, ...providerRepo.findAll().filter((p) => p.id !== FREE_PROVIDER_ID && p.type !== 'conecode-free')]);
+  ipcMain.handle('free:status', () => freeStatus());
   ipcMain.handle('provider:create', (_, config) => {
+    if (config?.type === 'conecode-free') return FREE_PROVIDER;
     const provider = providerRepo.create(config);
     // Always register the adapter, even with an empty key (local keyless
     // endpoints). Otherwise the new provider can list cached models but every
@@ -750,6 +755,8 @@ function registerIPC() {
     return provider;
   });
   ipcMain.handle('provider:update', (_, id, config) => {
+    if (id === FREE_PROVIDER_ID) return FREE_PROVIDER;
+    if (config?.type === 'conecode-free') throw new Error('ConeCode Free is managed by the server');
     const provider = providerRepo.update(id, config);
     // Re-register on ANY update so baseUrl/type edits take effect even when
     // the key field was left blank. Previously only a non-empty apiKey
@@ -779,12 +786,19 @@ function registerIPC() {
     return provider;
   });
   ipcMain.handle('provider:delete', (_, id) => {
+    if (id === FREE_PROVIDER_ID) return false;
     providerRegistry.unregister(id);
     modelRepo.deleteByProvider(id); // purge cached models so they don't resurrect
     return providerRepo.delete(id);
   });
 
   ipcMain.handle('model:list', async (_, providerId?) => {
+    // Free models are live server state, never an offline cache. Closing the
+    // service or removing a model must not resurrect previously gifted models.
+    if (providerId === FREE_PROVIDER_ID) {
+      try { return await providerRegistry.getModelsForProvider(FREE_PROVIDER_ID); }
+      catch { return []; }
+    }
     if (providerId && providerRegistry.hasAdapter(providerId)) {
       try {
         const models = await providerRegistry.getModelsForProvider(providerId);
@@ -797,7 +811,7 @@ function registerIPC() {
         // Fall through to return local models
       }
     }
-    return modelRepo.findAll(providerId);
+    return modelRepo.findAll(providerId).filter((model) => model.providerId !== FREE_PROVIDER_ID);
   });
 
   // Probe a not-yet-saved provider config for its model list (auto-detect in the
@@ -925,7 +939,7 @@ function registerIPC() {
       const mimeMap: Record<string, string> = {
         jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
         gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp',
-        svg: 'image/svg+xml',
+        svg: 'image/svg+xml', ico: 'image/x-icon', avif: 'image/avif',
       };
       const mime = mimeMap[ext] || 'application/octet-stream';
       return `data:${mime};base64,${buffer.toString('base64')}`;
@@ -1260,6 +1274,8 @@ function registerIPC() {
     const r = await runGit(args, cwd || process.cwd());
     return r.code === 0 ? r.stdout : (r.stderr || `git diff failed (exit ${r.code})`);
   });
+
+  ipcMain.handle('git:publishRelease', (_, options) => publishGithubRelease(options));
 
   ipcMain.handle('git:branches', async (_, cwd?: string) => {
     const dir = cwd || process.cwd();

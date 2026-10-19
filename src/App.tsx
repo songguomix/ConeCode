@@ -5,6 +5,7 @@ import { useBackgroundStore } from './stores/background.store';
 import { useMonitorStore } from './stores/monitor.store';
 import AppShell from './components/layout/AppShell';
 import { initRemoteBridge } from './core/remote/bridge';
+import { useFreeStore } from './stores/free.store';
 
 export default function App() {
   const fetchProviders = useProviderStore((s) => s.fetchProviders);
@@ -117,6 +118,14 @@ export default function App() {
       window.removeEventListener('unhandledrejection', onUnhandledRejection);
       stopShotResult?.();
     };
+  }, []);
+
+  useEffect(() => {
+    const refresh = () => { void useFreeStore.getState().refresh(); };
+    refresh();
+    const timer = window.setInterval(refresh, 30000);
+    window.addEventListener('focus', refresh);
+    return () => { window.clearInterval(timer); window.removeEventListener('focus', refresh); };
   }, []);
 
   // Project skills follow the active workspace. Keep this at app level so the

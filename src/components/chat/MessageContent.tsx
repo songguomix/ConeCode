@@ -1,3 +1,4 @@
+import ChatImage from './ChatImage';
 import { memo, useMemo, useState, type ReactNode } from 'react';
 import {
   FiFileText, FiFolder, FiEdit3, FiFilePlus, FiFolderPlus, FiTrash2,
@@ -174,6 +175,8 @@ function renderInlines(tokens: MdInline[], keyPrefix: string): ReactNode[] {
         return <em key={key}>{tok.text}</em>;
       case 'del':
         return <del key={key}>{tok.text}</del>;
+      case 'image':
+        return <ChatImage key={key} src={tok.href} alt={tok.text} />;
       case 'link':
         return (
           <a key={key} href={tok.href}

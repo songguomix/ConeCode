@@ -1,7 +1,7 @@
 import type { AIModel } from './model.types';
 import type { Message } from './chat.types';
 
-export type ProviderType = 'openai' | 'anthropic' | 'gemini' | 'deepseek' | 'openrouter' | 'custom';
+export type ProviderType = 'conecode-free' | 'openai' | 'anthropic' | 'gemini' | 'deepseek' | 'openrouter' | 'custom';
 
 export interface ProviderConfig {
   id: string;

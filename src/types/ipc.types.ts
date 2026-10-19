@@ -163,6 +163,7 @@ export interface ChatStreamParams {
  * call site is an error the build silently tolerated.
  */
 export interface ElectronAPI {
+  free: { status: () => Promise<import('../core/providers/free.adapter').FreeStatus> };
   window: {
     minimize: () => Promise<void>;
     maximize: () => Promise<void>;
@@ -251,6 +252,7 @@ export interface ElectronAPI {
     getVersion: () => Promise<string>;
   };
   git: {
+    publishRelease: (options: { repo: string; token: string; tag: string; name?: string; body?: string; target: string; files: string[]; draft?: boolean; prerelease?: boolean }) => Promise<{ ok: boolean; message: string; url?: string }>;
     info: (cwd?: string) => Promise<{ isRepo: boolean; branch: string | null; dirty: number }>;
     status: (cwd?: string) => Promise<string>;
     diff: (cwd?: string, file?: string) => Promise<string>;

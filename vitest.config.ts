@@ -10,6 +10,6 @@ export default defineConfig({
     setupFiles: ['./vitest.setup.ts'],
     // electron/ too: the main-process modules are plain Node (no `electron`
     // import at load time), so things like the preview dev server are testable.
-    include: ['src/**/*.test.ts', 'electron/**/*.test.ts'],
+    include: ['src/**/*.test.{ts,tsx}', 'electron/**/*.test.ts'],
   },
 });

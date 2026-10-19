@@ -108,3 +108,18 @@ describe('isSafeHttpUrl', () => {
     expect(isSafeHttpUrl('file:///etc/passwd')).toBe(false);
   });
 });
+
+
+describe('inline images', () => {
+  it('renders image syntax separately from links, including empty alt text', () => {
+    expect(parseInline('![截图](https://example.com/a.png) ![](data:image/png;base64,AAAA)')).toEqual([
+      { type: 'image', text: '截图', href: 'https://example.com/a.png' },
+      { type: 'text', text: ' ' },
+      { type: 'image', text: '', href: 'data:image/png;base64,AAAA' },
+    ]);
+  });
+  it('rejects executable and non-image data sources', () => {
+    expect(parseInline('![bad](javascript:alert)')).toEqual([{ type: 'text', text: 'bad' }]);
+    expect(parseInline('![bad](data:text/html;base64,AAAA)')).toEqual([{ type: 'text', text: 'bad' }]);
+  });
+});

@@ -6,6 +6,7 @@ import MemoryPanel from '../memory/MemoryPanel';
 import SkillsPanel from '../skills/SkillsPanel';
 import SettingsPlugins from './SettingsPlugins';
 import ShortcutCard from '../screenshot/ShortcutCard';
+import FreeProviderCard from './FreeProviderCard';
 
 const MCP_PLACEHOLDER = `{
   "mcpServers": {
@@ -471,7 +472,8 @@ export default function SettingsModal() {
 
             {section === 'providers' && (
               <>
-                {providers.map((p) => (
+                <FreeProviderCard />
+                {providers.filter((p) => p.type !== 'conecode-free').map((p) => (
                   <div key={p.id} className="bg-[var(--bg-2)] border border-[var(--border)] rounded-2xl p-4 shadow-2xs hover:border-[var(--accent)]/40 transition-all">
                     {editing === p.id ? (
                       <ProviderForm form={form} setForm={setForm} onTypeChange={handleTypeChange} t={t}

@@ -52,7 +52,7 @@ function loadRepo(): string {
   }
 }
 
-function loadToken(): string | null {
+export function loadGithubToken(): string | null {
   try {
     return localStorage.getItem(TOKEN_KEY) || null;
   } catch {
@@ -74,7 +74,7 @@ async function openRoot(): Promise<string | null> {
 
 export const useMarketStore = create<MarketStore>((set, get) => ({
   repo: loadRepo(),
-  tokenSet: !!loadToken(),
+  tokenSet: !!loadGithubToken(),
   status: null,
   refreshing: false,
   pushing: false,
@@ -131,7 +131,7 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
       return res;
     }
     const repo = normalizeRepo(raw);
-    const token = loadToken();
+    const token = loadGithubToken();
     set({ pushing: true, result: null });
     let res: RepoPushResult;
     try {

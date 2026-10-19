@@ -1,5 +1,5 @@
 import { useRef, useEffect, useState, useMemo, useCallback, Fragment } from 'react';
-import { FiMap, FiPlay, FiEdit3, FiChevronDown, FiChevronRight } from 'react-icons/fi';
+import { FiMap, FiPlay, FiEdit3, FiChevronDown, FiChevronRight, FiX } from 'react-icons/fi';
 import { useChatStore, useLanguageStore, useCodeChangesStore, useWorkspaceStore, useModelStore, useSettingsStore, useUIStore } from '../../stores';
 import { orderForDisplay } from '../../stores/chat.store';
 import ChatInput from './ChatInput';
@@ -47,6 +47,8 @@ export default function ChatView() {
   const getSelectedModel = useModelStore((s) => s.getSelectedModel);
   const selectedModel = useModelStore((s) => s.getSelectedModel());
   const health = useMemo(() => selectedModel ? responseHealth(rawMessages, selectedModel.providerId, selectedModel.id, !!(selectedModel.supportsReasoning || selectedModel.userEnabledReasoning)) : null, [rawMessages, selectedModel]);
+  const healthAlertKey = JSON.stringify([activeConversationId, selectedModel?.providerId, selectedModel?.id]);
+  const [dismissedHealthAlerts, setDismissedHealthAlerts] = useState<Set<string>>(() => new Set());
   const [planDismissedId, setPlanDismissedId] = useState<string | null>(null);
   const [reviewCommandId, setReviewCommandId] = useState<string | null>(null);
   const [dismissedSuggestionId, setDismissedSuggestionId] = useState<string | null>(null);
@@ -280,14 +282,25 @@ export default function ChatView() {
           </div>
         </div>
       )}
-      {health && (health.missingReasoning || health.repeatedInterruptions) && (
-        <details className="mx-4 mb-2 rounded-xl border border-[var(--warning-border)] bg-[var(--warning-bg)] px-3 py-2 text-xs text-[var(--text-primary)] shrink-0">
-          <summary className="cursor-pointer">{t('modelResponseAlert')} · {selectedModel?.name}</summary>
-          <p className="mt-2">{t('modelResponseEvidence')}: {health.samples} · {t('modelReasoningReturned')}: {health.reasoning} · {t('modelInterrupted')}: {health.interruptions}</p>
-          {health.missingReasoning && <p className="mt-1">{t('modelReasoningMissing')}</p>}
-          {health.repeatedInterruptions && <p className="mt-1">{t('modelInterruptionsHint')}</p>}
-          <p className="mt-1 text-[var(--text-secondary)]">{t('modelHealthLimit')}</p>
-        </details>
+      {health && !dismissedHealthAlerts.has(healthAlertKey) && (health.missingReasoning || health.repeatedInterruptions) && (
+        <div className="relative mx-4 mb-2 rounded-xl border border-[var(--warning-border)] bg-[var(--warning-bg)] px-3 py-2 text-xs text-[var(--text-primary)] shrink-0">
+          <details>
+            <summary className="cursor-pointer pr-8">{t('modelResponseAlert')} · {selectedModel?.name}</summary>
+            <p className="mt-2">{t('modelResponseEvidence')}: {health.samples} · {t('modelReasoningReturned')}: {health.reasoning} · {t('modelInterrupted')}: {health.interruptions}</p>
+            {health.missingReasoning && <p className="mt-1">{t('modelReasoningMissing')}</p>}
+            {health.repeatedInterruptions && <p className="mt-1">{t('modelInterruptionsHint')}</p>}
+            <p className="mt-1 text-[var(--text-secondary)]">{t('modelHealthLimit')}</p>
+          </details>
+          <button
+            type="button"
+            aria-label={t('dismiss')}
+            title={t('dismiss')}
+            onClick={() => setDismissedHealthAlerts((previous) => new Set(previous).add(healthAlertKey))}
+            className="absolute right-1.5 top-1 inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--text-secondary)] hover:bg-[var(--bg-3)] hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
+          >
+            <FiX size={14} aria-hidden="true" />
+          </button>
+        </div>
       )}
       <div ref={containerRef} className={`flex-1 overflow-y-auto py-6 ${isNewChat ? 'flex flex-col' : ''}`}>
         {isNewChat ? (

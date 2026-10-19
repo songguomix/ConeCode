@@ -1,3 +1,4 @@
+import { FreeAdapter } from './free.adapter';
 import { BaseAdapter } from './base.adapter';
 import { OpenAIAdapter } from './openai.adapter';
 import { AnthropicAdapter } from './anthropic.adapter';
@@ -10,6 +11,7 @@ import type { ProviderConfig, ProviderType, AIModel } from '../../types';
 type AdapterConstructor = new (config: ProviderConfig) => BaseAdapter;
 
 const adapterMap: Record<ProviderType, AdapterConstructor> = {
+  'conecode-free': FreeAdapter,
   openai: OpenAIAdapter,
   anthropic: AnthropicAdapter,
   gemini: GeminiAdapter,

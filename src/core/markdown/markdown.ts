@@ -235,7 +235,7 @@ export function parseMarkdownBlocks(text: string): MdBlock[] {
 // can pin the regex without mounting React.
 // ---------------------------------------------------------------------------
 
-export const INLINE_PATTERN = /(`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|~~[^~]+~~|\*[^*\n]+\*|_[^_\n]+_|\[[^\]]+\]\([^)\s]+\))/g;
+export const INLINE_PATTERN = /(`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|~~[^~]+~~|\*[^*\n]+\*|_[^_\n]+_|!\[[^\]]*\]\([^)\s]+\)|\[[^\]]+\]\([^)\s]+\))/g;
 
 export type MdInline =
   | { type: 'text'; text: string }
@@ -243,7 +243,8 @@ export type MdInline =
   | { type: 'strong'; text: string }
   | { type: 'em'; text: string }
   | { type: 'del'; text: string }
-  | { type: 'link'; text: string; href: string };
+  | { type: 'link'; text: string; href: string }
+  | { type: 'image'; text: string; href: string };
 
 /** Split one line/paragraph into inline tokens. */
 export function parseInline(text: string): MdInline[] {
@@ -275,6 +276,13 @@ export function parseInline(text: string): MdInline[] {
       out.push({ type: 'em', text: part.slice(1, -1) });
       continue;
     }
+    const image = part.match(/^!\[([^\]]*)\]\(([^)\s]+)\)$/);
+    if (image) {
+      out.push(isSafeImageUrl(image[2])
+        ? { type: 'image', text: image[1], href: image[2] }
+        : { type: 'text', text: image[1] });
+      continue;
+    }
     const link = part.match(/^\[([^\]]+)\]\(([^)\s]+)\)$/);
     if (link) {
       // Unsafe schemes stay plain text — never become clickable tokens.
@@ -293,4 +301,9 @@ export function parseInline(text: string): MdInline[] {
 /** Only http(s) links become anchors — everything else is plain text. */
 export function isSafeHttpUrl(href: string): boolean {
   return /^https?:\/\//i.test(href);
+}
+
+/** Images cannot navigate or load executable document data. */
+export function isSafeImageUrl(src: string): boolean {
+  return isSafeHttpUrl(src) || /^data:image\/(?:png|jpeg|gif|webp|bmp|avif|x-icon|svg\+xml);base64,[a-z0-9+/=\s]+$/i.test(src);
 }

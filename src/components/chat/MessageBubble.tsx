@@ -1,3 +1,4 @@
+import { MessageImages } from './ChatImage';
 import { memo, useState, useRef, useEffect } from 'react';
 import type { Message } from '../../types';
 import { FiCopy, FiCheck, FiRotateCcw, FiChevronDown, FiChevronRight, FiHelpCircle, FiClock, FiZap } from 'react-icons/fi';
@@ -102,6 +103,7 @@ function MessageBubble({
             <span className="font-medium">ConeCode</span>
             <span className="font-mono truncate">{expanded ? t('toolResult') : preview}</span>
           </button>
+          <MessageImages images={message.images} />
           {expanded && (
             <pre className="mt-1.5 text-xs font-mono whitespace-pre-wrap bg-[var(--glass-card)] border border-[var(--glass-border)] rounded-xl p-3.5 overflow-x-auto text-[var(--text-secondary)] max-h-80 overflow-y-auto backdrop-blur-md shadow-2xs">
               {message.content}
@@ -178,6 +180,7 @@ function MessageBubble({
           <div className="flex flex-col items-end gap-1.5 max-w-[85%] sm:max-w-[72%]">
             <div className="rounded-2xl px-5 py-3 text-[15.5px] leading-relaxed font-[450] whitespace-pre-wrap break-words [overflow-wrap:anywhere] bg-[var(--glass-card)]/95 backdrop-blur-md border border-[var(--glass-border)] shadow-xs text-[var(--text-primary)]">
               {message.content}
+              <MessageImages images={message.images} />
             </div>
             <div className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
               {message.createdAt && (
@@ -271,6 +274,7 @@ function MessageBubble({
             ) : (
               <div className="min-w-0 w-full">
                 <MessageContent content={message.content} toolCalls={message.toolCalls} />
+                <MessageImages images={message.images} />
               </div>
             )}
 

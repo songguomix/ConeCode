@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  free: { status: () => ipcRenderer.invoke('free:status') },
   window: {
     minimize: () => ipcRenderer.invoke('window:minimize'),
     maximize: () => ipcRenderer.invoke('window:maximize'),
@@ -93,6 +94,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getVersion: () => ipcRenderer.invoke('app:getVersion'),
   },
   git: {
+    publishRelease: (options: any) => ipcRenderer.invoke('git:publishRelease', options),
     info: (cwd?: string) => ipcRenderer.invoke('git:info', cwd),
     status: (cwd?: string) => ipcRenderer.invoke('git:status', cwd),
     diff: (cwd?: string, file?: string) => ipcRenderer.invoke('git:diff', cwd, file),
