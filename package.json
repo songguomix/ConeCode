@@ -29,6 +29,8 @@
     "mac": {
       "category": "public.app-category.developer-tools",
       "target": "dmg",
+      "identity": "ConeCode",
+      "timestamp": "none",
       "hardenedRuntime": false,
       "gatekeeperAssess": false,
       "extraResources": [
