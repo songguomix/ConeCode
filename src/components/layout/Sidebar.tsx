@@ -170,7 +170,7 @@ export default function Sidebar() {
   };
 
   return (
-    <div className="w-full flex flex-col bg-[var(--glass-surface)] backdrop-blur-3xl border-r border-[var(--glass-border)] min-h-0 relative shadow-[inset_-1px_0_0_0_var(--glass-border)]">
+    <div className="w-full h-full flex flex-col bg-[var(--glass-surface)] backdrop-blur-3xl border-r border-[var(--glass-border)] min-h-0 relative shadow-[inset_-1px_0_0_0_var(--glass-border)]">
       {/* Clean drag spacer for macOS traffic lights with no corner badge */}
       <div className="h-[44px] shrink-0" style={{ WebkitAppRegion: 'drag' } as any} />
       {/* Toolbar — the row itself drags the window; buttons opt out. */}
@@ -249,7 +249,7 @@ export default function Sidebar() {
 
       <div className="flex-1 flex flex-col min-h-0 px-2 min-w-0 overflow-hidden">
         {/* Bound the conversation list so Chat cannot displace the file explorer. */}
-        <div className="min-h-0 max-h-[50%] shrink-0 overflow-y-auto">
+        <div className="min-h-0 max-h-[50%] shrink-0 overflow-y-auto overscroll-contain">
         {/* Section 1 — Work folders followed by Chat. */}
         <div className="px-1 pt-1 pb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)] flex items-center gap-1.5">
           <FiMessageSquare size={10} />

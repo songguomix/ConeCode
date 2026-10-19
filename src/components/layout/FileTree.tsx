@@ -51,7 +51,7 @@ export default function FileTree() {
 
   if (!rootPath) {
     return (
-      <div className="px-1.5 py-1">
+      <div className="flex-1 min-h-0 flex flex-col justify-start px-1.5 py-1">
         <button onClick={openFolder}
           className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg text-[12px] font-medium bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[var(--accent)]/20 transition-colors">
           <FiFolder size={12} /> {t('openFolder')}
@@ -143,16 +143,16 @@ export default function FileTree() {
   };
 
   return (
-    <div className="text-sm min-w-0">
+    <div className="flex-1 min-h-0 flex flex-col text-sm min-w-0">
       {/* Add-folder lives at the very top so it is always in reach. */}
-      <div className="px-1.5 py-1">
+      <div className="shrink-0 px-1.5 py-1">
         <button onClick={() => addRootFromDialog()}
           className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg text-[12px] font-medium bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[var(--accent)]/20 transition-colors">
           <FiFolderPlus size={12} /> {t('addFolder')}
         </button>
       </div>
       {/* Explorer toolbar — VS Code order: new file, new folder, refresh, collapse. */}
-      <div className="flex items-center gap-0.5 px-1.5 py-1">
+      <div className="shrink-0 flex items-center gap-0.5 px-1.5 py-1">
         <input
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
@@ -174,7 +174,7 @@ export default function FileTree() {
         </ToolBtn>
       </div>
 
-      <div className="px-1 pb-2">
+      <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-1 pb-2">
         <RootSection path={rootPath} files={files} roots={roots} {...shared}
           trailing={
             <button onClick={() => closeRoot(rootPath)} title={t('closeFolder')}
