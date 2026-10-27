@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { FiX, FiPlus, FiEdit3, FiTrash2, FiCheck, FiServer, FiAlertTriangle, FiZap, FiRefreshCw, FiShield, FiSliders, FiPackage, FiCpu, FiBell, FiBox, FiGlobe } from 'react-icons/fi';
+import { FiX, FiPlus, FiEdit3, FiTrash2, FiCheck, FiServer, FiZap, FiRefreshCw, FiSliders, FiPackage, FiCpu, FiBell, FiBox, FiGlobe, FiFileText } from 'react-icons/fi';
 import { useUIStore, useProviderStore, useLanguageStore, useSettingsStore, useModelStore, LOCALES } from '../../stores';
 import type { ProviderConfig, ProviderType } from '../../types';
 import MemoryPanel from '../memory/MemoryPanel';
@@ -7,6 +7,7 @@ import SkillsPanel from '../skills/SkillsPanel';
 import SettingsPlugins from './SettingsPlugins';
 import ShortcutCard from '../screenshot/ShortcutCard';
 import FreeProviderCard from './FreeProviderCard';
+import PromptsSettingsPanel from './PromptsSettingsPanel';
 
 const MCP_PLACEHOLDER = `{
   "mcpServers": {
@@ -95,7 +96,6 @@ export default function SettingsModal() {
   const updateProvider = useProviderStore((s) => s.updateProvider);
   const deleteProvider = useProviderStore((s) => s.deleteProvider);
   const toggleProvider = useProviderStore((s) => s.toggleProvider);
-  const approvalMode = useSettingsStore((s) => s.approvalMode);
   const toolCallMode = useSettingsStore((s) => s.toolCallMode);
   const fullContext = useSettingsStore((s) => s.fullContext);
   const costLock = useSettingsStore((s) => s.costLock);
@@ -106,22 +106,11 @@ export default function SettingsModal() {
   const updateSettings = useSettingsStore((s) => s.updateSettings);
   const { locale, setLocale, t } = useLanguageStore();
 
-  const APPROVAL_MODES = [
-    { value: 'suggest', label: 'approvalSuggest', desc: 'approvalSuggestDesc' },
-    { value: 'autoEdit', label: 'approvalAutoEdit', desc: 'approvalAutoEditDesc' },
-    { value: 'fullAuto', label: 'approvalFullAuto', desc: 'approvalFullAutoDesc' },
-  ] as const;
-
   const TOOL_CALL_MODES = [
     { value: 'auto', label: 'toolModeAuto', desc: 'toolModeAutoDesc' },
     { value: 'native', label: 'toolModeNative', desc: 'toolModeNativeDesc' },
     { value: 'prompt', label: 'toolModePrompt', desc: 'toolModePromptDesc' },
   ] as const;
-
-  const sandboxMode = useSettingsStore((s) => s.sandboxMode);
-  const sandboxAllowNetwork = useSettingsStore((s) => s.sandboxAllowNetwork);
-  // Seatbelt is macOS-only; elsewhere the switch would be a lie.
-  const sandboxSupported = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform || '');
 
   const selectedModel = useModelStore((s) => s.getSelectedModel)();
   const nativeActive =
@@ -154,6 +143,7 @@ export default function SettingsModal() {
   const SECTIONS = [
     { id: 'general', label: 'setGeneral', desc: 'setGeneralDesc', icon: <FiSliders size={14} /> },
     { id: 'providers', label: 'setProviders', desc: 'setProvidersDesc', icon: <FiServer size={14} /> },
+    { id: 'prompts', label: 'setPrompts', desc: 'setPromptsDesc', icon: <FiFileText size={14} /> },
     { id: 'skills', label: 'skills', desc: 'skillsHint', icon: <FiPackage size={14} /> },
     { id: 'plugins', label: 'plugins', desc: 'pluginsDesc', icon: <FiBox size={14} /> },
     { id: 'memory', label: 'memory', desc: 'memoryHint', icon: <FiCpu size={14} /> },
@@ -221,8 +211,13 @@ export default function SettingsModal() {
           </div>
 
           {/* Scrollable Content Pane */}
-          <div className="flex-1 min-w-0 overflow-y-auto p-6 space-y-4">
-            {section === 'general' && (
+          {section === 'prompts' ? (
+            <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
+              <PromptsSettingsPanel />
+            </div>
+          ) : (
+            <div className="flex-1 min-w-0 overflow-y-auto p-6 space-y-4">
+              {section === 'general' && (
               <>
                 {/* Group 0: 界面语言 */}
                 <div className="bg-[var(--bg-2)] border border-[var(--border)] rounded-2xl shadow-2xs p-4">
@@ -258,77 +253,7 @@ export default function SettingsModal() {
                   </div>
                 </div>
 
-                {/* Group 1: 运行与安全策略 */}
-                <div className="bg-[var(--bg-2)] border border-[var(--border)] rounded-2xl shadow-2xs divide-y divide-[var(--border)] overflow-hidden">
-                  {/* Approval Mode */}
-                  <div className="p-4 flex items-center justify-between gap-4">
-                    <div className="flex-1 min-w-0 pr-4">
-                      <div className="font-semibold text-sm text-[var(--text-primary)]">{t('approvalMode')}</div>
-                      <p className={`mt-0.5 text-xs flex items-center gap-1.5 leading-relaxed ${approvalMode === 'fullAuto' ? 'text-red-500 font-medium' : 'text-[var(--text-muted)]'}`}>
-                        {approvalMode === 'fullAuto' && <FiAlertTriangle size={13} className="shrink-0" />}
-                        <span>{t(APPROVAL_MODES.find((m) => m.value === approvalMode)!.desc)}</span>
-                      </p>
-                    </div>
-                    <div className="inline-flex p-1 bg-[var(--bg-1)] border border-[var(--border)] rounded-xl gap-0.5 shrink-0">
-                      {APPROVAL_MODES.map((m) => (
-                        <button
-                          key={m.value}
-                          type="button"
-                          onClick={() => updateSettings({ approvalMode: m.value })}
-                          className={`min-w-[76px] px-3.5 py-1.5 rounded-lg text-xs font-medium text-center transition-all cursor-pointer ${
-                            approvalMode === m.value
-                              ? 'bg-[var(--bg-2)] text-[var(--accent)] shadow-xs border border-[var(--border)]/70 font-semibold'
-                              : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-2)]/40 border border-transparent'
-                          }`}
-                        >
-                          {t(m.label)}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Command Sandbox */}
-                  <div className="p-4 flex items-center justify-between gap-4">
-                    <div className="flex-1 min-w-0 pr-4">
-                      <div className="flex items-center gap-2">
-                        <FiShield size={14} className={sandboxMode === 'workspaceWrite' && sandboxSupported ? 'text-[var(--success)]' : 'text-[var(--warning)]'} />
-                        <span className="font-semibold text-sm text-[var(--text-primary)]">{t('sandbox')}</span>
-                      </div>
-                      <p className={`mt-0.5 text-xs flex items-center gap-1.5 leading-relaxed ${sandboxMode === 'off' ? 'text-red-500 font-medium' : 'text-[var(--text-muted)]'}`}>
-                        {sandboxMode === 'off' && <FiAlertTriangle size={13} className="shrink-0" />}
-                        <span>{t(sandboxMode === 'off' ? 'sandboxOffDesc' : 'sandboxOnDesc')}</span>
-                      </p>
-                      {sandboxMode === 'workspaceWrite' && (
-                        <label className="mt-1.5 inline-flex items-center gap-2 text-xs text-[var(--text-secondary)] cursor-pointer">
-                          <input type="checkbox" checked={sandboxAllowNetwork}
-                            onChange={(e) => updateSettings({ sandboxAllowNetwork: e.target.checked })}
-                            className="accent-[var(--accent)] rounded" />
-                          {t('sandboxNetwork')}
-                        </label>
-                      )}
-                    </div>
-                    {sandboxSupported && (
-                      <div className="inline-flex p-1 bg-[var(--bg-1)] border border-[var(--border)] rounded-xl gap-0.5 shrink-0">
-                        {([{ value: 'workspaceWrite', label: 'sandboxOn' }, { value: 'off', label: 'sandboxOff' }] as const).map((m) => (
-                          <button
-                            key={m.value}
-                            type="button"
-                            onClick={() => updateSettings({ sandboxMode: m.value })}
-                            className={`min-w-[88px] px-3.5 py-1.5 rounded-lg text-xs font-medium text-center transition-all cursor-pointer ${
-                              sandboxMode === m.value
-                                ? 'bg-[var(--bg-2)] text-[var(--accent)] shadow-xs border border-[var(--border)]/70 font-semibold'
-                                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-2)]/40 border border-transparent'
-                            }`}
-                          >
-                            {t(m.label)}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Group 2: 模型与推理控制 */}
+                {/* Group 1: 模型与推理控制 */}
                 <div className="bg-[var(--bg-2)] border border-[var(--border)] rounded-2xl shadow-2xs divide-y divide-[var(--border)] overflow-hidden">
                   {/* Tool Calls */}
                   <div className="p-4 flex items-center justify-between gap-4">
@@ -531,7 +456,8 @@ export default function SettingsModal() {
             {section === 'mcp' && (
               <McpSettings t={t} />
             )}
-          </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

@@ -163,7 +163,16 @@ export interface ChatStreamParams {
  * call site is an error the build silently tolerated.
  */
 export interface ElectronAPI {
-  free: { status: () => Promise<import('../core/providers/free.adapter').FreeStatus> };
+  free: {
+    status: () => Promise<import('../core/providers/free.adapter').FreeStatus>;
+    // Durable weekly-usage store (main-process file). Optional so older test
+    // stubs that only mock `status` still satisfy the shape.
+    usageGet?: () => Promise<import('../core/providers/freeUsage').FreeWeeklyUsageRecord | null>;
+    usageRecord?: (tokens: number) => Promise<import('../core/providers/freeUsage').FreeWeeklyUsageRecord>;
+    usageSync?: (serverResetAt: string | null) => Promise<{ record: import('../core/providers/freeUsage').FreeWeeklyUsageRecord; changed: boolean }>;
+    usageReset?: (serverResetAt: string | null) => Promise<import('../core/providers/freeUsage').FreeWeeklyUsageRecord>;
+    usageHydrate?: (legacy: import('../core/providers/freeUsage').FreeWeeklyUsageRecord | null) => Promise<import('../core/providers/freeUsage').FreeWeeklyUsageRecord>;
+  };
   window: {
     minimize: () => Promise<void>;
     maximize: () => Promise<void>;

@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
-import { FiSquare, FiPaperclip, FiX, FiFile, FiArrowUp, FiPlus, FiTool, FiChevronRight, FiCamera, FiClock } from 'react-icons/fi';
+import { FiSquare, FiPaperclip, FiX, FiFile, FiArrowUp, FiPlus, FiTool, FiChevronRight, FiCamera, FiClock, FiImage, FiPlay } from 'react-icons/fi';
 import { AGENT_MODES, type AgentMode } from '../../core/agents/modePrompts';
-import { useMemoryStore, useChatStore, useModelStore, useLanguageStore, useWorkspaceStore, useSettingsStore, useUIStore, useGoalStore, useSkillsStore } from '../../stores';
+import { useMemoryStore, useChatStore, useModelStore, useLanguageStore, useWorkspaceStore, useSettingsStore, useUIStore, useGoalStore, useSkillsStore, useImageGenStore } from '../../stores';
 import { useScreenshotStore } from '../../stores/screenshot.store';
 import { useBackgroundStore } from '../../stores/background.store';
 import { prettyShortcut } from '../../core/screenshot/shortcut';
@@ -34,6 +34,8 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
   const isStreaming = useChatStore((s) => (activeConversationId ? !!s.streamingRuns[activeConversationId] : false));
   const stopGeneration = useChatStore((s) => s.stopGeneration);
   const isSavingEdit = useChatStore((s) => activeConversationId ? !!s.messageEdits[activeConversationId] : false);
+  const continuableConvId = useChatStore((s) => s.continuableConvId);
+  const continueGeneration = useChatStore((s) => s.continueGeneration);
   const compactConversation = useChatStore((s) => s.compactConversation);
   const pushNotice = useChatStore((s) => s.pushNotice);
   const createConversation = useChatStore((s) => s.createConversation);
@@ -209,6 +211,10 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
       case 'model':
         toggleModelSelector();
         break;
+      case 'image':
+      case 'imagine':
+        useImageGenStore.getState().openModal(args.trim());
+        break;
       case 'memory': {
         // Two things are called memory here and they behave differently, so the
         // command shows both: files the user wrote (editable, and the argument
@@ -283,7 +289,9 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
   const handleSend = async () => {
     if (isSavingEdit || installHolding) return;
     const text = input;
-    if (!text.trim()) return;
+    // A pasted/attached image can carry a textless turn ("paste, hit send").
+    const hasAttachedImages = contextFiles.some((f) => f.isImage && f.dataUrl);
+    if (!text.trim() && !hasAttachedImages) return;
 
     const slash = parseSlashInput(text.trim());
     if (slash) {
@@ -442,6 +450,18 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
       ? "w-full max-w-[840px] mx-auto transition-colors"
       : "bg-[var(--glass-surface)]/60 backdrop-blur-2xl border-t border-[var(--glass-border)] transition-colors"
     }>
+      {/* Interrupted-run resume: one click picks up where the reply stopped. */}
+      {continuableConvId === activeConversationId && !!activeConversationId && !isStreaming && !isSavingEdit && (
+        <div className="max-w-[900px] mx-auto w-full px-4 pt-2.5 flex justify-center">
+          <button
+            onClick={() => void continueGeneration()}
+            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-medium bg-[var(--accent-soft)] text-[var(--accent)] border border-[var(--accent)]/30 hover:bg-[var(--accent)] hover:text-white transition-all shadow-2xs cursor-pointer"
+          >
+            <FiPlay size={11} />
+            {t('continueOutput')}
+          </button>
+        </div>
+      )}
       {/* Context files indicator */}
       {(autoIncludeFileContext && selectedFile) || contextFiles.length > 0 || activeSkill ? (
         <div className="max-w-[900px] mx-auto w-full px-4 pt-2.5 pb-1">
@@ -587,6 +607,16 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
                           {prettyShortcut(screenshotShortcut)}
                         </kbd>
                       )}
+                    </button>
+                    <button
+                      onClick={() => { setPlusOpen(false); setSkillPickerOpen(false); useImageGenStore.getState().openModal(input.trim()); }}
+                      className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] text-[var(--text-secondary)] hover:bg-[var(--bg-3)]/60 hover:text-[var(--text-primary)] transition-colors group/img"
+                    >
+                      <FiImage size={14} className="text-[var(--accent)] group-hover/img:scale-110 transition-transform" />
+                      <span className="flex-1 text-left font-medium">{t('generateImage')}</span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-[var(--accent-soft)] text-[var(--accent)] font-medium font-sans">
+                        AI
+                      </span>
                     </button>
                     <button
                       onClick={() => { void handleBackgroundSend(); setPlusOpen(false); }}

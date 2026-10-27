@@ -9,6 +9,7 @@ import {
   selectRelevant,
   type MemoryEntry,
 } from '../core/memory/memory';
+import { usePromptStore } from './prompt.store';
 
 // How many messages of the exchange to show the extractor. Enough to see a
 // correction and its context, small enough to stay cheap.
@@ -128,7 +129,7 @@ export const useMemoryStore = create<MemoryStore>((set, get) => ({
         silent: true,
         maxTokens: 600,
         messages: [
-          { role: 'system', content: EXTRACTION_SYSTEM_PROMPT },
+          { role: 'system', content: usePromptStore.getState().getPrompt('memory_extract') },
           {
             role: 'user',
             content: `Existing memory (do not repeat these):\n${known || '(empty)'}\n\n---\nRecent exchange:\n${transcript}`,

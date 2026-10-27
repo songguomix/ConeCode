@@ -14,6 +14,7 @@ import {
 import { useWorkspaceStore } from './workspace.store';
 import { useChatStore } from './chat.store';
 import { useCodeChangesStore } from './codeChanges.store';
+import { usePromptStore } from './prompt.store';
 
 // Suggestions are cached per project so reopening the app shows yesterday's
 // proposals instantly instead of spending tokens again. Kept in localStorage:
@@ -197,7 +198,18 @@ export const useAgendaStore = create<AgendaStore>((set, get) => ({
         silent: true,
         maxTokens,
         messages: [
-          { role: 'system', content: buildSuggestSystemPrompt(currentLocale) },
+          {
+            role: 'system',
+            content: usePromptStore.getState().getPrompt('suggest') + (
+              currentLocale === 'zh'
+                ? '\n- IMPORTANT: Output the title, rationale, and prompt in Simplified Chinese (简体中文).'
+                : currentLocale === 'zhHant'
+                ? '\n- IMPORTANT: Output the title, rationale, and prompt in Traditional Chinese (繁體中文).'
+                : currentLocale === 'ja'
+                ? '\n- IMPORTANT: Output the title, rationale, and prompt in Japanese (日本語).'
+                : '\n- IMPORTANT: Output the title, rationale, and prompt in English.'
+            ),
+          },
           { role: 'user', content: buildScanBriefing(scan) },
         ],
       });

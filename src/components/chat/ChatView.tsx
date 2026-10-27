@@ -1,5 +1,5 @@
 import { useRef, useEffect, useState, useMemo, useCallback, Fragment } from 'react';
-import { FiMap, FiPlay, FiEdit3, FiChevronDown, FiChevronRight, FiX } from 'react-icons/fi';
+import { FiMap, FiPlay, FiEdit3, FiChevronDown, FiChevronRight, FiX, FiRefreshCw } from 'react-icons/fi';
 import { useChatStore, useLanguageStore, useCodeChangesStore, useWorkspaceStore, useModelStore, useSettingsStore, useUIStore } from '../../stores';
 import { orderForDisplay } from '../../stores/chat.store';
 import ChatInput from './ChatInput';
@@ -155,13 +155,10 @@ export default function ChatView() {
 
   const handleSwitchToWorkMode = useCallback(async () => {
     setViewMode('work');
-    const ws = useWorkspaceStore.getState();
     if (activeConversationId) {
-      if (ws.rootPath) {
-        await useChatStore.getState().setConversationFolder(ws.rootPath);
-      } else {
-        await ws.openFolder();
-      }
+      // Reuse the open folder, or let the user choose one; switching modes
+      // must never create a project directory on its own.
+      await useChatStore.getState().ensureWorkFolder();
     }
   }, [activeConversationId, setViewMode]);
 
@@ -392,6 +389,23 @@ export default function ChatView() {
         {isStreaming && (
           <div className={`${streamContinues ? 'mt-1.5' : 'mt-6'}`}>
             <div className="min-w-0">
+              {/* Auto-retry in progress after a network/model interruption —
+                  a live reconnecting pill instead of a silent freeze. */}
+              {activeRun?.retry && (
+                <div className="mb-3 inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-[var(--warning)]/30 bg-[var(--warning)]/10 text-[12px] font-medium text-[var(--warning)] anim-fade">
+                  <FiRefreshCw size={12} className="animate-spin shrink-0" />
+                  <span className="whitespace-nowrap">
+                    {activeRun.retry.max != null
+                      ? `${t('streamRetry')} ${activeRun.retry.attempt}/${activeRun.retry.max}`
+                      : `${t('streamRetryEndless')} · ${activeRun.retry.attempt}`}
+                  </span>
+                  <span className="flex items-center gap-0.5 pb-0.5">
+                    <span className="w-1 h-1 rounded-full bg-current animate-bounce" style={{ animationDelay: '0ms' }} />
+                    <span className="w-1 h-1 rounded-full bg-current animate-bounce" style={{ animationDelay: '150ms' }} />
+                    <span className="w-1 h-1 rounded-full bg-current animate-bounce" style={{ animationDelay: '300ms' }} />
+                  </span>
+                </div>
+              )}
               {streamingReasoning && (
                 <details open className="mb-3 rounded-xl border border-[var(--glass-border)] bg-[var(--glass-card)] px-3 py-2">
                   <summary className="cursor-pointer text-xs font-medium text-[var(--text-secondary)]">{t('thinkingProcess')}</summary>

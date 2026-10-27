@@ -1,23 +1,22 @@
-import { useEffect, useState, useMemo, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import {
-  FiZap,
-  FiSquare,
-  FiArrowLeft,
-  FiRefreshCw,
-  FiCheck,
-  FiAlertTriangle,
   FiActivity,
-  FiLayers,
-  FiCpu,
-  FiMonitor,
-  FiEye,
+  FiAlertTriangle,
+  FiCheck,
   FiChevronDown,
   FiChevronUp,
-  FiTerminal,
-  FiSliders,
+  FiCpu,
   FiGitBranch,
-  FiX,
+  FiLayers,
+  FiMonitor,
+  FiRefreshCw,
   FiSearch,
+  FiSliders,
+  FiSquare,
+  FiTerminal,
+  FiX,
+  FiZap,
+  FiTarget,
 } from 'react-icons/fi';
 import { useChatStore } from '../../stores/chat.store';
 import { useComputerStore } from '../../stores/computer.store';
@@ -27,16 +26,36 @@ import { useProviderStore } from '../../stores/provider.store';
 import { usePluginStore } from '../../stores/plugin.store';
 import { useSettingsStore } from '../../stores/settings.store';
 import { useCodeChangesStore } from '../../stores/codeChanges.store';
-import CommandApprovalCard from '../chat/CommandApprovalCard';
-import QuestionPromptCard from '../chat/QuestionPromptCard';
-import { commandsForConversation } from '../chat/approvalPresentation';
 import { useUIStore } from '../../stores/ui.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
-import SyncView from '../plugins/SyncView';
+import { orderForDisplay } from '../../stores/chat.store';
 import { rsiCanStart } from '../../core/agents/rsiStart';
 import { bootstrapRsiWorkspace, electronAsyncFs } from '../../core/agents/rsiBridge';
+import { commandsForConversation } from '../chat/approvalPresentation';
+import CommandApprovalCard from '../chat/CommandApprovalCard';
+import QuestionPromptCard from '../chat/QuestionPromptCard';
+import MessageBubble from '../chat/MessageBubble';
+import MessageContent from '../chat/MessageContent';
+import ChatInput from '../chat/ChatInput';
+import SyncView from '../plugins/SyncView';
+import RsiDirectionPanel from './RsiDirectionPanel';
+import { isRsiConversation } from '../../core/agents/rsiConversation';
+import type { Message } from '../../types';
 
-/** Helper to infer active phase number (1..5) from text content. */
+const isAiSide = (m: Message) => m.role === 'assistant' || m.role === 'tool';
+
+/** Format seconds into mm:ss or hh:mm:ss display */
+function formatDuration(sec: number): string {
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  if (h > 0) {
+    return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  }
+  return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+}
+
+/** Detect which of the 5 RSI stages is currently active from logs/reasoning */
 function detectActivePhase(text: string): number {
   if (!text) return 1;
   const lower = text.toLowerCase();
@@ -114,35 +133,23 @@ function detectActivePhase(text: string): number {
   return 1;
 }
 
-/** Formats seconds into mm:ss or hh:mm:ss. */
-function formatDuration(sec: number): string {
-  const h = Math.floor(sec / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  const s = sec % 60;
-  if (h > 0) {
-    return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-  }
-  return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-}
-
 /**
- * RSI Autopilot Dashboard
- *
  * Owns the center column while agentMode is 'rsi'. Provides high-density status,
  * preflight diagnostics, visual pipeline progression, real-time activity stream,
- * and plugin extensions while hiding conversational chat clutter.
+ * and plugin extensions with a modern tabbed layout.
  */
 export default function RsiView() {
   const { t } = useLanguageStore();
-  const setAgentMode = useChatStore((s) => s.setAgentMode);
   const sendMessage = useChatStore((s) => s.sendMessage);
   const stopGeneration = useChatStore((s) => s.stopGeneration);
   const continuableConvId = useChatStore((s) => s.continuableConvId);
   const continueGeneration = useChatStore((s) => s.continueGeneration);
   const chatError = useChatStore((s) => s.error);
   const clearChatError = useChatStore((s) => s.clearError);
-  const activeConversationId = useChatStore((s) => s.activeConversationId);  const streamingRuns = useChatStore((s) => s.streamingRuns);
+  const activeConversationId = useChatStore((s) => s.activeConversationId);
+  const streamingRuns = useChatStore((s) => s.streamingRuns);
   const rawMessages = useChatStore((s) => s.messages);
+  const conversations = useChatStore((s) => s.conversations);
 
   const modelsMap = useModelStore((s) => s.models);
   const selectModel = useModelStore((s) => s.selectModel);
@@ -160,6 +167,7 @@ export default function RsiView() {
   const githubOn = usePluginStore((s) => !s.disabled.includes('github-sync'));
   const setPluginEnabled = usePluginStore((s) => s.setEnabled);
 
+  const [activeTab, setActiveTab] = useState<'console' | 'direction' | 'pipeline'>('console');
   const [busy, setBusy] = useState(false);
   const [asking, setAsking] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
@@ -167,9 +175,13 @@ export default function RsiView() {
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [modelSearch, setModelSearch] = useState('');
   const logContainerRef = useRef<HTMLDivElement>(null);
+  const transcriptRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     void refresh();
+    if (useUIStore.getState().viewMode !== 'work') {
+      useUIStore.getState().setViewMode('work');
+    }
   }, [refresh]);
 
   const model = getSelectedModel();
@@ -177,11 +189,30 @@ export default function RsiView() {
   const activeRun = activeConversationId ? streamingRuns[activeConversationId] : undefined;
   const running = !!activeRun;
 
-  // Reload/crash reconciliation (view-level, zero store writes): a transcript
-  // whose persisted tail is an UNANSWERED user request is the fingerprint of a
-  // run that died without leaving any record at all (renderer restart
-  // mid-turn, stream death, cancelled turn). Show why the loop looks
-  // untouched and offer one-click resume — instead of "无征兆中断".
+  const conv = conversations.find((c) => c.id === activeConversationId);
+  const rsi = conv && isRsiConversation(conv) ? conv.rsi : null;
+  const rsiConfig = rsi?.directionConfig ?? null;
+  const currentObjective = rsiConfig?.objective?.trim() || '';
+  const hasDirectionConfigured = !!(
+    rsiConfig?.objective?.trim() ||
+    rsiConfig?.priorities?.trim() ||
+    rsiConfig?.metrics?.trim() ||
+    rsiConfig?.scope?.trim() ||
+    rsiConfig?.constraints?.trim()
+  );
+
+  // The conversation transcript, tool results folded into display order — the
+  // same ordering the chat view renders with.
+  const orderedMessages = useMemo(() => orderForDisplay(rawMessages), [rawMessages]);
+
+  // Keep the newest turn in view while it streams in the console tab
+  useEffect(() => {
+    if (activeTab === 'console' && transcriptRef.current) {
+      transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight;
+    }
+  }, [activeTab, orderedMessages.length, activeRun?.content, activeRun?.reasoningContent]);
+
+  // Reload/crash reconciliation
   const danglingRequest = useMemo(() => {
     if (running) return false;
     const tail = rawMessages[rawMessages.length - 1];
@@ -281,10 +312,6 @@ export default function RsiView() {
     return list;
   }, [modelsMap, providers, modelSearch]);
 
-  // This conversation's pending command approvals (exec runs waiting for a
-  // decision) and the latest unanswered model question. The RSI view hides the
-  // chat transcript where these cards normally live — without them a run that
-  // stops for approval looks like it "突然中断" with no way forward in place.
   const changes = useCodeChangesStore((s) => s.changes);
   const pendingCommands = useMemo(() => {
     const ids = new Set(rawMessages.map((m) => m.id));
@@ -306,11 +333,6 @@ export default function RsiView() {
     if (!model || busy || running) return;
     setBusy(true);
     setElapsedSeconds(0);
-    // RSI always runs fully automatically, independent of Settings: a
-    // session-only override (never persisted, never shown in Settings) drives
-    // execution while the user's own approvalMode stays exactly as left.
-    // The approval/question cards below remain as the visible safety net for
-    // anything that still pauses (e.g. an ask_user question).
     try {
       await refresh();
       const st = useComputerStore.getState();
@@ -326,24 +348,18 @@ export default function RsiView() {
         return;
       await st.setEnabled(true);
       useSettingsStore.setState({ approvalOverride: 'fullAuto' });
-      // A previous run may have died after persisting the kickoff (stream
-      // failure, turn cap, app restart). In-memory continuable OR the
-      // dangling-request fingerprint (which survives no state at all — it is
-      // recomputed from the persisted transcript tail) must both RESUME the
-      // run instead of stacking a second kickoff onto the transcript.
+
       if ((continuableConvId && continuableConvId === activeConversationId) || danglingRequest) {
         await continueGeneration();
         return;
       }
-      // Program-side search state on real disk (STRATEGY.md default + resume
-      // LOOP_STATE.json when a frozen goal exists). Best-effort: a bridge
-      // failure must never block the agent run below.
+
       try {
         const afs = electronAsyncFs();
         const root = useWorkspaceStore.getState().rootPath;
         if (afs && root) await bootstrapRsiWorkspace(afs, root);
       } catch {
-        /* offline bridge: the prompt-driven loop still proceeds */
+        /* offline bridge: prompt-driven loop still proceeds */
       }
       await sendMessage(t('rsiKickoff'), model.providerId, model.id);
     } finally {
@@ -403,7 +419,7 @@ export default function RsiView() {
   ];
 
   return (
-    <div className="flex-1 overflow-y-auto pt-2 pb-8 px-4 select-text">
+    <div className="flex-1 flex flex-col min-h-0 bg-[var(--bg-0)] overflow-hidden select-text relative">
       {/* Dedicated Model Selector Modal for RSI */}
       {modelPickerOpen && (
         <div
@@ -415,16 +431,17 @@ export default function RsiView() {
             onClick={(e) => e.stopPropagation()}
           >
             {/* Modal Header */}
-            <div className="p-4 border-b border-[var(--border)] flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <FiCpu size={16} className="text-[var(--accent)]" />
-                <h3 className="text-[14px] font-semibold text-[var(--text-primary)]">
+            <div className="p-4 border-b border-[var(--border)] flex items-center justify-between gap-2 min-w-0">
+              <div className="flex items-center gap-2 min-w-0 flex-1">
+                <FiCpu size={16} className="text-[var(--accent)] shrink-0" />
+                <h3 className="text-[14px] font-semibold text-[var(--text-primary)] truncate">
                   {t('rsiModelChange')}
                 </h3>
               </div>
               <button
+                type="button"
                 onClick={() => setModelPickerOpen(false)}
-                className="p-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-3)] transition-colors"
+                className="p-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-3)] transition-colors shrink-0"
               >
                 <FiX size={16} />
               </button>
@@ -453,6 +470,7 @@ export default function RsiView() {
                   return (
                     <button
                       key={`${m.providerId}-${m.id}`}
+                      type="button"
                       onClick={() => {
                         selectModel(m.id, m.providerId);
                         setModelPickerOpen(false);
@@ -486,6 +504,7 @@ export default function RsiView() {
                 {providers.length} {t('providers') || '提供商'}
               </span>
               <button
+                type="button"
                 onClick={() => {
                   setModelPickerOpen(false);
                   toggleSettings();
@@ -499,514 +518,692 @@ export default function RsiView() {
         </div>
       )}
 
-      <div className="max-w-[760px] mx-auto w-full space-y-5">
-        {/* Top Bar: Return to chat & Live Status Indicator */}
-        <div className="flex items-center justify-between">
-          <button
-            onClick={() => setAgentMode('standard')}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[13px] font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-2)] border border-transparent hover:border-[var(--border)] transition-all"
-          >
-            <FiArrowLeft size={14} />
-            <span>{t('rsiBack')}</span>
-          </button>
-
-          <div className="flex items-center gap-2">
-            {running ? (
-              <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[var(--accent-soft)] border border-[var(--accent)]/30 text-[12px] font-medium text-[var(--accent)] shadow-xs">
-                <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[var(--accent)] opacity-75" />
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-[var(--accent)]" />
-                </span>
-                <span>{t('rsiRunning')}</span>
-                <span className="font-mono text-[11px] opacity-80 px-1 py-0.5 rounded bg-[var(--accent)]/10">
-                  {formatDuration(elapsedSeconds)}
-                </span>
+      {/* Top Sticky Control Hub */}
+      <div className="shrink-0 border-b border-[var(--border)] bg-[var(--bg-1)]/75 backdrop-blur-xl px-4 pt-3 pb-2 z-10 shadow-xs">
+        <div className="max-w-[960px] mx-auto w-full space-y-2.5">
+          {/* Top Row: Identity & Status + Model Picker + Start/Stop CTA */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 min-w-0">
+            {/* Identity & Status */}
+            <div className="flex items-center gap-3 min-w-0">
+              <div
+                className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 shadow-xs transition-colors ${
+                  running
+                    ? 'bg-[var(--error)]/15 text-[var(--error)] ring-2 ring-[var(--error)]/30'
+                    : 'bg-[var(--accent-soft)] text-[var(--accent)] ring-1 ring-[var(--accent)]/20'
+                }`}
+              >
+                <FiZap size={18} className={running ? 'animate-pulse' : ''} />
               </div>
-            ) : (
-              <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[var(--bg-2)] border border-[var(--border)] text-[12px] text-[var(--text-muted)] font-medium">
-                <span className="w-2 h-2 rounded-full bg-[var(--success)]" />
-                <span>{t('rsiIdle')}</span>
-              </div>
-            )}
-          </div>
-        </div>
 
-        {/* Hero Header Card */}
-        <div className="relative overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg-1)] p-5 shadow-xs">
-          <div className="flex flex-col sm:flex-row sm:items-center gap-4">
-            <div
-              className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 shadow-xs transition-colors ${
-                running
-                  ? 'bg-[var(--error)]/15 text-[var(--error)] ring-2 ring-[var(--error)]/30'
-                  : 'bg-[var(--accent-soft)] text-[var(--accent)] ring-1 ring-[var(--accent)]/20'
-              }`}
-            >
-              <FiZap size={22} className={running ? 'animate-pulse' : ''} />
-            </div>
-
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2 mb-1">
-                <h1 className="text-[18px] font-semibold tracking-tight text-[var(--text-primary)]">
-                  {t('rsiTitle')}
-                </h1>
-                <span className="px-2 py-0.5 rounded-md text-[11px] font-medium bg-[var(--accent-soft)] text-[var(--accent)] border border-[var(--accent)]/20">
-                  {t('rsiBadgeLoop')}
-                </span>
-              </div>
-              <p className="text-[13px] text-[var(--text-secondary)] leading-relaxed">
-                {t('rsiSubtitle')}
-              </p>
-            </div>
-          </div>
-        </div>
-
-        {/* Primary Action & Model Control Banner */}
-        <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-2)] p-4 shadow-xs space-y-3">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-1 border-b border-[var(--border)]">
-            <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-xl bg-[var(--bg-3)] flex items-center justify-center text-[var(--text-secondary)] shrink-0">
-                <FiCpu size={15} />
-              </div>
               <div className="min-w-0">
-                <span className="text-[11px] font-medium uppercase tracking-wider text-[var(--text-muted)] block">
-                  {t('rsiModelStatus')}
-                </span>
-                <span className="text-[13.5px] font-medium text-[var(--text-primary)] truncate block">
-                  {model ? model.name : t('rsiNoModel')}
-                </span>
+                <div className="flex items-center gap-2">
+                  <h1 className="text-[15px] font-bold tracking-tight text-[var(--text-primary)] truncate">
+                    {t('rsiTitle')}
+                  </h1>
+                  <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-[var(--accent-soft)] text-[var(--accent)] border border-[var(--accent)]/20 shrink-0 uppercase tracking-wider">
+                    {t('rsiBadgeLoop')}
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2 mt-0.5 text-[12px] text-[var(--text-muted)] min-w-0">
+                  {running ? (
+                    <span className="inline-flex items-center gap-1.5 text-[var(--accent)] font-medium">
+                      <span className="relative flex h-2 w-2 shrink-0">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[var(--accent)] opacity-75" />
+                        <span className="relative inline-flex rounded-full h-2 w-2 bg-[var(--accent)]" />
+                      </span>
+                      <span>{t('rsiRunning')}</span>
+                      <span className="font-mono text-[11px] px-1.5 py-0.2 rounded bg-[var(--accent)]/15 text-[var(--accent)] font-semibold">
+                        {formatDuration(elapsedSeconds)}
+                      </span>
+                      {activeStage > 0 && (
+                        <span className="text-[11px] opacity-80 shrink-0">· Phase {activeStage}</span>
+                      )}
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5 text-[var(--text-muted)]">
+                      <span className="w-2 h-2 rounded-full bg-[var(--success)] shrink-0" />
+                      <span>{t('rsiIdle')}</span>
+                      {rsi && rsi.runs.length > 0 && (
+                        <span className="text-[11px] opacity-75 shrink-0">
+                          · 迭代 #{rsi.runs[rsi.runs.length - 1].iteration}
+                        </span>
+                      )}
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
 
-            <button
-              onClick={() => setModelPickerOpen(true)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[var(--bg-1)] hover:bg-[var(--bg-3)] border border-[var(--border)] text-[12.5px] font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors shrink-0"
-            >
-              <FiSliders size={13} />
-              <span>{t('rsiModelChange')}</span>
-            </button>
+            {/* Right Controls: Model Pill & Start/Stop CTA */}
+            <div className="flex items-center gap-2 shrink-0 self-start sm:self-auto">
+              {/* Model Selector Pill */}
+              <button
+                type="button"
+                onClick={() => setModelPickerOpen(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[var(--bg-2)] hover:bg-[var(--bg-3)] border border-[var(--border)] text-[12px] text-[var(--text-primary)] transition-all shrink-0 max-w-[210px] group shadow-2xs"
+                title={model ? `${model.name} (${model.providerId})` : t('rsiNoModel')}
+              >
+                <FiCpu size={13} className="text-[var(--accent)] shrink-0 group-hover:scale-105 transition-transform" />
+                <span className="truncate font-medium">{model ? model.name : t('rsiNoModel')}</span>
+                <FiSliders size={11} className="text-[var(--text-muted)] shrink-0 opacity-60 ml-0.5" />
+              </button>
+
+              {/* Start / Stop Primary CTA */}
+              {running ? (
+                <button
+                  type="button"
+                  onClick={stop}
+                  className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-xl bg-[var(--error)] hover:opacity-90 active:scale-95 text-white text-[12.5px] font-semibold transition-all shadow-xs"
+                >
+                  <FiSquare size={13} />
+                  <span>{t('rsiStop')}</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => void start()}
+                  disabled={!canStart}
+                  className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-xl bg-[var(--accent)] hover:bg-[var(--accent-hover)] active:scale-95 text-white text-[12.5px] font-semibold transition-all shadow-xs disabled:opacity-40 disabled:pointer-events-none"
+                >
+                  <FiZap size={13} />
+                  <span>{busy ? t('rsiRunning') : t('rsiStart')}</span>
+                </button>
+              )}
+            </div>
           </div>
 
-          {/* Validation Notice when cannot start */}
+          {/* System Readiness Warnings (compact inline banner) */}
           {!model ? (
-            <div className="px-3.5 py-2.5 rounded-xl bg-[var(--warning)]/10 border border-[var(--warning)]/25 flex items-center gap-2.5 text-[12.5px] text-[var(--warning)]">
-              <FiAlertTriangle size={14} className="shrink-0" />
-              <span className="flex-1">{t('rsiNoModel')}</span>
+            <div className="px-3 py-1.5 rounded-lg bg-[var(--warning)]/10 border border-[var(--warning)]/25 flex items-center justify-between gap-2 text-[12px] text-[var(--warning)] anim-fade">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <FiAlertTriangle size={13} className="shrink-0" />
+                <span className="truncate">{t('rsiNoModel')}</span>
+              </div>
               <button
+                type="button"
                 onClick={() => setModelPickerOpen(true)}
-                className="px-2.5 py-1 rounded-lg bg-[var(--warning)] text-white text-[11.5px] font-medium hover:opacity-90 transition-opacity"
+                className="px-2 py-0.5 rounded bg-[var(--warning)] text-white text-[11px] font-medium hover:opacity-90 shrink-0"
               >
                 {t('rsiModelChange')}
               </button>
             </div>
           ) : isMac && !screenRecording ? (
-            <div className="px-3.5 py-2.5 rounded-xl bg-[var(--warning)]/10 border border-[var(--warning)]/25 flex items-center gap-2.5 text-[12.5px] text-[var(--warning)]">
-              <FiAlertTriangle size={14} className="shrink-0" />
-              <span className="flex-1">
-                {t('computerScreenRecordingHint')} {t('computerRestartHint')}
-              </span>
+            <div className="px-3 py-1.5 rounded-lg bg-[var(--warning)]/10 border border-[var(--warning)]/25 flex items-center justify-between gap-2 text-[12px] text-[var(--warning)] anim-fade">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <FiAlertTriangle size={13} className="shrink-0" />
+                <span className="truncate">{t('computerScreenRecordingHint')}</span>
+              </div>
               <button
+                type="button"
                 onClick={() => void askScreen()}
                 disabled={asking}
-                className="px-2.5 py-1 rounded-lg bg-[var(--accent)] text-white text-[11.5px] font-medium hover:bg-[var(--accent-hover)] transition-colors shrink-0 disabled:opacity-50"
+                className="px-2.5 py-0.5 rounded bg-[var(--accent)] text-white text-[11px] font-medium hover:bg-[var(--accent-hover)] shrink-0 disabled:opacity-50"
               >
                 {t('rsiAskScreen')}
               </button>
             </div>
           ) : null}
 
-          {/* Action Trigger Button */}
-          {running ? (
-            <div className="space-y-1.5">
-              <button
-                onClick={stop}
-                className="w-full flex items-center justify-center gap-2.5 px-5 py-3 rounded-xl bg-[var(--error)] text-white text-[14px] font-medium hover:opacity-90 active:scale-[0.99] transition-all shadow-xs"
-              >
-                <FiSquare size={16} />
-                <span>{t('rsiStop')}</span>
-              </button>
-              <p className="text-center text-[11.5px] text-[var(--text-muted)]">
-                {t('rsiStopHint')}
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-1.5">
-              <button
-                onClick={() => void start()}
-                disabled={!canStart}
-                className="w-full flex items-center justify-center gap-2.5 px-5 py-3 rounded-xl bg-[var(--accent)] text-white text-[14px] font-medium hover:bg-[var(--accent-hover)] active:scale-[0.99] transition-all disabled:opacity-45 disabled:pointer-events-none shadow-xs"
-              >
-                <FiZap size={16} />
-                <span>{busy ? t('rsiRunning') : t('rsiStart')}</span>
-              </button>
-              <p className="text-center text-[11.5px] text-[var(--text-muted)]">
-                {t('rsiStartHint')}
-              </p>
-            </div>
-          )}
-
-          {/* Stalled-run gates, in place: a command approval or model question
-              stops the loop, and this view hides the chat cards that would
-              otherwise resolve it — so show them here instead of leaving the
-              run silently parked. Visibility is driven by pending status, so a
-              resolved card unmounts on its own. */}
-          {pendingCommand && (
-            <CommandApprovalCard
-              key={pendingCommand.id}
-              change={pendingCommand}
-              onClose={() => {}}
-              onComplete={() => {}}
-              pendingIndex={0}
-              totalPending={pendingCommands.length}
-            />
-          )}
-          {latestQuestionMessage && (
-            <QuestionPromptCard
-              key={latestQuestionMessage.id}
-              message={latestQuestionMessage}
-            />
-          )}
-          {/* One-click resume for an interrupted turn. */}
+          {/* Interruptions / Approvals in Hub */}
           {chatError && !running && (
-            <div className="p-3 rounded-xl bg-[var(--error)]/10 border border-[var(--error)]/20 text-[var(--error)] text-sm flex items-center justify-between gap-3">
-              <span className="min-w-0 break-words">{chatError}</span>
-              <button onClick={clearChatError} className="text-xs underline opacity-70 hover:opacity-100 shrink-0">
+            <div className="px-3 py-1.5 rounded-lg bg-[var(--error)]/10 border border-[var(--error)]/20 text-[var(--error)] text-[12px] flex items-center justify-between gap-2 anim-fade">
+              <span className="truncate">{chatError}</span>
+              <button onClick={clearChatError} className="text-[11px] underline opacity-70 hover:opacity-100 shrink-0">
                 {t('dismiss')}
               </button>
             </div>
           )}
-          {/* Unanswered-request fingerprint (reload/restart mid-turn): name the
-              silent interruption and offer the resume action beside it. */}
           {danglingRequest && (
-            <div className="p-3 rounded-xl bg-[var(--warning)]/10 border border-[var(--warning)]/25 text-[var(--text-primary)] text-sm space-y-2.5">
-              <span className="block">⚠️ {t('unansweredRunNotice')}</span>
+            <div className="px-3 py-1.5 rounded-lg bg-[var(--warning)]/10 border border-[var(--warning)]/25 text-[var(--text-primary)] text-[12px] flex items-center justify-between gap-2 anim-fade">
+              <span className="truncate">⚠️ {t('unansweredRunNotice')}</span>
               <button
+                type="button"
                 onClick={() => void continueGeneration()}
-                className="w-full flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-[var(--accent)] text-white text-[13px] font-medium hover:bg-[var(--accent-hover)] active:scale-[0.99] transition-all"
+                className="px-2.5 py-0.5 rounded bg-[var(--accent)] text-white text-[11px] font-medium hover:bg-[var(--accent-hover)] shrink-0"
               >
-                <FiZap size={14} />
-                <span>{t('continueOutput')}</span>
+                {t('continueOutput')}
               </button>
             </div>
           )}
           {continuableConvId === activeConversationId && !running && (
             <button
+              type="button"
               onClick={() => void continueGeneration()}
-              className="w-full flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-[var(--accent)] text-white text-[13px] font-medium hover:bg-[var(--accent-hover)] active:scale-[0.99] transition-all"
+              className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-[var(--accent)] text-white text-[12px] font-medium hover:bg-[var(--accent-hover)] transition-all shadow-2xs"
             >
-              <FiZap size={14} />
+              <FiZap size={13} />
               <span>{t('continueOutput')}</span>
             </button>
           )}
-        </div>
+          {pendingCommand && (
+            <div className="pt-1">
+              <CommandApprovalCard
+                key={pendingCommand.id}
+                change={pendingCommand}
+                onClose={() => {}}
+                onComplete={() => {}}
+                pendingIndex={0}
+                totalPending={pendingCommands.length}
+              />
+            </div>
+          )}
+          {latestQuestionMessage && (
+            <div className="pt-1">
+              <QuestionPromptCard
+                key={latestQuestionMessage.id}
+                message={latestQuestionMessage}
+              />
+            </div>
+          )}
 
-        {/* Environment Readiness & Diagnostics Grid */}
-        <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-1)] p-4 space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="text-[13px] font-semibold tracking-wide text-[var(--text-primary)] flex items-center gap-2">
-              <FiActivity size={14} className="text-[var(--accent)]" />
-              <span>{t('rsiPreflightTitle')}</span>
-            </h2>
+          {/* Tab Navigation Pill Bar */}
+          <div className="flex items-center gap-1 pt-1 border-t border-[var(--border)]/60">
             <button
-              onClick={() => void refresh()}
-              title={t('rsiRecheck')}
-              className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-2)] transition-colors"
+              type="button"
+              onClick={() => setActiveTab('console')}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12.5px] font-medium transition-colors ${
+                activeTab === 'console'
+                  ? 'bg-[var(--accent-soft)] text-[var(--accent)] font-semibold'
+                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-2)]'
+              }`}
             >
-              <FiRefreshCw size={13} />
+              <FiTerminal size={13} />
+              <span>{t('rsiTabConsole')}</span>
+              <span
+                className={`text-[10px] px-1.5 py-0.2 rounded-full font-semibold ${
+                  activeTab === 'console'
+                    ? 'bg-[var(--accent)] text-white'
+                    : 'bg-[var(--bg-3)] text-[var(--text-muted)]'
+                }`}
+              >
+                {orderedMessages.length}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('direction')}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12.5px] font-medium transition-colors ${
+                activeTab === 'direction'
+                  ? 'bg-[var(--accent-soft)] text-[var(--accent)] font-semibold'
+                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-2)]'
+              }`}
+            >
+              <FiTarget size={13} />
+              <span>{t('rsiTabDirection')}</span>
+              {hasDirectionConfigured && (
+                <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)] shrink-0" />
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('pipeline')}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12.5px] font-medium transition-colors ${
+                activeTab === 'pipeline'
+                  ? 'bg-[var(--accent-soft)] text-[var(--accent)] font-semibold'
+                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-2)]'
+              }`}
+            >
+              <FiLayers size={13} />
+              <span>{t('rsiTabPipeline')}</span>
+              {running && (
+                <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-[var(--accent)] text-white font-mono font-semibold animate-pulse">
+                  P{activeStage || 1}
+                </span>
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Main Tab Content Area */}
+      {activeTab === 'console' && (
+        <div className="flex-1 flex flex-col min-h-0 relative">
+          {/* Direction Summary Banner at top of chat */}
+          <div className="shrink-0 px-4 py-2 border-b border-[var(--border)]/50 bg-[var(--bg-1)]/40 flex items-center justify-between gap-3 text-[12px]">
+            <div className="flex items-center gap-2 min-w-0">
+              <FiTarget size={13} className="text-[var(--accent)] shrink-0" />
+              {currentObjective ? (
+                <span className="truncate text-[var(--text-secondary)]">
+                  <strong className="text-[var(--text-primary)] font-medium">{t('rsiDirectionObjective')}:</strong>{' '}
+                  {currentObjective}
+                </span>
+              ) : (
+                <span className="text-[var(--text-muted)] truncate">
+                  {t('rsiNoDirectionConfigured')}
+                </span>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setActiveTab('direction')}
+              className="text-[11.5px] text-[var(--accent)] hover:underline shrink-0 font-medium"
+            >
+              {t('rsiEditDirection')} →
             </button>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-            {/* Screen Recording Check */}
-            <div className="p-3 rounded-xl bg-[var(--bg-2)] border border-[var(--border)] flex items-start gap-3">
-              <div
-                className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 mt-0.5 ${
-                  !isMac || screenRecording
-                    ? 'bg-[var(--success)]/10 text-[var(--success)]'
-                    : 'bg-[var(--warning)]/15 text-[var(--warning)]'
-                }`}
-              >
-                <FiMonitor size={14} />
+          {/* Active running phase badge if running */}
+          {running && (
+            <div className="shrink-0 px-4 py-1.5 bg-[var(--accent-soft)]/50 border-b border-[var(--accent)]/20 flex items-center justify-between gap-2 text-[11.5px] text-[var(--accent)] anim-fade">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)] animate-pulse shrink-0" />
+                <span className="font-semibold shrink-0">
+                  Phase {activeStage || 1}: {stages[(activeStage || 1) - 1]?.title}
+                </span>
+                <span className="text-[var(--text-muted)] truncate">
+                  · {activeRun?.toolName ? `${t('rsiLiveToolRunning')}: ${activeRun.toolName}` : t('rsiLiveThinking')}
+                </span>
               </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center justify-between gap-1 mb-0.5">
-                  <span className="text-[12.5px] font-medium text-[var(--text-primary)]">
-                    {t('rsiScreenStatus')}
+              <button
+                type="button"
+                onClick={() => setActiveTab('pipeline')}
+                className="underline text-[11px] opacity-80 hover:opacity-100 shrink-0"
+              >
+                查看管线 →
+              </button>
+            </div>
+          )}
+
+          {/* Scrollable Transcript */}
+          <div
+            ref={transcriptRef}
+            className="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-2 min-w-0"
+          >
+            <div className="max-w-[860px] mx-auto w-full space-y-2">
+              {orderedMessages.length === 0 && !running ? (
+                <div className="py-16 text-center text-[13px] text-[var(--text-muted)] break-words [overflow-wrap:anywhere]">
+                  <div className="w-12 h-12 rounded-2xl bg-[var(--bg-2)] flex items-center justify-center mx-auto mb-3 text-[var(--text-muted)]">
+                    <FiTerminal size={22} />
+                  </div>
+                  <p className="font-medium text-[var(--text-secondary)] mb-1">
+                    {t('rsiConvTranscriptEmpty')}
+                  </p>
+                  <p className="text-[12px] opacity-75">
+                    在下方输入指令或配置演化方向，点击上方「一键启动」即可开始递归自我演化
+                  </p>
+                </div>
+              ) : (
+                orderedMessages.map((msg, i) => (
+                  <MessageBubble
+                    key={msg.id}
+                    message={msg}
+                    isContinuation={i > 0 && isAiSide(orderedMessages[i - 1]) === isAiSide(msg)}
+                  />
+                ))
+              )}
+
+              {running && (
+                <div className="mt-3 min-w-0">
+                  {/* Auto-retry pill after a network/model interruption */}
+                  {activeRun?.retry && (
+                    <div className="mb-3 inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-[var(--warning)]/30 bg-[var(--warning)]/10 text-[12px] font-medium text-[var(--warning)] anim-fade">
+                      <FiRefreshCw size={12} className="animate-spin shrink-0" />
+                      <span className="whitespace-nowrap">
+                        {activeRun.retry.max != null
+                          ? `${t('streamRetry')} ${activeRun.retry.attempt}/${activeRun.retry.max}`
+                          : `${t('streamRetryEndless')} · ${activeRun.retry.attempt}`}
+                      </span>
+                    </div>
+                  )}
+                  {activeRun?.reasoningContent && (
+                    <details open className="mb-3 rounded-xl border border-[var(--glass-border)] bg-[var(--glass-card)] px-3 py-2 min-w-0">
+                      <summary className="cursor-pointer text-xs font-medium text-[var(--text-secondary)]">{t('thinkingProcess')}</summary>
+                      <div className="mt-2 max-h-72 overflow-y-auto whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-sm leading-relaxed text-[var(--text-secondary)]">{activeRun.reasoningContent}</div>
+                    </details>
+                  )}
+                  {activeRun?.content ? (
+                    <MessageContent content={activeRun.content} streaming />
+                  ) : (
+                    <span className="text-[13px] text-[var(--text-muted)] anim-caret break-words [overflow-wrap:anywhere] truncate block min-w-0">
+                      {activeRun?.toolName
+                        ? `${t('callingTool')} ${activeRun.toolName}...`
+                        : activeRun?.status === 'thinking' ? t('thinking') + '...' : '...'}
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Chat Composer */}
+          <div className="shrink-0 p-3 pt-1 border-t border-[var(--border)]/50 bg-[var(--bg-0)]">
+            <div className="max-w-[860px] mx-auto w-full">
+              <ChatInput />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'direction' && (
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 min-h-0">
+          <div className="max-w-[860px] mx-auto w-full">
+            <RsiDirectionPanel onSaved={() => setActiveTab('console')} />
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'pipeline' && (
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 min-h-0 space-y-5">
+          <div className="max-w-[860px] mx-auto w-full space-y-5">
+            {/* 5-Stage Evolution Pipeline */}
+            <div className="rounded-2xl border border-[var(--glass-border)] bg-[var(--glass-surface)]/70 backdrop-blur-2xl p-4 sm:p-5 space-y-3.5 shadow-xs">
+              <div className="flex items-center justify-between gap-2 min-w-0">
+                <h2 className="text-[13px] font-bold text-[var(--text-primary)] flex items-center gap-2 min-w-0 truncate">
+                  <FiLayers size={15} className="text-[var(--accent)] shrink-0" />
+                  <span className="truncate">{t('rsiPipelineTitle')}</span>
+                </h2>
+                {running && (
+                  <span className="text-[11.5px] text-[var(--accent)] font-semibold flex items-center gap-1.5 shrink-0">
+                    <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)] animate-pulse" />
+                    <span>{`Phase ${activeStage || 1} · Active`}</span>
                   </span>
-                  <span
-                    className={`text-[11px] font-medium px-1.5 py-0.5 rounded-md ${
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-2.5">
+                {stages.map((stage) => {
+                  const isActive = running && activeStage === stage.step;
+                  const isPast = running && activeStage > stage.step;
+                  return (
+                    <div
+                      key={stage.step}
+                      className={`p-3 rounded-xl border transition-all flex flex-col justify-between min-w-0 overflow-hidden ${
+                        isActive
+                          ? 'border-[var(--accent)] bg-[var(--accent-soft)] shadow-xs ring-1 ring-[var(--accent)]/30'
+                          : isPast
+                            ? 'border-[var(--success)]/30 bg-[var(--success)]/5'
+                            : 'border-[var(--glass-border)] bg-[var(--glass-card)]/40'
+                      }`}
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center justify-between mb-2 gap-1 min-w-0">
+                          <span
+                            className={`w-6 h-6 rounded-lg flex items-center justify-center text-[11px] font-bold shrink-0 ${
+                              isActive
+                                ? 'bg-[var(--accent)] text-white'
+                                : isPast
+                                  ? 'bg-[var(--success)] text-white'
+                                  : 'bg-[var(--bg-3)] text-[var(--text-muted)]'
+                            }`}
+                          >
+                            {isPast ? <FiCheck size={12} /> : stage.step}
+                          </span>
+                          <span
+                            className={`text-[13px] shrink-0 ${
+                              isActive
+                                ? 'text-[var(--accent)]'
+                                : isPast
+                                  ? 'text-[var(--success)]'
+                                  : 'text-[var(--text-muted)]'
+                            }`}
+                          >
+                            {stage.icon}
+                          </span>
+                        </div>
+
+                        <h3 className="text-[12px] font-semibold text-[var(--text-primary)] mb-1 leading-snug break-words [overflow-wrap:anywhere]">
+                          {stage.title}
+                        </h3>
+                      </div>
+
+                      <p className="text-[11px] text-[var(--text-muted)] leading-relaxed mt-1 break-words [overflow-wrap:anywhere]">
+                        {stage.desc}
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Live Telemetry / Execution Progress Feed */}
+            <div className="rounded-2xl border border-[var(--glass-border)] bg-[var(--glass-card)]/70 backdrop-blur-xl shadow-xs overflow-hidden">
+              <div className="px-4 py-3 flex items-center justify-between gap-2 bg-[var(--glass-surface)]/60 border-b border-[var(--glass-border)] min-w-0">
+                <div className="flex items-center gap-2 min-w-0 flex-1 mr-2">
+                  <FiTerminal size={14} className="text-[var(--accent)] shrink-0" />
+                  <span className="text-[13px] font-semibold text-[var(--text-primary)] shrink-0">
+                    {t('rsiLiveActivityTitle')}
+                  </span>
+                  {running && (
+                    <div className="flex items-center gap-1.5 ml-2 min-w-0 truncate">
+                      <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)] animate-ping shrink-0" />
+                      <span className="text-[11.5px] text-[var(--accent)] font-medium truncate">
+                        {activeRun?.toolName
+                          ? `${t('rsiLiveToolRunning')}: ${activeRun.toolName}`
+                          : activeRun?.status === 'thinking'
+                            ? t('rsiLiveThinking')
+                            : t('rsiRunning')}
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setShowLogs(!showLogs)}
+                  className="flex items-center gap-1 text-[11.5px] text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors shrink-0"
+                >
+                  <span>{t(showLogs ? 'rsiCollapseLogs' : 'rsiExpandLogs')}</span>
+                  {showLogs ? <FiChevronUp size={13} /> : <FiChevronDown size={13} />}
+                </button>
+              </div>
+
+              {showLogs && (
+                <div
+                  ref={logContainerRef}
+                  className="p-4 max-h-[300px] overflow-y-auto overflow-x-hidden font-mono text-[12px] leading-relaxed select-text space-y-2 min-w-0 bg-[var(--bg-1)]/40"
+                >
+                  {running ? (
+                    <div className="min-w-0">
+                      {activeRun?.reasoningContent && (
+                        <div className="mb-2 p-2.5 rounded-lg bg-[var(--bg-2)] border border-[var(--border)] text-[var(--text-muted)] italic whitespace-pre-wrap break-words [overflow-wrap:anywhere] min-w-0">
+                          {activeRun.reasoningContent}
+                        </div>
+                      )}
+                      {activeRun?.content ? (
+                        <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[var(--text-primary)] min-w-0">
+                          {activeRun.content}
+                        </div>
+                      ) : (
+                        <div className="text-[var(--text-muted)] animate-pulse flex items-center gap-2">
+                          <FiRefreshCw size={12} className="animate-spin shrink-0" />
+                          <span>{t('rsiLiveThinking')}</span>
+                        </div>
+                      )}
+                    </div>
+                  ) : latestRsiAssistantMessage ? (
+                    <div className="min-w-0">
+                      <div className="text-[11px] font-semibold tracking-wider uppercase text-[var(--text-muted)] mb-1.5 flex items-center gap-1.5 min-w-0">
+                        <FiCheck size={12} className="text-[var(--success)] shrink-0" />
+                        <span className="truncate">{t('rsiLatestMilestone')}</span>
+                        <span className="text-[10px] font-normal opacity-70 shrink-0">
+                          ({new Date(latestRsiAssistantMessage.createdAt).toLocaleTimeString()})
+                        </span>
+                      </div>
+                      <div className="p-3 rounded-xl bg-[var(--bg-2)] border border-[var(--border)] whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[var(--text-secondary)] min-w-0">
+                        {latestRsiAssistantMessage.content.slice(0, 1500)}
+                        {latestRsiAssistantMessage.content.length > 1500 ? '…' : ''}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="py-8 text-center text-[var(--text-muted)]">
+                      <p className="text-[12.5px] break-words [overflow-wrap:anywhere]">{t('rsiNoActivity')}</p>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Environment Readiness & Diagnostics Grid */}
+            <div className="rounded-2xl border border-[var(--glass-border)] bg-[var(--glass-card)]/70 backdrop-blur-xl p-4 sm:p-5 space-y-3.5 shadow-xs">
+              <div className="flex items-center justify-between gap-2 min-w-0">
+                <h2 className="text-[13px] font-bold tracking-wide text-[var(--text-primary)] flex items-center gap-2 min-w-0 truncate">
+                  <FiActivity size={14} className="text-[var(--accent)] shrink-0" />
+                  <span className="truncate">{t('rsiPreflightTitle')}</span>
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => void refresh()}
+                  title={t('rsiRecheck')}
+                  className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-2)] transition-colors shrink-0"
+                >
+                  <FiRefreshCw size={13} />
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                {/* Screen Recording Check */}
+                <div className="p-3 rounded-xl bg-[var(--glass-card)]/50 border border-[var(--glass-border)] flex items-start gap-3 min-w-0">
+                  <div
+                    className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 mt-0.5 ${
                       !isMac || screenRecording
                         ? 'bg-[var(--success)]/10 text-[var(--success)]'
                         : 'bg-[var(--warning)]/15 text-[var(--warning)]'
                     }`}
                   >
-                    {!isMac || screenRecording
-                      ? t('rsiGranted')
-                      : t('rsiRequired')}
-                  </span>
-                </div>
-                <p className="text-[11.5px] text-[var(--text-muted)] leading-tight mb-2">
-                  {!isMac
-                    ? '当前系统平台直接支持屏幕捕获。'
-                    : screenRecording
-                      ? '屏幕录制已授权，支持视觉截屏验收。'
-                      : t('computerScreenRecordingHint')}
-                </p>
-                {isMac && !screenRecording && (
-                  <div className="flex gap-1.5 pt-1">
-                    <button
-                      onClick={() => void askScreen()}
-                      disabled={asking}
-                      className="px-2.5 py-1 rounded-lg bg-[var(--accent)] text-white text-[11px] font-medium hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50"
-                    >
-                      {t('rsiAskScreen')}
-                    </button>
-                    <button
-                      onClick={() => void refresh()}
-                      className="px-2.5 py-1 rounded-lg bg-[var(--bg-3)] text-[11px] text-[var(--text-secondary)] hover:bg-[var(--bg-4)] transition-colors flex items-center gap-1"
-                    >
-                      <FiRefreshCw size={10} />
-                      <span>{t('rsiRecheck')}</span>
-                    </button>
+                    <FiMonitor size={14} />
                   </div>
-                )}
-              </div>
-            </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-1.5 mb-1 min-w-0">
+                      <span className="text-[12.5px] font-medium text-[var(--text-primary)] min-w-0 truncate">
+                        {t('rsiScreenStatus')}
+                      </span>
+                      <span
+                        className={`text-[11px] font-medium px-1.5 py-0.5 rounded-md shrink-0 ${
+                          !isMac || screenRecording
+                            ? 'bg-[var(--success)]/10 text-[var(--success)]'
+                            : 'bg-[var(--warning)]/15 text-[var(--warning)]'
+                        }`}
+                      >
+                        {!isMac || screenRecording
+                          ? t('rsiGranted')
+                          : t('rsiRequired')}
+                      </span>
+                    </div>
+                    <p className="text-[11.5px] text-[var(--text-muted)] leading-relaxed mb-2 break-words [overflow-wrap:anywhere]">
+                      {!isMac
+                        ? '当前系统平台直接支持屏幕捕获。'
+                        : screenRecording
+                          ? '屏幕录制已授权，支持视觉截屏验收。'
+                          : t('computerScreenRecordingHint')}
+                    </p>
+                    {isMac && !screenRecording && (
+                      <div className="flex flex-wrap gap-1.5 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => void askScreen()}
+                          disabled={asking}
+                          className="px-2.5 py-1 rounded-lg bg-[var(--accent)] text-white text-[11px] font-medium hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50 shrink-0"
+                        >
+                          {t('rsiAskScreen')}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void refresh()}
+                          className="px-2.5 py-1 rounded-lg bg-[var(--bg-3)] text-[11px] text-[var(--text-secondary)] hover:bg-[var(--bg-4)] transition-colors flex items-center gap-1 shrink-0"
+                        >
+                          <FiRefreshCw size={10} />
+                          <span>{t('rsiRecheck')}</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
 
-            {/* Accessibility Check */}
-            <div className="p-3 rounded-xl bg-[var(--bg-2)] border border-[var(--border)] flex items-start gap-3">
-              <div
-                className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 mt-0.5 ${
-                  !isMac || accessibility
-                    ? 'bg-[var(--success)]/10 text-[var(--success)]'
-                    : 'bg-[var(--warning)]/15 text-[var(--warning)]'
-                }`}
-              >
-                <FiActivity size={14} />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center justify-between gap-1 mb-0.5">
-                  <span className="text-[12.5px] font-medium text-[var(--text-primary)]">
-                    {t('rsiAccessibilityStatus')}
-                  </span>
-                  <span
-                    className={`text-[11px] font-medium px-1.5 py-0.5 rounded-md ${
+                {/* Accessibility Check */}
+                <div className="p-3 rounded-xl bg-[var(--glass-card)]/50 border border-[var(--glass-border)] flex items-start gap-3 min-w-0">
+                  <div
+                    className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 mt-0.5 ${
                       !isMac || accessibility
                         ? 'bg-[var(--success)]/10 text-[var(--success)]'
                         : 'bg-[var(--warning)]/15 text-[var(--warning)]'
                     }`}
                   >
-                    {!isMac || accessibility
-                      ? t('rsiGranted')
-                      : t('rsiRequired')}
-                  </span>
+                    <FiActivity size={14} />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-1.5 mb-1 min-w-0">
+                      <span className="text-[12.5px] font-medium text-[var(--text-primary)] min-w-0 truncate">
+                        {t('rsiAccessibilityStatus')}
+                      </span>
+                      <span
+                        className={`text-[11px] font-medium px-1.5 py-0.5 rounded-md shrink-0 ${
+                          !isMac || accessibility
+                            ? 'bg-[var(--success)]/10 text-[var(--success)]'
+                            : 'bg-[var(--warning)]/15 text-[var(--warning)]'
+                        }`}
+                      >
+                        {!isMac || accessibility
+                          ? t('rsiGranted')
+                          : t('rsiRequired')}
+                      </span>
+                    </div>
+                    <p className="text-[11.5px] text-[var(--text-muted)] leading-relaxed mb-2 break-words [overflow-wrap:anywhere]">
+                      {!isMac
+                        ? '当前系统平台无需额外辅助功能权限。'
+                        : accessibility
+                          ? '辅助功能已授权，支持自动化交互控制。'
+                          : t('computerAccessibilityHint')}
+                    </p>
+                    {isMac && !accessibility && (
+                      <button
+                        type="button"
+                        onClick={() => void requestPermissions()}
+                        className="px-2.5 py-1 rounded-lg bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[var(--accent)] hover:text-white transition-colors text-[11px] font-medium inline-block shrink-0"
+                      >
+                        {t('computerOpenSettings')}
+                      </button>
+                    )}
+                  </div>
                 </div>
-                <p className="text-[11.5px] text-[var(--text-muted)] leading-tight mb-2">
-                  {!isMac
-                    ? '当前系统平台无需额外辅助功能权限。'
-                    : accessibility
-                      ? '辅助功能已授权，支持自动化交互控制。'
-                      : t('computerAccessibilityHint')}
-                </p>
-                {isMac && !accessibility && (
-                  <button
-                    onClick={() => void requestPermissions()}
-                    className="px-2.5 py-1 rounded-lg bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[var(--accent)] hover:text-white transition-colors text-[11px] font-medium inline-block"
-                  >
-                    {t('computerOpenSettings')}
-                  </button>
-                )}
               </div>
             </div>
-          </div>
-        </div>
 
-        {/* 5-Stage Evolution Pipeline */}
-        <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-2)] p-4 space-y-3 shadow-xs">
-          <div className="flex items-center justify-between">
-            <h2 className="text-[13px] font-semibold text-[var(--text-primary)] flex items-center gap-2">
-              <FiLayers size={14} className="text-[var(--accent)]" />
-              <span>{t('rsiPipelineTitle')}</span>
-            </h2>
-            {running && (
-              <span className="text-[11.5px] text-[var(--accent)] font-medium flex items-center gap-1.5">
-                <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)] animate-pulse" />
-                <span>{`Phase ${activeStage} · Active`}</span>
-              </span>
-            )}
-          </div>
+            {/* GitHub Plugin & Tool Integration */}
+            <div className="rounded-2xl border border-[var(--glass-border)] bg-[var(--glass-surface)]/70 backdrop-blur-2xl shadow-xs overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setPluginEnabled('github-sync', !githubOn)}
+                className="w-full flex items-center justify-between gap-2 px-4 py-3.5 text-left hover:bg-[var(--bg-1)] transition-colors min-w-0"
+              >
+                <div className="flex items-center gap-2.5 min-w-0 flex-1 mr-2">
+                  <div className="w-7 h-7 rounded-lg bg-[var(--bg-3)] flex items-center justify-center text-[var(--text-primary)] shrink-0">
+                    <FiGitBranch size={14} />
+                  </div>
+                  <span className="text-[13.5px] font-medium text-[var(--text-primary)] truncate block">
+                    {t('rsiGithub')}
+                  </span>
+                </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
-            {stages.map((stage) => {
-              const isActive = running && activeStage === stage.step;
-              const isPast = running && activeStage > stage.step;
-              return (
-                <div
-                  key={stage.step}
-                  className={`p-3 rounded-xl border transition-all flex flex-col justify-between ${
-                    isActive
-                      ? 'border-[var(--accent)] bg-[var(--accent-soft)] shadow-xs ring-1 ring-[var(--accent)]/30'
-                      : isPast
-                        ? 'border-[var(--success)]/30 bg-[var(--success)]/5'
-                        : 'border-[var(--border)] bg-[var(--bg-1)]'
+                <span
+                  className={`w-9 h-5 rounded-full transition-colors shrink-0 relative ${
+                    githubOn ? 'bg-[var(--accent)]' : 'bg-[var(--bg-4)]'
                   }`}
                 >
-                  <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <span
-                        className={`w-6 h-6 rounded-lg flex items-center justify-center text-[11px] font-bold ${
-                          isActive
-                            ? 'bg-[var(--accent)] text-white'
-                            : isPast
-                              ? 'bg-[var(--success)] text-white'
-                              : 'bg-[var(--bg-3)] text-[var(--text-muted)]'
-                        }`}
-                      >
-                        {isPast ? <FiCheck size={12} /> : stage.step}
-                      </span>
-                      <span
-                        className={`text-[13px] ${
-                          isActive
-                            ? 'text-[var(--accent)]'
-                            : isPast
-                              ? 'text-[var(--success)]'
-                              : 'text-[var(--text-muted)]'
-                        }`}
-                      >
-                        {stage.icon}
-                      </span>
-                    </div>
+                  <span
+                    className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${
+                      githubOn ? 'left-[18px]' : 'left-0.5'
+                    }`}
+                  />
+                </span>
+              </button>
 
-                    <h3 className="text-[12px] font-semibold text-[var(--text-primary)] mb-1 leading-snug">
-                      {stage.title}
-                    </h3>
-                  </div>
-
-                  <p className="text-[11px] text-[var(--text-muted)] leading-relaxed mt-1">
-                    {stage.desc}
-                  </p>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Live Telemetry / Execution Progress Feed */}
-        <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-1)] overflow-hidden shadow-xs">
-          <div className="px-4 py-3 flex items-center justify-between bg-[var(--bg-2)] border-b border-[var(--border)]">
-            <div className="flex items-center gap-2">
-              <FiTerminal size={14} className="text-[var(--accent)]" />
-              <span className="text-[13px] font-semibold text-[var(--text-primary)]">
-                {t('rsiLiveActivityTitle')}
-              </span>
-              {running && (
-                <div className="flex items-center gap-1.5 ml-2">
-                  <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)] animate-ping" />
-                  <span className="text-[11.5px] text-[var(--accent)] font-medium">
-                    {activeRun?.toolName
-                      ? `${t('rsiLiveToolRunning')}: ${activeRun.toolName}`
-                      : activeRun?.status === 'thinking'
-                        ? t('rsiLiveThinking')
-                        : t('rsiRunning')}
-                  </span>
+              {githubOn && (
+                <div className="border-t border-[var(--glass-border)] p-3 bg-[var(--glass-card)]/40 min-w-0">
+                  <SyncView />
                 </div>
               )}
             </div>
 
-            <button
-              onClick={() => setShowLogs(!showLogs)}
-              className="flex items-center gap-1 text-[11.5px] text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
-            >
-              <span>{t(showLogs ? 'rsiCollapseLogs' : 'rsiExpandLogs')}</span>
-              {showLogs ? <FiChevronUp size={13} /> : <FiChevronDown size={13} />}
-            </button>
+            {/* Footer Quick Tip */}
+            <div className="text-center px-4 py-2 text-[11.5px] text-[var(--text-muted)] break-words [overflow-wrap:anywhere]">
+              {t('rsiQuickTip')}
+            </div>
           </div>
-
-          {showLogs && (
-            <div
-              ref={logContainerRef}
-              className="p-4 max-h-[280px] overflow-y-auto font-mono text-[12px] leading-relaxed select-text space-y-2 bg-[var(--bg-1)]"
-            >
-              {running ? (
-                <div>
-                  {activeRun?.reasoningContent && (
-                    <div className="mb-2 p-2.5 rounded-lg bg-[var(--bg-2)] border border-[var(--border)] text-[var(--text-muted)] italic whitespace-pre-wrap">
-                      {activeRun.reasoningContent}
-                    </div>
-                  )}
-                  {activeRun?.content ? (
-                    <div className="whitespace-pre-wrap text-[var(--text-primary)]">
-                      {activeRun.content}
-                    </div>
-                  ) : (
-                    <div className="text-[var(--text-muted)] animate-pulse flex items-center gap-2">
-                      <FiRefreshCw size={12} className="animate-spin" />
-                      <span>{t('rsiLiveThinking')}</span>
-                    </div>
-                  )}
-                </div>
-              ) : latestRsiAssistantMessage ? (
-                <div>
-                  <div className="text-[11px] font-semibold tracking-wider uppercase text-[var(--text-muted)] mb-1.5 flex items-center gap-1.5">
-                    <FiCheck size={12} className="text-[var(--success)]" />
-                    <span>{t('rsiLatestMilestone')}</span>
-                    <span className="text-[10px] font-normal opacity-70">
-                      ({new Date(latestRsiAssistantMessage.createdAt).toLocaleTimeString()})
-                    </span>
-                  </div>
-                  <div className="p-3 rounded-xl bg-[var(--bg-2)] border border-[var(--border)] whitespace-pre-wrap text-[var(--text-secondary)]">
-                    {latestRsiAssistantMessage.content.slice(0, 1500)}
-                    {latestRsiAssistantMessage.content.length > 1500 ? '…' : ''}
-                  </div>
-                </div>
-              ) : (
-                <div className="py-6 text-center text-[var(--text-muted)]">
-                  <p className="text-[12.5px]">{t('rsiNoActivity')}</p>
-                </div>
-              )}
-            </div>
-          )}
         </div>
-
-        {/* GitHub Plugin & Tool Integration */}
-        <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-2)] overflow-hidden shadow-xs">
-          <button
-            onClick={() => setPluginEnabled('github-sync', !githubOn)}
-            className="w-full flex items-center justify-between px-4 py-3.5 text-left hover:bg-[var(--bg-1)] transition-colors"
-          >
-            <div className="flex items-center gap-2.5">
-              <div className="w-7 h-7 rounded-lg bg-[var(--bg-3)] flex items-center justify-center text-[var(--text-primary)] shrink-0">
-                <FiGitBranch size={14} />
-              </div>
-              <span className="text-[13.5px] font-medium text-[var(--text-primary)]">
-                {t('rsiGithub')}
-              </span>
-            </div>
-
-            <span
-              className={`w-9 h-5 rounded-full transition-colors shrink-0 relative ${
-                githubOn ? 'bg-[var(--accent)]' : 'bg-[var(--bg-4)]'
-              }`}
-            >
-              <span
-                className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${
-                  githubOn ? 'left-[18px]' : 'left-0.5'
-                }`}
-              />
-            </span>
-          </button>
-
-          {githubOn && (
-            <div className="border-t border-[var(--border)] p-3 bg-[var(--bg-1)]">
-              <SyncView />
-            </div>
-          )}
-        </div>
-
-        {/* Footer Quick Tip */}
-        <div className="text-center px-4 py-2 text-[11.5px] text-[var(--text-muted)]">
-          {t('rsiQuickTip')}
-        </div>
-      </div>
+      )}
     </div>
   );
 }

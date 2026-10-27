@@ -1,7 +1,14 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
 contextBridge.exposeInMainWorld('electronAPI', {
-  free: { status: () => ipcRenderer.invoke('free:status') },
+  free: {
+    status: () => ipcRenderer.invoke('free:status'),
+    usageGet: () => ipcRenderer.invoke('free:usage:get'),
+    usageRecord: (tokens: number) => ipcRenderer.invoke('free:usage:record', tokens),
+    usageSync: (serverResetAt: string | null) => ipcRenderer.invoke('free:usage:sync', serverResetAt),
+    usageReset: (serverResetAt: string | null) => ipcRenderer.invoke('free:usage:reset', serverResetAt),
+    usageHydrate: (legacy: { weekStart: number; used: number } | null) => ipcRenderer.invoke('free:usage:hydrate', legacy),
+  },
   window: {
     minimize: () => ipcRenderer.invoke('window:minimize'),
     maximize: () => ipcRenderer.invoke('window:maximize'),

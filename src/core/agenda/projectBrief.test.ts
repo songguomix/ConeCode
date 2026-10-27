@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { PROJECT_BRIEF_SYSTEM_PROMPT, parseProjectBrief, projectExecutionPrompt } from './projectBrief';
+import {
+  BRIEF_CEILING_OUTPUT_TOKENS, BRIEF_FLOOR_OUTPUT_TOKENS, PROJECT_BRIEF_SYSTEM_PROMPT,
+  briefFinishReason, briefHasText, briefMaxTokens, parseProjectBrief, projectExecutionPrompt,
+} from './projectBrief';
 
 describe('parseProjectBrief', () => {
   it('parses a clean JSON object', () => {
@@ -24,12 +27,52 @@ describe('parseProjectBrief', () => {
     expect(markdown.prompt).toContain('Build it well.');
   });
 
+  it('never promotes truncated reasoning into a prompt', () => {
+    const result = {
+      choices: [{ message: { content: '', reasoning_content: 'The user wants a todo app and I should' }, finish_reason: 'length' }],
+    };
+    expect(() => parseProjectBrief(result)).toThrow('EMPTY_TRUNCATED');
+    expect(() => parseProjectBrief(result, { finishReason: 'length' })).toThrow('EMPTY_TRUNCATED');
+  });
+
   it('promotes reasoning_content when content is empty (reasoning-only models)', () => {
     const raw = JSON.stringify({ title: 'Todo App', prompt: 'Build a todo app.' });
     expect(parseProjectBrief({ choices: [{ message: { content: '', reasoning_content: raw } }] }))
       .toEqual({ title: 'Todo App', prompt: 'Build a todo app.' });
     expect(parseProjectBrief({ choices: [{ message: { content: '   ', reasoning_content: '# My App\nBuild it well.' } }] }).title)
       .toBe('My App');
+  });
+});
+
+describe('briefMaxTokens', () => {
+  it('keeps enough room for hidden reasoning', () => {
+    // The old fixed 4096 let DeepSeek Flash spend every token thinking.
+    expect(briefMaxTokens(undefined)).toBe(BRIEF_FLOOR_OUTPUT_TOKENS);
+    expect(briefMaxTokens({ maxOutputTokens: 8192 })).toBe(8192);
+    expect(briefMaxTokens({ maxOutputTokens: 128000 })).toBe(BRIEF_CEILING_OUTPUT_TOKENS);
+    expect(briefMaxTokens({ maxOutputTokens: 16000 })).toBe(16000);
+  });
+
+  it('respects a declared limit below the floor', () => {
+    expect(briefMaxTokens({ maxOutputTokens: 2048 })).toBe(2048);
+  });
+});
+
+describe('briefFinishReason', () => {
+  it('normalises every provider shape to the OpenAI name', () => {
+    expect(briefFinishReason({ choices: [{ finish_reason: 'length' }] })).toBe('length');
+    expect(briefFinishReason({ finish_reason: 'length' })).toBe('length');
+    expect(briefFinishReason({ candidates: [{ finishReason: 'MAX_TOKENS' }] })).toBe('length');
+    expect(briefFinishReason({ candidates: [{ finishReason: 'STOP' }] })).toBe('STOP');
+  });
+});
+
+describe('briefHasText', () => {
+  it('sees text in any adapter shape', () => {
+    expect(briefHasText({ choices: [{ message: { content: 'hi' } }] })).toBe(true);
+    expect(briefHasText({ content: [{ type: 'text', text: 'hi' }] })).toBe(true);
+    expect(briefHasText({ candidates: [{ content: { parts: [{ text: 'hi' }] } }] })).toBe(true);
+    expect(briefHasText({ choices: [{ message: { content: '' } }] })).toBe(false);
   });
 });
 

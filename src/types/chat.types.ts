@@ -1,3 +1,6 @@
+import type { AgentMode } from '../core/agents/modePrompts';
+import type { RsiConversationState } from '../core/agents/rsiConversation';
+
 export interface Conversation {
   id: string;
   title: string;
@@ -12,6 +15,9 @@ export interface Conversation {
   updatedAt: number;
   /** Explicitly marks a conversation created in Chat mode (dialogue only). */
   isChatMode?: boolean;
+  /** Execution protocol and RSI data belong to this stable conversation ID. */
+  agentMode?: AgentMode;
+  rsi?: RsiConversationState;
 }
 
 export interface Message {

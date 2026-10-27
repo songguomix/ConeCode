@@ -36,3 +36,45 @@ it('drops offline free models and only exposes a fixed error when status fails',
   expect(useFreeStore.getState().error).not.toMatch(/https?:|sk-private/);
   expect(useFreeStore.getState().loading).toBe(false);
 });
+
+it('keeps the durable weekly count across refresh — a restart must not reset it', async () => {
+  // Models the main-process file store: hydrate hands back last session's
+  // count, sync returns it unchanged, record accumulates in the file.
+  let fileUsed = 555;
+  vi.stubGlobal('window', { electronAPI: { free: {
+    status: async () => ({ available: true, mode: 'on', startsAt: null, endsAt: null, models: [model('first')] }),
+    usageHydrate: async () => ({ weekStart: 1, used: fileUsed, resetAt: null }),
+    usageSync: async () => ({ record: { weekStart: 1, used: fileUsed, resetAt: null }, changed: false }),
+    usageRecord: async (tokens: number) => ({ weekStart: 1, used: (fileUsed += tokens), resetAt: null }),
+  } } });
+
+  await useFreeStore.getState().refresh();
+  expect(useFreeStore.getState().weeklyUsed).toBe(555);
+
+  useFreeStore.getState().recordUsage(100);
+  await vi.waitFor(() => expect(useFreeStore.getState().weeklyUsed).toBe(655));
+
+  // Another refresh (what a restart does) reads the durable count, not zero.
+  await useFreeStore.getState().refresh();
+  expect(useFreeStore.getState().weeklyUsed).toBe(655);
+});
+
+it('applies a newer server reset marker and zeroes stale server mirrors', async () => {
+  useFreeStore.setState({ weeklyUsed: 999, weeklyUsage: { used: 999, limit: 1 }, usage: { used: 999, limit: 1 } });
+  vi.stubGlobal('window', { electronAPI: { free: {
+    status: async () => ({
+      available: true, mode: 'on', startsAt: null, endsAt: null, models: [],
+      usage: { used: 999, limit: 2000000000 },
+      usedTokens: 999, weeklyUsed: 999,
+      usageResetAt: '2026-10-26T00:00:00Z',
+    }),
+    usageHydrate: async () => ({ weekStart: 1, used: 999, resetAt: null }),
+    usageSync: async () => ({ record: { weekStart: 1, used: 0, resetAt: '2026-10-26T00:00:00.000Z' }, changed: true }),
+  } } });
+
+  await useFreeStore.getState().refresh();
+  expect(useFreeStore.getState().weeklyUsed).toBe(0);
+  // The stale server-reported usage is zeroed for display too.
+  expect(useFreeStore.getState().status?.weeklyUsed).toBe(0);
+  expect(useFreeStore.getState().status?.usage?.used).toBe(0);
+});

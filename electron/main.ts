@@ -9,6 +9,8 @@ import { modelRepo } from '../src/core/storage/repositories/model.repo';
 import { conversationRepo, messageRepo } from '../src/core/storage/repositories/conversation.repo';
 import { providerRegistry } from '../src/core/providers/registry';
 import { FREE_PROVIDER, FREE_PROVIDER_ID, freeStatus } from '../src/core/providers/free.adapter';
+import { applyRecordedUsage, applyServerResetTo, hydrateRecords } from '../src/core/providers/freeUsage';
+import { terminalShell, TerminalTextStream } from './terminal';
 import { readJSON, writeJSON } from '../src/core/storage/database';
 import { mcpManager, type McpServerConfig } from '../src/core/mcp/client';
 import {
@@ -740,6 +742,38 @@ function registerIPC() {
 
   ipcMain.handle('provider:list', () => [FREE_PROVIDER, ...providerRepo.findAll().filter((p) => p.id !== FREE_PROVIDER_ID && p.type !== 'conecode-free')]);
   ipcMain.handle('free:status', () => freeStatus());
+
+  // Durable free-usage store (userData/data/freeUsage.json). The weekly gifted
+  // quota must survive restarts — renderer localStorage (leveldb) loses
+  // buffered writes on unclean exits (common on Windows) and a corrupted
+  // leveldb is discarded wholesale, which read back as a silently reset quota.
+  ipcMain.handle('free:usage:get', () => readJSON('freeUsage.json', null));
+  ipcMain.handle('free:usage:record', (_, tokens: number) => {
+    const record = applyRecordedUsage(readJSON('freeUsage.json', null), tokens);
+    writeJSON('freeUsage.json', record);
+    return record;
+  });
+  // Server-driven reset: only when the server's reset marker is newer than the
+  // one already recorded in the file.
+  ipcMain.handle('free:usage:sync', (_, serverResetAt: string | null) => {
+    const { record, changed } = applyServerResetTo(readJSON('freeUsage.json', null), serverResetAt);
+    writeJSON('freeUsage.json', record);
+    return { record, changed };
+  });
+  // serverResetAt === null → force-zero (manual reset button).
+  ipcMain.handle('free:usage:reset', (_, serverResetAt: string | null) => {
+    const record = serverResetAt == null
+      ? applyRecordedUsage(readJSON('freeUsage.json', null), 0)
+      : applyServerResetTo(readJSON('freeUsage.json', null), serverResetAt).record;
+    writeJSON('freeUsage.json', record);
+    return record;
+  });
+  // One-time migration: adopt the legacy renderer localStorage counter.
+  ipcMain.handle('free:usage:hydrate', (_, legacy: { weekStart: number; used: number } | null) => {
+    const record = hydrateRecords(readJSON('freeUsage.json', null), legacy);
+    writeJSON('freeUsage.json', record);
+    return record;
+  });
   ipcMain.handle('provider:create', (_, config) => {
     if (config?.type === 'conecode-free') return FREE_PROVIDER;
     const provider = providerRepo.create(config);
@@ -1600,16 +1634,18 @@ function registerIPC() {
       existing.kill();
       terminals.delete(id);
     }
-    const shellBin = process.platform === 'win32' ? 'cmd.exe' : (process.env.SHELL || '/bin/zsh');
+    // Windows: the shell session starts with `chcp 65001` so cmd and every
+    // program it runs emit UTF-8 — the OEM code page (GBK on Chinese Windows)
+    // piped through a UTF-8 decode is the terminal-area mojibake.
+    const { bin, args } = terminalShell(process.platform);
     // Non-interactive: an interactive (-i) shell on a non-TTY pipe drives the
     // line editor (ZLE), which spews carriage returns and redrawn prompts and
     // buries real output. A plain piped shell reads stdin line-by-line and runs
     // each command cleanly; the resolved login PATH is supplied via getShellEnv.
-    const args: string[] = [];
     // TERM=xterm-256color + FORCE_COLOR/CLICOLOR_FORCE make CLI tools (ls, grep,
     // git, npm…) emit ANSI color even though stdout is a pipe (not a TTY); the
     // renderer parses those escape codes into colored spans.
-    const proc = spawn(shellBin, args, {
+    const proc = spawn(bin, args, {
       cwd: cwd || os.homedir(),
       env: {
         ...getShellEnv(),
@@ -1620,13 +1656,19 @@ function registerIPC() {
       },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
+    // Chunk-safe decode: a multi-byte sequence split across two pipe chunks
+    // would otherwise render as U+FFFD garbage.
+    const outStream = new TerminalTextStream();
+    const errStream = new TerminalTextStream();
     proc.stdout?.on('data', (data: Buffer) => {
-      mainWindow?.webContents.send('terminal:data', { id, data: data.toString() });
+      mainWindow?.webContents.send('terminal:data', { id, data: outStream.write(data) });
     });
     proc.stderr?.on('data', (data: Buffer) => {
-      mainWindow?.webContents.send('terminal:data', { id, data: data.toString() });
+      mainWindow?.webContents.send('terminal:data', { id, data: errStream.write(data) });
     });
     proc.on('close', (code: number | null) => {
+      const tail = outStream.end() + errStream.end();
+      if (tail) mainWindow?.webContents.send('terminal:data', { id, data: tail });
       mainWindow?.webContents.send('terminal:exit', { id, code: code ?? 0 });
       terminals.delete(id);
     });

@@ -299,6 +299,15 @@ input, textarea, select, button { font-family: inherit; }
   100% { transform: scale(1); }
 }
 
+/* Error banner: one short horizontal shake to draw the eye, then rest. */
+@keyframes anim-shake {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  20%      { transform: translate3d(-5px, 0, 0); }
+  40%      { transform: translate3d(4px, 0, 0); }
+  60%      { transform: translate3d(-3px, 0, 0); }
+  80%      { transform: translate3d(2px, 0, 0); }
+}
+
 /* 流沙 — grains drift down through three offset layers (tile heights divide
    the travel distance, so the loop is seamless; sizes differ for parallax). */
 @keyframes sand-fall {
@@ -315,6 +324,11 @@ input, textarea, select, button { font-family: inherit; }
 /* Dimmed overlay behind a modal — soft fade only. */
 .anim-scrim {
   animation: anim-fade-in var(--dur-base) var(--ease-in-out) both;
+}
+
+/* Error alert: brief shake, runs once. */
+.anim-shake {
+  animation: anim-shake 360ms var(--ease-in-out) both;
 }
 
 /* Dropdown / palette menus — origin-aware. Menus opening upward shift down. */
@@ -482,6 +496,7 @@ input, textarea, select, button { font-family: inherit; }
   .anim-caret,
   .anim-shimmer,
   .anim-pop,
+  .anim-shake,
   .sand-fall,
   .anim-effort-pop,
   .effort-stagger-1,

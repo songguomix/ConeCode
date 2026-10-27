@@ -16,3 +16,6 @@ export { usePreviewStore } from './preview.store';
 export { useComputerStore } from './computer.store';
 export { useGoalStore } from './goal.store';
 export { useAiHighlightsStore } from './aiHighlights.store';
+export { useImageGenStore } from './imageGen.store';
+export { usePromptStore, type CustomUserPrompt } from './prompt.store';
+

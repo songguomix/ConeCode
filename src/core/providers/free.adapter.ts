@@ -110,7 +110,10 @@ export async function freeStatus(): Promise<FreeStatus> {
       ?? date(data?.weeklyResetAt)
       ?? null;
     const usageResetAt = date(data?.usageResetAt) ?? date(usageSource?.usageResetAt) ?? null;
-    applyFreeUsageReset(usageResetAt);
+    // NOTE: the reset itself is applied by the renderer via `free:usage:sync`
+    // into the durable main-process file store — freeStatus only reports the
+    // marker. (The old in-main applyFreeUsageReset call was a silent no-op:
+    // the main process has no localStorage.)
     const usage: FreeUsage = {
       used, usedTokens: used, tokensUsed: used, weeklyUsed: used,
       limit, weeklyLimit: limit, tokenLimit: limit,

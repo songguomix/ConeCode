@@ -49,6 +49,8 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
   { name: 'memory', description: 'cmdMemory', kind: 'client' },
   { name: 'diff', description: 'cmdDiff', kind: 'prompt', template: DIFF_TEMPLATE },
   { name: 'commit', description: 'cmdCommit', kind: 'prompt', template: COMMIT_TEMPLATE },
+  { name: 'image', description: 'cmdImage', kind: 'client' },
+  { name: 'imagine', description: 'cmdImagine', kind: 'client' },
 ];
 
 // Parse a raw input string into { name, args } if it is a slash command line.

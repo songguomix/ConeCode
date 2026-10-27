@@ -107,7 +107,7 @@ export default function QuestionPromptCard({ message }: QuestionPromptCardProps)
       {/* Question Content & Interaction Body */}
       <div className="p-4 space-y-3.5 bg-[var(--bg-2)]">
         {/* Question Text */}
-        <div className="text-[16px] text-[var(--text-primary)] font-serif font-bold leading-relaxed whitespace-pre-wrap max-h-[35vh] overflow-y-auto">
+        <div className="text-[16px] text-[var(--text-primary)] font-serif font-bold leading-relaxed whitespace-pre-wrap break-words [overflow-wrap:anywhere] max-h-[35vh] overflow-y-auto">
           {message.content}
         </div>
 

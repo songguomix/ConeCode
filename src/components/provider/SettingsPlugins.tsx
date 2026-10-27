@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   FiX, FiChevronLeft, FiChevronDown, FiPlus, FiSearch, FiRefreshCw,
-  FiGithub, FiActivity, FiShield, FiList, FiGitCommit, FiMap, FiBox,
+  FiGithub, FiActivity, FiShield, FiList, FiGitCommit, FiMap, FiBox, FiImage,
 } from 'react-icons/fi';
 import { usePluginStore, selectPlugins, type PluginEntry } from '../../stores/plugin.store';
 import { useMarketStore } from '../../stores/market.store';
@@ -11,6 +11,7 @@ import SyncView from '../plugins/SyncView';
 import PerfView from '../plugins/PerfView';
 import SecurityView from '../plugins/SecurityView';
 import SkillRunView from '../plugins/SkillRunView';
+import ImageGenPluginView from '../plugins/ImageGenPluginView';
 
 const ICONS: Record<string, JSX.Element> = {
   github: <FiGithub size={18} />,
@@ -20,6 +21,7 @@ const ICONS: Record<string, JSX.Element> = {
   commit: <FiGitCommit size={18} />,
   map: <FiMap size={18} />,
   box: <FiBox size={18} />,
+  image: <FiImage size={18} />,
 };
 
 const TILE_BG: Record<string, string> = {
@@ -30,6 +32,7 @@ const TILE_BG: Record<string, string> = {
   commit: 'bg-violet-500/15 text-violet-500',
   map: 'bg-amber-500/15 text-amber-500',
   box: 'bg-[var(--bg-3)] text-[var(--text-secondary)]',
+  image: 'bg-pink-500/15 text-pink-500',
 };
 
 type View = { kind: 'list' } | { kind: 'detail'; id: string } | { kind: 'sync' } | { kind: 'create' };
@@ -284,6 +287,7 @@ function DetailView({ id, t }: { id: string; t: (k: string) => string }) {
       {p.view === 'sync' && <SyncView />}
       {p.view === 'perf' && <PerfView />}
       {p.view === 'security' && <SecurityView />}
+      {p.view === 'image-gen' && <ImageGenPluginView />}
       {p.view === 'skill' && p.skillId && <SkillRunView skillId={p.skillId} />}
       {p.view === 'skill' && !p.skillId && (
         <p className="text-[13px] text-[var(--text-muted)]">{t('pluginNeedInstall')}</p>

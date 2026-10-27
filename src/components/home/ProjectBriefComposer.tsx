@@ -7,7 +7,7 @@ export default function ProjectBriefComposer() {
   const { t, locale } = useLanguageStore();
   const model = useModelStore((s) => s.getSelectedModel());
   const rootPath = useWorkspaceStore((s) => s.rootPath);
-  const { idea, brief, prompt, generating, starting, error, directory, setIdea, setPrompt, generate, start, cancel } = useProjectBriefStore();
+  const { idea, brief, prompt, generating, starting, error, errorDetail, directory, setIdea, setPrompt, generate, start, cancel } = useProjectBriefStore();
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
   const outputRef = useRef<HTMLTextAreaElement>(null);
@@ -117,7 +117,14 @@ export default function ProjectBriefComposer() {
           </div>
         </div>
       )}
-      {(error || copyFailed) && <p role="alert" className="mt-3 text-xs text-[var(--error)] break-words">{t(error || 'briefCopyFailed')}</p>}
+      {(error || copyFailed) && (
+        <div role="alert" className="mt-3">
+          <p className="text-xs text-[var(--error)] break-words">{t(error || 'briefCopyFailed')}</p>
+          {error && errorDetail && errorDetail !== t(error) && (
+            <p className="mt-1 text-[10px] leading-relaxed text-[var(--text-muted)] break-all">{errorDetail}</p>
+          )}
+        </div>
+      )}
     </section>
   );
 }

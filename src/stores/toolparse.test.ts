@@ -27,6 +27,8 @@ describe('extractFileActions', () => {
     expect(extractFileActions(fence({ action: 'perf_snapshot' }))).toHaveLength(1);
     expect(extractFileActions(fence({ action: 'perf_monitor' }))).toHaveLength(1);
     expect(extractFileActions(fence({ action: 'perf_inspect' }))).toHaveLength(1);
+    expect(extractFileActions(fence({ action: 'generate_image', prompt: 'a cute cat' }))).toHaveLength(1);
+    expect(extractFileActions(fence({ action: 'generate_image' }))).toHaveLength(0); // missing prompt
   });
   it('parses multiple fenced actions in one message', () => {
     const c = fence({ action: 'list_dir', path: '/a' }) + '\nsome prose\n' + fence({ action: 'read_file', path: '/b' });

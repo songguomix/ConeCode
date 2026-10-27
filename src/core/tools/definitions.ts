@@ -511,6 +511,61 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
     mutating: true,
     promptExample: '{"action": "github_push", "message": "Fix the login redirect"}',
   },
+  {
+    name: 'github_release',
+    description:
+      'Publish a GitHub Release with installer attachments through the GitHub plugin — the ONLY way releases are published. ' +
+      'Call it after a build produced the installers (dmg/exe/AppImage/…) in the build output directory. ' +
+      'When "files" is omitted the plugin auto-detects installers in the project build output (release/ or dist/). ' +
+      'The user always confirms the publish in a review dialog before anything is uploaded. ' +
+      'Never run git commands or call the GitHub API yourself; the plugin owns publishing and reports the outcome.',
+    parameters: {
+      type: 'object',
+      properties: {
+        tag: str('Release tag, e.g. "v2.4.8"'),
+        name: str('Optional release title; defaults to the tag'),
+        notes: str('Optional release notes (markdown changelog)'),
+        target: str('Optional branch or commit to tag; defaults to "main"'),
+        repo: str('Optional owner/repo; defaults to the repository configured in Settings → Plugins (GitHub sync)'),
+        files: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional absolute paths of the installer files to attach; auto-detected from the build output when omitted',
+        },
+        draft: { type: 'boolean', description: 'Optional: keep the release as a draft (default false)' },
+        prerelease: { type: 'boolean', description: 'Optional: mark as pre-release (default false)' },
+      },
+      required: ['tag'],
+    },
+    mutating: true,
+    promptExample: '{"action": "github_release", "tag": "v2.4.8", "notes": "Bug fixes and performance improvements."}',
+  },
+  {
+    name: 'generate_image',
+    description:
+      'Generate an image using the user configured image generation model (e.g. DALL-E 3, FLUX, Stable Diffusion). ' +
+      'Creates images based on the provided visual prompt, optional aspect ratio and style. ' +
+      'Returns the generated image preview directly in the conversation.',
+    parameters: {
+      type: 'object',
+      properties: {
+        prompt: str('Detailed visual description of the image to generate'),
+        aspect_ratio: {
+          type: 'string',
+          description: 'Image aspect ratio: 1:1 (square), 16:9 (landscape), 9:16 (portrait/story), 4:3 (standard), 3:4 (tall portrait)',
+          enum: ['1:1', '16:9', '9:16', '4:3', '3:4'],
+        },
+        style: {
+          type: 'string',
+          description:
+            'Optional art style preset id. Use exactly one of: "photorealistic", "anime", "cyberpunk", "pixar_3d", "ink_wash", "oil_painting", "fantasy", "minimalist", "pixel_art", "scifi"',
+        },
+        negative_prompt: str('Optional negative prompt describing visual elements to avoid'),
+      },
+      required: ['prompt'],
+    },
+    promptExample: '{"action": "generate_image", "prompt": "A serene mountain lake at dawn with reflection of snow peaks, cinematic lighting", "aspect_ratio": "16:9"}',
+  },
 ];
 
 /** Tools withheld in Plan Mode (read-only investigation). */
@@ -519,7 +574,7 @@ export const MUTATING_TOOLS = new Set(BUILTIN_TOOLS.filter((tl) => tl.mutating).
 /** Exact Plan Mode allowlist, shared by schema filtering and the executor gate. */
 export const PLAN_MODE_TOOLS = new Set([
   'read_file', 'list_dir', 'search', 'glob', 'system_info', 'perf_snapshot', 'perf_monitor', 'perf_inspect', 'cost_snapshot', 'background_status', 'git_status', 'git_diff',
-  'web_fetch', 'web_search', 'use_skill', 'spawn_agent', 'ask_user',
+  'web_fetch', 'web_search', 'use_skill', 'spawn_agent', 'ask_user', 'generate_image',
 ]);
 
 // ---------------------------------------------------------------------------
@@ -602,13 +657,14 @@ function mcpToolDefinition(tl: McpToolInfo): ToolDefinition {
 /** The built-in browser's tools, only useful once there's a project to preview. */
 const PAGE_TOOLS = new Set(['page_navigate', 'page_snapshot', 'page_click', 'page_fill', 'page_eval', 'page_console']);
 
-/** Tools allowed in Chat mode (strictly conversation, web Q&A, and system diagnostics). */
+/** Tools allowed in Chat mode (strictly conversation, web Q&A, system diagnostics, and image generation). */
 export const CHAT_MODE_TOOLS = new Set([
   'ask_user',
   'web_search',
   'web_fetch',
   'perf_snapshot',
   'system_info',
+  'generate_image',
 ]);
 
 export function buildToolset(
@@ -618,12 +674,17 @@ export function buildToolset(
     computerControl?: boolean;
     projectOpen?: boolean;
     isChatMode?: boolean;
+    disabledPlugins?: string[];
   } = {},
 ): ToolDefinition[] {
+  const isImageGenDisabled = opts.disabledPlugins?.includes('image-gen');
+
   if (opts.isChatMode) {
     // In Chat Mode, chat is strictly for conversation and technical Q&A.
     // Workspace read/write/exec tools are excluded.
-    return BUILTIN_TOOLS.filter((tl) => CHAT_MODE_TOOLS.has(tl.name));
+    return BUILTIN_TOOLS
+      .filter((tl) => CHAT_MODE_TOOLS.has(tl.name))
+      .filter((tl) => tl.name !== 'generate_image' || !isImageGenDisabled);
   }
 
   const builtins = (opts.planMode ? BUILTIN_TOOLS.filter((tl) => PLAN_MODE_TOOLS.has(tl.name)) : BUILTIN_TOOLS)
@@ -633,7 +694,8 @@ export function buildToolset(
     .filter((tl) => tl.name !== 'computer' || opts.computerControl === true)
     // Same reasoning for the page tools: with no folder open there is nothing to
     // preview, so they'd be six tools of pure overhead on every request.
-    .filter((tl) => !PAGE_TOOLS.has(tl.name) || opts.projectOpen === true);
+    .filter((tl) => !PAGE_TOOLS.has(tl.name) || opts.projectOpen === true)
+    .filter((tl) => tl.name !== 'generate_image' || !isImageGenDisabled);
   const mcp = new Map<string, ToolDefinition>();
   if (!opts.planMode) {
     for (const tool of opts.mcpTools || []) {

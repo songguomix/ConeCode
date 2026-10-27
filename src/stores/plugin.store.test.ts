@@ -23,9 +23,9 @@ beforeEach(() => {
 });
 
 describe('builtin catalog', () => {
-  it('ships our six plugins with views and linked skills', () => {
+  it('ships our built-in plugins with views and linked skills', () => {
     expect(BUILTIN_PLUGINS.map((p) => p.id)).toEqual([
-      'github-sync', 'perf-monitor', 'security-review', 'todo-scan', 'commit-msg', 'repo-map',
+      'github-sync', 'perf-monitor', 'security-review', 'todo-scan', 'commit-msg', 'repo-map', 'image-gen',
     ]);
     for (const p of BUILTIN_PLUGINS) {
       expect(p.view, p.id).toBeDefined();
@@ -83,7 +83,7 @@ describe('plugin registry', () => {
     } as any);
     usePluginStore.getState().addCustom({ name: '自建', description: 'd', skillId: 'alpha' });
     const all = selectPlugins();
-    expect(all.filter((p) => p.kind === 'builtin')).toHaveLength(6);
+    expect(all.filter((p) => p.kind === 'builtin')).toHaveLength(7);
     expect(all.some((p) => p.kind === 'custom' && p.view === 'skill')).toBe(true);
     expect(all.find((p) => p.id === 'github-sync')?.skillInstalled).toBe(true);
     expect(all.find((p) => p.id === 'todo-scan')?.skillInstalled).toBe(false);

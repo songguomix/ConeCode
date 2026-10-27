@@ -3,10 +3,12 @@ import { FiChevronDown, FiSearch, FiStar, FiSun, FiMoon, FiRefreshCw, FiCpu, FiS
 import { useModelStore, useProviderStore, useUIStore, useLanguageStore, useThemeStore, useChatStore } from '../../stores';
 import { modelLimitKey } from '../../stores/model.store';
 import { formatPrice } from '../../core/pricing/cost';
+import { CONTEXT_PRESETS, formatLimitTokens, parseLimitInput } from '../../core/model/limitInput';
 import { FREE_PROVIDER_ID } from '../../core/providers/free.adapter';
 import ThinkingSlider from './ThinkingSlider';
 import ModeSwitch from './ModeSwitch';
 import ContextMeter from './ContextMeter';
+import GovernanceIsland from './GovernanceIsland';
 import type { AIModel } from '../../types';
 
 const CAP_ICONS: Record<string, string> = {
@@ -16,6 +18,16 @@ const CAP_ICONS: Record<string, string> = {
   audioOutput: '🔊',
   functionCalling: '⚙️',
 };
+
+/** Live "what did I just type" feedback for a limit field: ≈ 128K tokens. */
+function LimitInputHint({ raw, invalidLabel }: { raw: string; invalidLabel: string }) {
+  if (!raw.trim()) return null;
+  const parsed = parseLimitInput(raw);
+  if (parsed == null) {
+    return <span className="text-[10.5px] text-[var(--error)] leading-tight">{invalidLabel}</span>;
+  }
+  return <span className="text-[10.5px] text-[var(--text-muted)] leading-tight tabular-nums">≈ {formatLimitTokens(parsed)} tokens</span>;
+}
 
 export default function ModelSelector() {
   const [search, setSearch] = useState('');
@@ -162,11 +174,13 @@ export default function ModelSelector() {
 
   const saveLimits = () => {
     if (!editingLimits) return;
-    const ctx = parseInt(limitDraft.context, 10);
-    const out = parseInt(limitDraft.maxOutput, 10);
+    // Human input: "128k", "20万", "1m" and "200000" are all valid; anything
+    // unparseable (or blank) clears the override and falls back to the API value.
+    const ctx = parseLimitInput(limitDraft.context);
+    const out = parseLimitInput(limitDraft.maxOutput);
     setModelLimits(editingLimits.providerId, editingLimits.modelId, {
-      contextWindow: Number.isFinite(ctx) && ctx > 0 ? ctx : null,
-      maxOutputTokens: Number.isFinite(out) && out > 0 ? out : null,
+      contextWindow: ctx,
+      maxOutputTokens: out,
     });
     setEditingLimits(null);
   };
@@ -217,19 +231,21 @@ export default function ModelSelector() {
     <div ref={containerRef} className="relative max-w-[900px] mx-auto w-full px-4 pb-3">
       <div className="flex items-center gap-2">
         <button onClick={toggleModelSelector}
-          className={`flex items-center gap-2 px-3.5 py-1.5 rounded-full text-sm bg-[var(--glass-card)] hover:bg-[var(--bg-2)] border border-[var(--glass-border)] hover:border-[var(--accent)]/40 shadow-2xs backdrop-blur-md transition-all ${showThinking ? 'flex-1 min-w-0' : 'flex-1'}`}>
+          className={`flex items-center gap-2 px-3 py-1 rounded-full text-sm bg-[var(--glass-card)] hover:bg-[var(--bg-2)] border border-[var(--glass-border)] hover:border-[var(--accent)]/40 shadow-2xs backdrop-blur-md transition-all ${showThinking ? 'flex-1 min-w-0' : 'flex-1'}`}>
           {selectedModel?.providerId === FREE_PROVIDER_ID && (
             <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-[var(--accent)]/15 text-[var(--accent)] border border-[var(--accent)]/30 shrink-0 shadow-2xs">
               <FiShield size={9} className="shrink-0" />
               <span>{t('official')}</span>
             </span>
           )}
-          <span className="truncate text-[var(--text-secondary)] text-[13px] font-medium">{selectedModel?.name || t('selectModel')}</span>
+          <span className="truncate text-[var(--text-secondary)] text-[12.5px] font-medium">{selectedModel?.name || t('selectModel')}</span>
           {selectedModel && getCapIcons(selectedModel).map((c) => (
             <span key={c} className="text-xs shrink-0">{c === 'reasoning' ? '🧠' : CAP_ICONS[c]}</span>
           ))}
           <FiChevronDown size={13} className="text-[var(--text-muted)] shrink-0 ml-auto" />
         </button>
+
+        <GovernanceIsland />
 
         {showThinking && (
           <ThinkingSlider
@@ -331,18 +347,40 @@ export default function ModelSelector() {
                           <div className="flex gap-2">
                             <label className="flex flex-col gap-0.5 flex-1 min-w-0">
                               <span className="text-[var(--text-muted)]">{t('contextWindow')}</span>
-                              <input type="number" min="1" step="1" value={limitDraft.context} autoFocus
+                              <input type="text" value={limitDraft.context} autoFocus
                                 onChange={(e) => setLimitDraft((d) => ({ ...d, context: e.target.value }))}
                                 onKeyDown={handleLimitKey}
+                                placeholder="128k / 20万 / 200000"
                                 className="w-full bg-[var(--bg-0)] border border-[var(--border)] rounded-lg px-2 py-1 outline-none focus:border-[var(--accent)]" />
+                              <LimitInputHint raw={limitDraft.context} invalidLabel={t('limitInputInvalid')} />
                             </label>
                             <label className="flex flex-col gap-0.5 flex-1 min-w-0">
                               <span className="text-[var(--text-muted)]">{t('maxOutput')}</span>
-                              <input type="number" min="1" step="1" value={limitDraft.maxOutput}
+                              <input type="text" value={limitDraft.maxOutput}
                                 onChange={(e) => setLimitDraft((d) => ({ ...d, maxOutput: e.target.value }))}
                                 onKeyDown={handleLimitKey}
+                                placeholder="8k / 4096"
                                 className="w-full bg-[var(--bg-0)] border border-[var(--border)] rounded-lg px-2 py-1 outline-none focus:border-[var(--accent)]" />
+                              <LimitInputHint raw={limitDraft.maxOutput} invalidLabel={t('limitInputInvalid')} />
                             </label>
+                          </div>
+                          {/* Common context windows, tap-to-fill — most users
+                              never need to type a number at all. */}
+                          <div className="flex flex-wrap gap-1 mt-1.5">
+                            {CONTEXT_PRESETS.map((preset) => {
+                              const active = parseLimitInput(limitDraft.context) === preset.value;
+                              return (
+                                <button key={preset.label}
+                                  onClick={() => setLimitDraft((d) => ({ ...d, context: String(preset.value) }))}
+                                  className={`px-1.5 py-0.5 rounded-md text-[10.5px] border tabular-nums transition-colors ${
+                                    active
+                                      ? 'bg-[var(--accent)] text-white border-[var(--accent)]'
+                                      : 'bg-[var(--bg-1)] text-[var(--text-secondary)] border-[var(--border)] hover:border-[var(--accent)]/50 hover:text-[var(--text-primary)]'
+                                  }`}>
+                                  {preset.label}
+                                </button>
+                              );
+                            })}
                           </div>
                           <div className="flex justify-end gap-2 mt-2">
                             <button onClick={readLimitsFromApi} disabled={refreshingLimits}
@@ -383,8 +421,8 @@ export default function ModelSelector() {
             <div>{t('reasoning')}: {tooltipModel.supportsReasoning || tooltipModel.userEnabledReasoning ? '✅' : '❌'}</div>
           </div>
           <div className="border-t border-[var(--border)] pt-1">
-            <div>{t('context')}: {tooltipModel.contextWindow.toLocaleString()}</div>
-            <div>{t('maxOutput')}: {tooltipModel.maxOutputTokens.toLocaleString()}</div>
+            <div>{t('context')}: {formatLimitTokens(tooltipModel.contextWindow)} tokens</div>
+            <div>{t('maxOutput')}: {formatLimitTokens(tooltipModel.maxOutputTokens)} tokens</div>
           </div>
         </div>
       )}

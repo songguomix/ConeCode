@@ -13,7 +13,7 @@
 export type PluginKind = 'builtin' | 'market' | 'custom';
 
 /** Which dedicated view a plugin opens. `skill` = generic run/recent-runs. */
-export type PluginView = 'sync' | 'perf' | 'security' | 'skill';
+export type PluginView = 'sync' | 'perf' | 'security' | 'skill' | 'image-gen';
 
 export interface PluginDef {
   id: string;
@@ -22,7 +22,7 @@ export interface PluginDef {
   description: string;
   kind: PluginKind;
   /** Icon key rendered by the library (react-icons live in the view layer). */
-  icon: 'github' | 'activity' | 'shield' | 'list' | 'commit' | 'map' | 'box';
+  icon: 'github' | 'activity' | 'shield' | 'list' | 'commit' | 'map' | 'box' | 'image';
   skillId?: string;
   view?: PluginView;
 }
@@ -81,6 +81,14 @@ export const BUILTIN_PLUGINS: PluginDef[] = [
     icon: 'map',
     skillId: 'repo-map',
     view: 'skill',
+  },
+  {
+    id: 'image-gen',
+    name: 'AI Image Generation',
+    description: 'Generate images in chat using configured providers and models, with gallery and studio.',
+    kind: 'builtin',
+    icon: 'image',
+    view: 'image-gen',
   },
 ];
 

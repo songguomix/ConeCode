@@ -37,6 +37,10 @@ export default {
         '2xl': '1.35rem',
         '3xl': '1.75rem',
       },
+      // The image lightboxes sit above the z-50 modals that host them.
+      zIndex: {
+        '60': '60',
+      },
     },
   },
   plugins: [],

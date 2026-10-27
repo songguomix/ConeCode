@@ -494,8 +494,10 @@ export interface BootstrapReport {
  */
 export async function bootstrapRsiWorkspace(
   afs: AsyncRsiFs, workspaceRoot: string, goalHash: (content: string) => string = hashContent,
+  /** Dedicated RSI conversations bootstrap their own archive, not the shared one. */
+  rsiDirOverride?: string,
 ): Promise<BootstrapReport> {
-  const rsiDir = `${workspaceRoot.replace(/\/+$/, '')}/.conecode/rsi`;
+  const rsiDir = rsiDirOverride ?? `${workspaceRoot.replace(/\/+$/, '')}/.conecode/rsi`;
   const created: string[] = [];
   try {
     const strategyPath = `${rsiDir}/STRATEGY.md`;

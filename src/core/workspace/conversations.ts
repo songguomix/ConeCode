@@ -1,4 +1,23 @@
 import type { Conversation } from '../../types';
+import { isRsiConversation } from '../agents/rsiConversation';
+
+export { isRsiConversation };
+
+/**
+ * Chat conversation: dialogue-only, unbound from any project workspace,
+ * and never an RSI session.
+ */
+export function isChatConversation(conv: Conversation): boolean {
+  return !isRsiConversation(conv) && conv.agentMode !== 'rsi' && (Boolean(conv.isChatMode) || !conv.rootPath);
+}
+
+/**
+ * Work conversation: bound to a project workspace directory,
+ * not flagged as chat-only, and never an RSI session.
+ */
+export function isWorkConversation(conv: Conversation): boolean {
+  return !isRsiConversation(conv) && conv.agentMode !== 'rsi' && !conv.isChatMode && Boolean(conv.rootPath);
+}
 
 /**
  * Group conversations by their bound folder so one folder can hold many chats.

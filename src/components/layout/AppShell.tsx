@@ -1,4 +1,5 @@
 import GithubPushDialog from '../plugins/GithubPushDialog';
+import GithubReleaseDialog from '../plugins/GithubReleaseDialog';
 import { useRef, useState, useEffect } from 'react';
 import { FiMenu } from 'react-icons/fi';
 import { useUIStore, useWorkspaceStore, useLanguageStore, useChatStore } from '../../stores';
@@ -17,6 +18,7 @@ import CodeReviewPanel from '../review/CodeReviewPanel';
 import WorktreePanel from '../worktree/WorktreePanel';
 import BackgroundPanel from '../background/BackgroundPanel';
 import ScreenshotOverlay from '../screenshot/ScreenshotOverlay';
+import ImageGeneratorModal from '../chat/ImageGeneratorModal';
 
 export default function AppShell() {
   const sidebarOpen = useUIStore((s) => s.sidebarOpen);
@@ -226,6 +228,7 @@ export default function AppShell() {
         </div>
       </div>
       <GithubPushDialog />
+      <GithubReleaseDialog />
       {settingsOpen && <SettingsModal />}
       {shotOpen && <ScreenshotOverlay />}
       {backgroundOpen && <BackgroundPanel />}
@@ -234,6 +237,7 @@ export default function AppShell() {
       {worktreesOpen && <WorktreePanel />}
       {remoteOpen && <RemotePanel />}
       {computerOpen && <ComputerPanel />}
+      <ImageGeneratorModal />
     </div>
   );
 }

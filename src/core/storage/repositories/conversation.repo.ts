@@ -28,6 +28,8 @@ export const conversationRepo = {
       // app restart. Absent on pre-Chat-Mode records, which always worked with
       // a workspace — so "undefined" must keep reading as Work mode.
       ...(data.isChatMode === true ? { isChatMode: true } : data.isChatMode === false ? { isChatMode: false } : {}),
+      ...(data.agentMode ? { agentMode: data.agentMode } : {}),
+      ...(data.rsi ? { rsi: structuredClone(data.rsi) } : {}),
       createdAt: now,
       updatedAt: now,
     };

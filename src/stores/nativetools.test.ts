@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractToolCalls, toolCallToAction, buildApiMessages, contextMessagesForUsage, isToolUnsupportedError, truncateToolResult, toolResultLimitForBatch, orderForDisplay } from './chat.store';
+import { extractToolCalls, toolCallToAction, buildApiMessages, contextMessagesForUsage, isToolUnsupportedError, truncateToolResult, toolResultLimitForBatch, orderForDisplay, conversationContinuable, TOOL_RESULTS_KEPT_LIVE } from './chat.store';
 import type { Message } from '../types';
 
 const msg = (m: Partial<Message>): Message => ({
@@ -172,6 +172,90 @@ describe('buildApiMessages', () => {
     ]);
     expect(out[0].tool_calls).toBeUndefined();
     expect(out[1].role).toBe('user'); // the orphaned result, demoted
+  });
+
+  it('elides old tool results but keeps the newest verbatim', () => {
+    const big = 'R'.repeat(5000);
+    const live = Array.from({ length: TOOL_RESULTS_KEPT_LIVE + 3 }, (_, i) =>
+      msg({ role: 'tool', content: `result ${i} ${big}`, toolCallId: `old${i}`, isToolResult: true }));
+    const out = buildApiMessages(live);
+    // The newest TOOL_RESULTS_KEPT_LIVE survive intact.
+    for (const m of out.slice(-TOOL_RESULTS_KEPT_LIVE)) {
+      expect(m.content).toContain(big);
+    }
+    // Older ones collapse to a short stub (head 0..2, newest 3..10 kept).
+    for (let i = 0; i < 3; i++) {
+      expect(out[i].content.length).toBeLessThan(1000);
+      expect(out[i].content).toContain('elided');
+      expect(out[i].content).toContain(`result ${i}`); // head is kept
+    }
+  });
+
+  it('shares the tool-result budget with prompt-mode user tool results', () => {
+    const big = 'P'.repeat(5000);
+    // Nine tool-class messages: the newest 8 (role:tool) stay verbatim, the
+    // older prompt-mode user tool result collapses like a native one.
+    const out = buildApiMessages([
+      msg({ role: 'user', content: `old prompt result ${big}`, isToolResult: true }),
+      ...Array.from({ length: TOOL_RESULTS_KEPT_LIVE }, (_, i) =>
+        msg({ role: 'tool', content: `result ${i}`, toolCallId: `t${i}`, isToolResult: true })),
+      msg({ role: 'assistant', content: 'ok' }),
+    ]);
+    expect(out[0].content.length).toBeLessThan(1000);
+    expect(out[0].content).toContain('elided');
+    expect(out[0].content).toContain('old prompt result'); // head is kept
+  });
+
+  it('replaces inline base64 images in text with a stub', () => {
+    const dataUrl = 'data:image/png;base64,' + 'A'.repeat(2000);
+    const out = buildApiMessages([
+      msg({ role: 'user', content: `look ![art](${dataUrl}) and ${dataUrl.slice(0, 50)}…` }),
+    ]);
+    expect(out[0].content).not.toContain('A'.repeat(100));
+    expect(out[0].content).toContain('elided');
+    expect(out[0].content).toContain('![art]');
+  });
+
+  it('keeps reasoning on the newest assistant turn and tool-call turns, drops it on older plain turns', () => {
+    const out = buildApiMessages([
+      msg({ role: 'user', content: 'q1' }),
+      msg({ role: 'assistant', content: 'old answer', reasoning_content: 'old chain of thought' }),
+      msg({ role: 'user', content: 'q2' }),
+      msg({ role: 'assistant', content: 'tool turn', reasoning_content: 'tool chain', toolCalls: [{ id: 'c1', name: 'read_file', arguments: { path: '/a' } }] }),
+      msg({ role: 'tool', content: 'x', toolCallId: 'c1', isToolResult: true }),
+      msg({ role: 'assistant', content: 'final answer', reasoning_content: 'final chain' }),
+    ]);
+    expect(out[1].reasoning_content).toBeUndefined(); // old plain turn
+    expect(out[3].reasoning_content).toBe('tool chain'); // tool-call turn (MiMo protocol)
+    expect(out[5].reasoning_content).toBe('final chain'); // newest assistant turn
+  });
+});
+
+describe('conversationContinuable', () => {
+  it('sees an interrupted partial as continuable', () => {
+    expect(conversationContinuable([
+      msg({ role: 'user', content: 'go' }),
+      msg({ role: 'assistant', content: 'partial…', interrupted: true }),
+    ])).toBe(true);
+  });
+
+  it('skips trailing local notices (the died-notice case)', () => {
+    expect(conversationContinuable([
+      msg({ role: 'user', content: 'go' }),
+      msg({ role: 'assistant', content: 'partial…', interrupted: true }),
+      msg({ role: 'assistant', content: '⚠️ died notice', isLocalNotice: true }),
+    ])).toBe(true);
+  });
+
+  it('is not continuable after a normal reply or a user tail', () => {
+    expect(conversationContinuable([
+      msg({ role: 'user', content: 'go' }),
+      msg({ role: 'assistant', content: 'done' }),
+    ])).toBe(false);
+    expect(conversationContinuable([
+      msg({ role: 'user', content: 'partial…' }),
+    ])).toBe(false);
+    expect(conversationContinuable([])).toBe(false);
   });
 });
 

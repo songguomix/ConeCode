@@ -9,10 +9,10 @@ import {
   FREE_WEEKLY_CAP,
   FREE_WEEKLY_TOKEN_CAP,
   WEEKLY_TOKEN_LIMIT,
-  loadFreeWeeklyUsage,
   recordFreeUsage as recordFreeUsageImpl,
-  resetFreeWeeklyUsage as resetFreeWeeklyUsageImpl,
-  applyFreeUsageReset,
+  resetFreeUsage as resetFreeUsageImpl,
+  syncFreeUsage,
+  hydrateFreeUsage,
 } from '../core/providers/freeUsage';
 
 interface FreeStore {
@@ -31,55 +31,73 @@ interface FreeStore {
   refresh: () => Promise<void>;
 }
 
+const LIMIT_FIELDS = {
+  weeklyLimit: FREE_WEEKLY_TOKEN_LIMIT,
+  weeklyUsage: { used: 0, limit: FREE_WEEKLY_TOKEN_LIMIT },
+  usage: { used: 0, limit: FREE_WEEKLY_TOKEN_LIMIT },
+};
+
+function withUsed(used: number) {
+  return {
+    weeklyUsed: used,
+    weeklyUsage: { used, limit: FREE_WEEKLY_TOKEN_LIMIT },
+    usage: { used, limit: FREE_WEEKLY_TOKEN_LIMIT },
+  };
+}
+
 export const useFreeStore = create<FreeStore>((set, get) => ({
   status: null,
   loading: false,
   error: null,
-  weeklyUsed: loadFreeWeeklyUsage().used,
-  weeklyLimit: FREE_WEEKLY_TOKEN_LIMIT,
-  weeklyUsage: { used: loadFreeWeeklyUsage().used, limit: FREE_WEEKLY_TOKEN_LIMIT },
-  usage: { used: loadFreeWeeklyUsage().used, limit: FREE_WEEKLY_TOKEN_LIMIT },
+  // The weekly counter is durable (main-process file store) and hydrates on
+  // refresh() — it starts at 0 only until the first sync lands.
+  weeklyUsed: 0,
+  ...LIMIT_FIELDS,
   recordUsage: (tokens: number) => {
-    const used = recordFreeUsageImpl(tokens);
-    set({ weeklyUsed: used, weeklyLimit: FREE_WEEKLY_TOKEN_LIMIT, weeklyUsage: { used, limit: FREE_WEEKLY_TOKEN_LIMIT }, usage: { used, limit: FREE_WEEKLY_TOKEN_LIMIT } });
+    void recordFreeUsageImpl(tokens)
+      .then((used) => set(withUsed(used)))
+      .catch(() => {});
   },
   recordFreeUsage: (tokens: number) => {
-    const used = recordFreeUsageImpl(tokens);
-    set({ weeklyUsed: used, weeklyLimit: FREE_WEEKLY_TOKEN_LIMIT, weeklyUsage: { used, limit: FREE_WEEKLY_TOKEN_LIMIT }, usage: { used, limit: FREE_WEEKLY_TOKEN_LIMIT } });
+    void recordFreeUsageImpl(tokens)
+      .then((used) => set(withUsed(used)))
+      .catch(() => {});
   },
   addUsage: (tokens: number) => {
-    const used = recordFreeUsageImpl(tokens);
-    set({ weeklyUsed: used, weeklyLimit: FREE_WEEKLY_TOKEN_LIMIT, weeklyUsage: { used, limit: FREE_WEEKLY_TOKEN_LIMIT }, usage: { used, limit: FREE_WEEKLY_TOKEN_LIMIT } });
+    void recordFreeUsageImpl(tokens)
+      .then((used) => set(withUsed(used)))
+      .catch(() => {});
   },
   resetUsage: () => {
-    resetFreeWeeklyUsageImpl();
-    set({ weeklyUsed: 0, weeklyLimit: FREE_WEEKLY_TOKEN_LIMIT, weeklyUsage: { used: 0, limit: FREE_WEEKLY_TOKEN_LIMIT }, usage: { used: 0, limit: FREE_WEEKLY_TOKEN_LIMIT } });
+    void resetFreeUsageImpl()
+      .then(() => set({ weeklyUsed: 0, ...LIMIT_FIELDS }))
+      .catch(() => {});
   },
   resetWeeklyUsage: () => {
-    resetFreeWeeklyUsageImpl();
-    set({ weeklyUsed: 0, weeklyLimit: FREE_WEEKLY_TOKEN_LIMIT, weeklyUsage: { used: 0, limit: FREE_WEEKLY_TOKEN_LIMIT }, usage: { used: 0, limit: FREE_WEEKLY_TOKEN_LIMIT } });
+    void resetFreeUsageImpl()
+      .then(() => set({ weeklyUsed: 0, ...LIMIT_FIELDS }))
+      .catch(() => {});
   },
   refresh: async () => {
     if (get().loading || !window.electronAPI?.free) return;
     set({ loading: true });
     try {
       const status = await window.electronAPI.free.status();
-      if (status?.usageResetAt) {
-        const didReset = applyFreeUsageReset(status.usageResetAt);
-        if (didReset) {
-          set({
-            weeklyUsed: 0,
-            weeklyUsage: { used: 0, limit: FREE_WEEKLY_TOKEN_LIMIT },
-            usage: { used: 0, limit: FREE_WEEKLY_TOKEN_LIMIT },
-          });
-          if (status.usage) {
-            status.usage.used = 0;
-            status.usage.usedTokens = 0;
-            status.usage.weeklyUsed = 0;
-          }
-          status.usedTokens = 0;
-          status.weeklyUsed = 0;
+      // Durable usage: hydrate the legacy localStorage counter once (migration
+      // from pre-file-store installs), then sync — a server-driven reset with
+      // a newer marker is applied to the file store before this read, so the
+      // count survives restarts instead of silently zeroing.
+      await hydrateFreeUsage();
+      const { used, didReset } = await syncFreeUsage(status?.usageResetAt ?? null);
+      set(withUsed(used));
+      if (didReset) {
+        if (status.usage) {
+          status.usage.used = 0;
+          status.usage.usedTokens = 0;
+          status.usage.weeklyUsed = 0;
         }
+        status.usedTokens = 0;
+        status.weeklyUsed = 0;
       }
       const previous = get().status;
       const modelState = useModelStore.getState();
@@ -113,10 +131,10 @@ export {
   FREE_WEEKLY_TOKEN_CAP,
   WEEKLY_TOKEN_LIMIT,
   FREE_USAGE_STORAGE_KEY,
-  loadFreeWeeklyUsage,
-  saveFreeWeeklyUsage,
-  getFreeWeeklyUsed,
+  loadFreeUsageRecord,
   recordFreeUsage,
-  resetFreeWeeklyUsage,
+  resetFreeUsage,
+  syncFreeUsage,
+  hydrateFreeUsage,
   isFreeWeeklyLimitReached,
 } from '../core/providers/freeUsage';

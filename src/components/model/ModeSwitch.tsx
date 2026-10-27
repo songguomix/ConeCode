@@ -16,7 +16,8 @@ const MODE_META: Record<AgentMode, { shortKey: string; labelKey: string; hintKey
   rsi: { shortKey: 'modeRsi', labelKey: 'agentModeRsi', hintKey: 'agentModeRsiHint', Icon: FiZap },
 };
 
-const ORDER: AgentMode[] = ['standard', 'goal', 'orchestrate', 'rsi'];
+// 编排融合到标准模式中，RSI 则在侧边栏导航独立显示，此处仅保留标准与目标模式
+const ORDER: AgentMode[] = ['standard', 'goal'];
 
 /**
  * ThinkingSlider-style agent mode switch: a collapsed pill next to the model
@@ -43,8 +44,9 @@ export default function ModeSwitch({ value, onChange }: ModeSwitchProps) {
     useUIStore.getState().closeModelSelector();
   }, [open ]);
 
-  const Meta = MODE_META[value];
-  const active = value !== 'standard';
+  const effectiveMode: AgentMode = (value === 'orchestrate' || value === 'rsi') ? 'standard' : value;
+  const Meta = MODE_META[effectiveMode] || MODE_META.standard;
+  const active = effectiveMode !== 'standard';
 
   return (
     <div
@@ -61,14 +63,14 @@ export default function ModeSwitch({ value, onChange }: ModeSwitchProps) {
         aria-label={t('modeMenu')}
         aria-haspopup="dialog"
         aria-expanded={open}
-        className={`flex items-center h-8 pl-1.5 pr-2.5 rounded-full border transition-all backdrop-blur-md shadow-2xs ${
+        className={`flex items-center h-8 pl-1.5 pr-2.5 rounded-full border transition-all backdrop-blur-md shadow-2xs cursor-pointer ${
           open || active
             ? 'bg-[var(--accent-soft)] border-[var(--accent)]/50 text-[var(--accent)] font-medium shadow-xs'
             : 'bg-[var(--glass-card)] hover:bg-[var(--bg-2)] border-[var(--glass-border)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
         }`}
       >
         {/* keyed remount → the label pops on every mode change */}
-        <span key={value} className="flex items-center gap-2 anim-pop">
+        <span key={effectiveMode} className="flex items-center gap-2 anim-pop">
           <span className="w-5 h-5 rounded-full bg-[var(--accent-soft)] text-[var(--accent)] flex items-center justify-center shrink-0">
             <Meta.Icon size={11} />
           </span>
@@ -87,16 +89,16 @@ export default function ModeSwitch({ value, onChange }: ModeSwitchProps) {
           </div>
           {ORDER.map((mode, i) => {
             const m = MODE_META[mode];
-            const selected = value === mode;
+            const selected = effectiveMode === mode;
             return (
               <button
                 key={mode}
                 type="button"
                 onClick={() => { onChange(mode); setOpen(false); }}
                 aria-pressed={selected}
-                className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-left transition-colors effort-stagger-${Math.min(i + 1, 2)} ${
+                className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-left transition-colors effort-stagger-${Math.min(i + 1, 2)} cursor-pointer ${
                   selected
-                    ? 'bg-[var(--accent-soft)] text-[var(--accent)]'
+                    ? 'bg-[var(--accent-soft)] text-[var(--accent)] font-semibold'
                     : 'hover:bg-[var(--bg-3)] text-[var(--text-primary)]'
                 }`}
               >

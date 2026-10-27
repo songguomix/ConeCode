@@ -66,7 +66,7 @@ export default function SyncView() {
           <FiRefreshCw size={12} className={refreshing ? 'animate-spin' : ''} />
         </button>
       </div>
-      <p className="px-1 mb-2 text-[11px] text-[var(--text-muted)]">{t('pluginRepoHint')}</p>
+      <p className="px-1 mb-2 text-[11px] text-[var(--text-muted)] break-words [overflow-wrap:anywhere]">{t('pluginRepoHint')}</p>
 
       <label className="block px-1 mb-1 text-[11px] uppercase tracking-wider text-[var(--text-muted)]">
         {t('pluginTokenLabel')}
@@ -100,7 +100,7 @@ export default function SyncView() {
         )}
       </div>
 
-      <div className="mb-3 rounded-xl border border-[var(--border)] bg-[var(--bg-2)] px-3 py-2.5">
+      <div className="mb-3 rounded-xl border border-[var(--border)] bg-[var(--bg-2)] px-3 py-2.5 min-w-0">
         <a
           href="https://github.com/settings/tokens"
           target="_blank"
@@ -109,7 +109,7 @@ export default function SyncView() {
         >
           {t('pluginGetToken')} <FiExternalLink size={12} aria-hidden="true" />
         </a>
-        <ol className="mt-2 list-decimal pl-4 space-y-1 text-[12px] leading-relaxed text-[var(--text-secondary)]">
+        <ol className="mt-2 list-decimal pl-4 space-y-1 text-[12px] leading-relaxed text-[var(--text-secondary)] break-words [overflow-wrap:anywhere]">
           <li>{t('pluginTokenStepGenerate')}</li>
           <li>{t('pluginTokenStepPermissions')}</li>
           <li>{t('pluginTokenStepSave')}</li>
@@ -117,33 +117,33 @@ export default function SyncView() {
       </div>
 
       {/* What will be pushed: the open project's branch and uncommitted count. */}
-      <div className="px-3 py-2 mb-2 rounded-xl bg-[var(--bg-2)] border border-[var(--border)]">
+      <div className="px-3 py-2 mb-2 rounded-xl bg-[var(--bg-2)] border border-[var(--border)] min-w-0">
         {!rootPath ? (
-          <p className="text-[12px] text-[var(--text-muted)]">{t('pluginNoProject')}</p>
+          <p className="text-[12px] text-[var(--text-muted)] break-words [overflow-wrap:anywhere]">{t('pluginNoProject')}</p>
         ) : status && !status.isRepo ? (
-          <p className="text-[12px] text-[var(--text-muted)]">{t('pluginNotGit')}</p>
+          <p className="text-[12px] text-[var(--text-muted)] break-words [overflow-wrap:anywhere]">{t('pluginNotGit')}</p>
         ) : status ? (
-          <p className="text-[12px] text-[var(--text-secondary)]">
+          <p className="text-[12px] text-[var(--text-secondary)] break-words [overflow-wrap:anywhere]">
             {t('pluginBranch')}: <span className="text-[var(--text-primary)]">{status.branch}</span>
             {' · '}
             {status.dirty > 0 ? `${status.dirty} ${t('pluginChanges')}` : t('pluginClean')}
           </p>
         ) : (
-          <p className="text-[12px] text-[var(--text-muted)]">{t('pluginChecking')}</p>
+          <p className="text-[12px] text-[var(--text-muted)] break-words [overflow-wrap:anywhere]">{t('pluginChecking')}</p>
         )}
       </div>
 
       <button
         onClick={() => { setRepo(repoDraft); void pushRepo(); }}
         disabled={!canPush}
-        className="w-full mb-2 px-3 py-2 rounded-xl bg-[var(--accent)] text-white text-[13px] font-medium hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50 flex items-center justify-center gap-1.5"
+        className="w-full mb-2 px-3 py-2 rounded-xl bg-[var(--accent)] text-white text-[13px] font-medium hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50 flex items-center justify-center gap-1.5 shrink-0"
       >
         <FiUpload size={13} />
         {pushing ? t('pluginPushing') : t('pluginPushProject')}
       </button>
 
       {result && (
-        <p className={`px-3 py-2 mb-2 rounded-xl text-[12px] ${
+        <p className={`px-3 py-2 mb-2 rounded-xl text-[12px] break-words [overflow-wrap:anywhere] ${
           result.ok
             ? 'bg-[var(--success)]/10 text-[var(--success)]'
             : 'bg-[var(--error)]/10 text-[var(--error)]'
@@ -154,7 +154,7 @@ export default function SyncView() {
       <GithubReleaseView />
 
       {lastPushAt && (
-        <p className="px-1 text-[11px] text-[var(--text-muted)]">
+        <p className="px-1 text-[11px] text-[var(--text-muted)] break-words [overflow-wrap:anywhere]">
           {t('pluginLastPush')}: {new Date(lastPushAt).toLocaleString()}
         </p>
       )}
