@@ -1,6 +1,6 @@
 {
   "name": "conecode",
-  "version": "2.4.8",
+  "version": "2.4.9",
   "description": "AI Desktop Client",
   "author": "ConeCode",
   "license": "MIT",
@@ -21,7 +21,7 @@
     "dist:mac:unsigned": "npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --publish=never",
     "dist:win": "npm run build && electron-builder --win --x64 --publish=never",
     "dist:linux": "npm run build && electron-builder --linux AppImage --x64 --publish=never",
-    "dist:all": "npm run build && electron-builder -mw --publish=never"
+    "dist:all": "npm run build && electron-builder -mwl --publish=never"
   },
   "build": {
     "appId": "com.conecode.app",
@@ -45,6 +45,7 @@
         "nsis"
       ],
       "icon": "icon.png",
+      "signExecutable": false,
       "extraResources": [
         {
           "from": "resources/bin/cloudflared-win-x64.exe",
@@ -53,6 +54,8 @@
       ]
     },
     "linux": {
+      "target": "AppImage",
+      "icon": "icon.png",
       "extraResources": [
         {
           "from": "resources/bin/cloudflared-linux-x64",
