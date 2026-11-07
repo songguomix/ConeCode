@@ -76,14 +76,14 @@ export default function ChatImage({ src, alt = '' }: { src: string; alt?: string
         <div className="absolute top-2.5 right-2.5 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-black/60 backdrop-blur-md rounded-xl p-1 border border-white/10 shadow-lg">
           <button
             onClick={handleCopy}
-            className="p-1.5 rounded-lg text-white hover:bg-white/20 transition-colors"
+            className="p-1.5 rounded-lg text-white hover:bg-white/20 transition-colors cursor-pointer"
             title={t('copyArtwork')}
           >
             {copied ? <FiCheck size={13} className="text-emerald-400" /> : <FiCopy size={13} />}
           </button>
           <button
             onClick={handleDownload}
-            className="p-1.5 rounded-lg text-white hover:bg-white/20 transition-colors"
+            className="p-1.5 rounded-lg text-white hover:bg-white/20 transition-colors cursor-pointer"
             title={t('saveArtwork')}
           >
             {downloaded ? <FiCheck size={13} className="text-emerald-400" /> : <FiDownload size={13} />}
@@ -91,7 +91,7 @@ export default function ChatImage({ src, alt = '' }: { src: string; alt?: string
           {alt && (
             <button
               onClick={handleRemix}
-              className="p-1.5 rounded-lg text-white hover:bg-white/20 transition-colors"
+              className="p-1.5 rounded-lg text-white hover:bg-white/20 transition-colors cursor-pointer"
               title={t('remixInStudio')}
             >
               <SparklesIcon size={13} className="text-amber-300" />
@@ -99,7 +99,7 @@ export default function ChatImage({ src, alt = '' }: { src: string; alt?: string
           )}
           <button
             onClick={() => setLightboxOpen(true)}
-            className="p-1.5 rounded-lg text-white hover:bg-white/20 transition-colors"
+            className="p-1.5 rounded-lg text-white hover:bg-white/20 transition-colors cursor-pointer"
             title={t('fullscreenView')}
           >
             <FiMaximize2 size={13} />
@@ -116,21 +116,21 @@ export default function ChatImage({ src, alt = '' }: { src: string; alt?: string
           <div className="absolute top-4 right-4 flex items-center gap-2">
             <button
               onClick={handleCopy}
-              className="p-2.5 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors"
+              className="p-2.5 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors cursor-pointer"
               title={t('copyArtwork')}
             >
               {copied ? <FiCheck size={16} className="text-emerald-400" /> : <FiCopy size={16} />}
             </button>
             <button
               onClick={handleDownload}
-              className="p-2.5 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors"
+              className="p-2.5 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors cursor-pointer"
               title={t('saveArtwork')}
             >
               {downloaded ? <FiCheck size={16} className="text-emerald-400" /> : <FiDownload size={16} />}
             </button>
             <button
               onClick={() => setLightboxOpen(false)}
-              className="p-2.5 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors"
+              className="p-2.5 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors cursor-pointer"
               title={t('close')}
             >
               <FiX size={18} />

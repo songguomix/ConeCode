@@ -1,0 +1,172 @@
+{
+  "schemaVersion": 1,
+  "measuredAt": "2026-11-07T09:17:15.809Z",
+  "mode": "scripted-real-controller-paired-comparison",
+  "environment": {
+    "node": "v22.23.2",
+    "platform": "darwin",
+    "arch": "arm64",
+    "playwright": "1.65.0"
+  },
+  "sourceDigest": "171c03367d663de2aad77573793be1b1074f0e1e11e832bc83a7422757cc8efe",
+  "fixtureCases": 2,
+  "sampleSize": 4,
+  "passed": 4,
+  "realModelCalls": 0,
+  "costUsd": null,
+  "note": "Alternating full/projected observation modes through the same TaskController, Executor and independent acceptance, with identical fixture reset, script, budgets and original acceptance per pair. ScriptedAdapter does not perform inference or adapt decisions to observation size. modelRequestCount counts actual model.request events, not paid provider calls. Durations are single-run descriptive samples, excluding service teardown. No speed, cost or real-model success improvement is claimed.",
+  "results": [
+    {
+      "scenario": "ordinary_save",
+      "observationMode": "full",
+      "order": 1,
+      "acceptance": [
+        {
+          "kind": "record_field",
+          "url": "http://127.0.0.1:62574/api/projects/1",
+          "method": "GET",
+          "path": [
+            "name"
+          ],
+          "equals": "Demo"
+        },
+        {
+          "kind": "text_visible",
+          "text": "Saved successfully",
+          "scope": "page"
+        }
+      ],
+      "budgets": {
+        "maxSteps": 8,
+        "maxModelCalls": 5,
+        "maxWallClockMs": 30000,
+        "maxCostUsd": 0.1
+      },
+      "status": "succeeded",
+      "durableRecord": {
+        "id": 1,
+        "name": "Demo"
+      },
+      "acceptancePassed": true,
+      "modelRequestCount": 3,
+      "actionCount": 2,
+      "durationMs": 522.8517079999999,
+      "costUsd": null,
+      "pass": true
+    },
+    {
+      "scenario": "ordinary_save",
+      "observationMode": "projected",
+      "order": 2,
+      "acceptance": [
+        {
+          "kind": "record_field",
+          "url": "http://127.0.0.1:62574/api/projects/1",
+          "method": "GET",
+          "path": [
+            "name"
+          ],
+          "equals": "Demo"
+        },
+        {
+          "kind": "text_visible",
+          "text": "Saved successfully",
+          "scope": "page"
+        }
+      ],
+      "budgets": {
+        "maxSteps": 8,
+        "maxModelCalls": 5,
+        "maxWallClockMs": 30000,
+        "maxCostUsd": 0.1
+      },
+      "status": "succeeded",
+      "durableRecord": {
+        "id": 1,
+        "name": "Demo"
+      },
+      "acceptancePassed": true,
+      "modelRequestCount": 3,
+      "actionCount": 2,
+      "durationMs": 507.2085420000001,
+      "costUsd": null,
+      "pass": true
+    },
+    {
+      "scenario": "delayed_save",
+      "observationMode": "projected",
+      "order": 3,
+      "acceptance": [
+        {
+          "kind": "record_field",
+          "url": "http://127.0.0.1:62574/api/projects/1",
+          "method": "GET",
+          "path": [
+            "name"
+          ],
+          "equals": "Demo"
+        },
+        {
+          "kind": "text_visible",
+          "text": "Saved successfully",
+          "scope": "page"
+        }
+      ],
+      "budgets": {
+        "maxSteps": 8,
+        "maxModelCalls": 5,
+        "maxWallClockMs": 30000,
+        "maxCostUsd": 0.1
+      },
+      "status": "succeeded",
+      "durableRecord": {
+        "id": 1,
+        "name": "Demo"
+      },
+      "acceptancePassed": true,
+      "modelRequestCount": 3,
+      "actionCount": 2,
+      "durationMs": 608.5645420000001,
+      "costUsd": null,
+      "pass": true
+    },
+    {
+      "scenario": "delayed_save",
+      "observationMode": "full",
+      "order": 4,
+      "acceptance": [
+        {
+          "kind": "record_field",
+          "url": "http://127.0.0.1:62574/api/projects/1",
+          "method": "GET",
+          "path": [
+            "name"
+          ],
+          "equals": "Demo"
+        },
+        {
+          "kind": "text_visible",
+          "text": "Saved successfully",
+          "scope": "page"
+        }
+      ],
+      "budgets": {
+        "maxSteps": 8,
+        "maxModelCalls": 5,
+        "maxWallClockMs": 30000,
+        "maxCostUsd": 0.1
+      },
+      "status": "succeeded",
+      "durableRecord": {
+        "id": 1,
+        "name": "Demo"
+      },
+      "acceptancePassed": true,
+      "modelRequestCount": 3,
+      "actionCount": 2,
+      "durationMs": 612.057417,
+      "costUsd": null,
+      "pass": true
+    }
+  ]
+}

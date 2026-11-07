@@ -53,6 +53,22 @@ function loadFileTreeOpen(): boolean {
 /** The left column shows one of these at a time; both stay mounted. */
 export type WorkbenchTab = 'code' | 'preview';
 
+/**
+ * Floating panels all occupy the same `fixed left-4 top-[96px]` slot. Opening
+ * a second one used to leave both mounted, so the previously opened panel kept
+ * painting over the one the user just clicked. Every toggle now closes the
+ * others first: the panel you picked is always the one in front.
+ */
+const FLOATING_PANELS_CLOSED = {
+  changedFilesOpen: false,
+  reviewOpen: false,
+  backgroundOpen: false,
+  worktreesOpen: false,
+  remoteOpen: false,
+  computerOpen: false,
+} as const;
+
+
 export type ViewMode = 'chat' | 'work';
 const VIEW_MODE_KEY = 'conecode.viewMode';
 function loadViewMode(): ViewMode {
@@ -149,15 +165,15 @@ export const useUIStore = create<UIStore>((set) => ({
   toggleModelSelector: () => set((s) => ({ modelSelectorOpen: !s.modelSelectorOpen })),
   closeModelSelector: () => set({ modelSelectorOpen: false }),
   toggleTerminal: () => set((s) => ({ terminalOpen: !s.terminalOpen })),
-  toggleChangedFiles: () => set((s) => ({ changedFilesOpen: !s.changedFilesOpen })),
+  toggleChangedFiles: () => set((s) => ({ ...FLOATING_PANELS_CLOSED, changedFilesOpen: !s.changedFilesOpen })),
   closeChangedFiles: () => set({ changedFilesOpen: false }),
-  toggleReview: () => set((s) => ({ reviewOpen: !s.reviewOpen })),
+  toggleReview: () => set((s) => ({ ...FLOATING_PANELS_CLOSED, reviewOpen: !s.reviewOpen })),
   closeReview: () => set({ reviewOpen: false }),
-  toggleBackground: () => set((s) => ({ backgroundOpen: !s.backgroundOpen })),
+  toggleBackground: () => set((s) => ({ ...FLOATING_PANELS_CLOSED, backgroundOpen: !s.backgroundOpen })),
   closeBackground: () => set({ backgroundOpen: false }),
-  toggleWorktrees: () => set((s) => ({ worktreesOpen: !s.worktreesOpen })),
+  toggleWorktrees: () => set((s) => ({ ...FLOATING_PANELS_CLOSED, worktreesOpen: !s.worktreesOpen })),
   closeWorktrees: () => set({ worktreesOpen: false }),
-  toggleRemote: () => set((s) => ({ remoteOpen: !s.remoteOpen })),
+  toggleRemote: () => set((s) => ({ ...FLOATING_PANELS_CLOSED, remoteOpen: !s.remoteOpen })),
   closeRemote: () => set({ remoteOpen: false }),
   // Opening the preview always brings it to the front of the workbench;
   // closing it falls back to the code tab (which may itself be empty).
@@ -166,7 +182,7 @@ export const useUIStore = create<UIStore>((set) => ({
     : { previewOpen: true, workbenchTab: 'preview' as WorkbenchTab })),
   openPreview: () => set({ previewOpen: true, workbenchTab: 'preview' }),
   closePreview: () => set({ previewOpen: false, workbenchTab: 'code' }),
-  toggleComputer: () => set((s) => ({ computerOpen: !s.computerOpen })),
+  toggleComputer: () => set((s) => ({ ...FLOATING_PANELS_CLOSED, computerOpen: !s.computerOpen })),
   closeComputer: () => set({ computerOpen: false }),
   setWorkbenchTab: (tab) => set({ workbenchTab: tab }),
   setEditorDirty: (dirty) => set({ editorDirty: dirty }),

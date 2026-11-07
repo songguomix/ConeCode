@@ -8,7 +8,8 @@
 //   V(tree | policy) = maxReward - beta1 * N + beta2 * N / max(1, rounds)
 //
 // N = revealed attempts (capped by policy.maxAttempts, in recorded order),
-// rounds = ceil(N / parallelism). A policy that needs fewer attempts to reach
+// rounds = dependency-aware batches, not a declared-parallelism shortcut.
+// A policy that needs fewer attempts to reach
 // the same recorded best scores higher; a policy that truncates before the
 // best scores lower. Monotone select keeps the incumbent on ties or thin data.
 
@@ -78,10 +79,25 @@ export function replayScore(tree: DiscoveryTree, policy: ExplorationPolicy, opts
   const revealed = tree.nodes.slice(0, Math.max(0, policy.maxAttempts));
   const n = revealed.length;
   const parallelism = policy.parallelism ?? 1;
-  const rounds = Math.max(1, Math.ceil(n / Math.max(1, parallelism)));
+  // A child was proposed from its parent's result and cannot be revealed in
+  // the same virtual batch. Merely declaring more workers must not make a
+  // dependent serial history appear cheaper than it was.
+  let pending = [...revealed];
+  const completed = new Set<string>();
+  let rounds = 0;
+  while (pending.length) {
+    const ready = pending.filter((node) => node.parentId === null || completed.has(node.parentId)).slice(0, parallelism);
+    if (!ready.length) { rounds = n; break; } // malformed lineage: no batching claim
+    for (const node of ready) completed.add(node.id);
+    pending = pending.filter((node) => !completed.has(node.id));
+    rounds++;
+  }
+  rounds = Math.max(1, rounds);
   let maxReward = REWARD_FAIL;
   for (const node of revealed) {
-    if (node.reward > maxReward) maxReward = node.reward;
+    const invalid = !node.externalPass || node.status === 'failed'
+      || ['discipline-veto', 'hard-floor-breach', 'budget-exceeded', 'invalid-declaration', 'mutate-error', 'verify-error'].includes(node.failureReason ?? '');
+    if (!invalid && Number.isFinite(node.reward) && node.reward > maxReward) maxReward = node.reward;
   }
   // Empty history reveals nothing: score is pure cost of zero attempts.
   const score = (n === 0 ? REWARD_FAIL : maxReward) - beta1 * n + beta2 * (n / rounds);

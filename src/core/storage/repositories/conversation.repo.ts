@@ -81,6 +81,15 @@ export const messageRepo = {
     return readJSON<Message[]>(MSG_FILE, []).filter((m) => m.conversationId === conversationId);
   },
 
+  /** Message count per conversation, used to find never-used blank chats. */
+  countsByConversation(): Record<string, number> {
+    const counts: Record<string, number> = {};
+    for (const message of readJSON<Message[]>(MSG_FILE, [])) {
+      counts[message.conversationId] = (counts[message.conversationId] ?? 0) + 1;
+    }
+    return counts;
+  },
+
   create(data: Omit<Message, 'createdAt'>): Message {
     const messages = readJSON<Message[]>(MSG_FILE, []);
     const msg: Message = { ...data, createdAt: Date.now() };

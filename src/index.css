@@ -3,6 +3,7 @@
 @tailwind utilities;
 
 :root {
+  color-scheme: light;
   /* Claude-inspired light: warm cream palette with terracotta accent. */
   --bg-0: #FAF6F1;
   --bg-1: #F0EBE3;
@@ -23,7 +24,7 @@
   --glass-card: rgba(255, 255, 255, 0.94);
   --glass-surface: rgba(250, 246, 241, 0.97);
   --glass-subtle: rgba(255, 255, 255, 0.88);
-  --glass-border: rgba(0, 0, 0, 0.16);
+  --glass-border: rgba(81, 59, 39, 0.12);
   --glass-highlight: rgba(255, 255, 255, 0.65);
   --font-mono: 'SF Mono', 'JetBrains Mono', 'Menlo', 'Cascadia Code', ui-monospace, monospace;
   --font-serif: 'Newsreader', 'Charter', 'Georgia', 'Songti SC', 'STSong', 'Source Han Serif SC', 'Noto Serif SC', 'SimSun', serif;
@@ -51,6 +52,7 @@
 }
 
 .dark {
+  color-scheme: dark;
   /* Claude-inspired dark: warm dark surface with lighter terracotta accent. */
   --bg-0: #1A1915;
   --bg-1: #14130F;
@@ -71,7 +73,7 @@
   --glass-card: rgba(36, 35, 32, 0.96);
   --glass-surface: rgba(20, 19, 15, 0.98);
   --glass-subtle: rgba(26, 25, 21, 0.90);
-  --glass-border: rgba(255, 255, 255, 0.18);
+  --glass-border: rgba(255, 255, 255, 0.12);
   --glass-highlight: rgba(255, 255, 255, 0.10);
 
   /* Opaque semantic background variables for cards (command approval, question prompt) */
@@ -135,8 +137,6 @@
 .ff-mono { font-family: var(--font-mono); }
 .ff-serif, .font-serif, .font-song {
   font-family: var(--font-serif);
-  font-weight: 700;
-  -webkit-text-stroke: 0.18px currentColor;
 }
 
 body {
@@ -158,6 +158,29 @@ body {
 
 input, textarea, select, button { font-family: inherit; }
 
+/* Shared interaction states stay consistent across every workbench panel. */
+input, textarea, select { min-width: 0; }
+button:not(:disabled), [role="button"]:not([aria-disabled="true"]) { cursor: pointer; }
+button:disabled { cursor: not-allowed; }
+:where(button, a, input, textarea, select, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+textarea { scrollbar-gutter: stable; }
+/* The composer supplies one focus indicator around the entire input group. */
+.chat-composer textarea:focus-visible { outline: none; }
+/* Search fields sit inside a bordered pill that already shows focus. The inner
+   input must not draw a second ring — no red box inside any search bar. */
+input.search-input:focus,
+input.search-input:focus-visible { outline: none; box-shadow: none; }
+.terminal-prompt:focus-within { background: var(--accent-soft); }
+.terminal-prompt input:focus-visible { outline: none; }
+@media (forced-colors: active) {
+  :where(button, a, input, textarea, select, [tabindex]):focus-visible { outline-color: Highlight; }
+  .chat-composer:focus-within { outline: 2px solid Highlight; }
+  .terminal-prompt:focus-within { outline: 1px solid Highlight; }
+}
+
 /* Dense backing keeps text readable when panels overlap busy content. */
 @layer components {
   .glass {
@@ -171,7 +194,7 @@ input, textarea, select, button { font-family: inherit; }
     backdrop-filter: blur(18px) saturate(110%);
     -webkit-backdrop-filter: blur(18px) saturate(110%);
     border: 1px solid var(--glass-border);
-    box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.04), inset 0 1px 0 0 var(--glass-highlight);
+    box-shadow: 0 2px 8px -2px rgba(40, 28, 17, 0.05), inset 0 1px 0 0 var(--glass-highlight);
   }
   .glass-dock {
     background: var(--glass-surface);
@@ -515,4 +538,14 @@ input, textarea, select, button { font-family: inherit; }
     opacity: 1 !important;
     transform: none !important;
   }
+}
+
+/* The browser dock adapts to its own width, including split workbenches. */
+.preview-panel { container: preview-panel / inline-size; }
+@container preview-panel (max-width: 480px) {
+  .preview-toolbar > form { flex-basis: 100%; order: -1; }
+}
+.workbench-sidebar { container: workbench-sidebar / inline-size; }
+@container workbench-sidebar (max-width: 240px) {
+  .file-tree-tools > input { flex-basis: 100%; }
 }

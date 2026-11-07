@@ -1,0 +1,60 @@
+.rsi-view {
+  container-name: rsi-view;
+  container-type: inline-size;
+}
+
+/* Keep controls reachable when the central pane becomes very narrow. */
+@container rsi-view (max-width: 460px) {
+  .rsi-progress {
+    flex-wrap: wrap;
+  }
+
+  .rsi-progress-summary {
+    flex-basis: calc(100% - 28px);
+  }
+
+  .rsi-progress-actions {
+    margin-left: auto;
+  }
+}
+
+.rsi-welcome-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+}
+
+@container rsi-view (min-width: 560px) {
+  .rsi-welcome-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.rsi-stage-grid,
+.rsi-permission-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+}
+
+@container rsi-view (min-width: 420px) {
+  .rsi-stage-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container rsi-view (min-width: 600px) {
+  .rsi-stage-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .rsi-permission-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container rsi-view (min-width: 840px) {
+  .rsi-stage-grid {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}

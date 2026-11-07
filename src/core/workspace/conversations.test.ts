@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { groupConversationsByFolder, folderDisplayName, isChatConversation, isWorkConversation } from './conversations';
+import {
+  groupConversationsByFolder, folderDisplayName, isChatConversation, isWorkConversation,
+  isBlankConversation, pickReusableConversation,
+} from './conversations';
 import { defaultRsiState } from '../agents/rsiConversation';
 import type { Conversation } from '../../types';
 
@@ -83,5 +86,81 @@ describe('isChatConversation & isWorkConversation isolation', () => {
     expect(isWorkConversation(rsi1)).toBe(false);
     expect(isChatConversation(rsi2)).toBe(false);
     expect(isWorkConversation(rsi2)).toBe(false);
+  });
+});
+
+const blank = (
+  id: string,
+  rootPath: string | null,
+  updatedAt: number,
+  overrides: Partial<Conversation> = {},
+): Conversation => ({
+  ...conv(id, rootPath, updatedAt),
+  title: 'New Chat',
+  ...overrides,
+});
+
+describe('isBlankConversation', () => {
+  it('treats a default-titled, message-less conversation as unused', () => {
+    expect(isBlankConversation(blank('a', null, 1), 0)).toBe(true);
+  });
+
+  it('never treats a conversation with messages, a custom title, or RSI state as unused', () => {
+    expect(isBlankConversation(blank('a', null, 1), 1)).toBe(false);
+    expect(isBlankConversation({ ...blank('a', null, 1), title: 'Research' }, 0)).toBe(false);
+    const rsi = { ...blank('r', '/proj', 1), agentMode: 'rsi' as const, rsi: defaultRsiState() };
+    expect(isBlankConversation(rsi, 0)).toBe(true);
+    expect(isBlankConversation({
+      ...rsi,
+      rsi: { ...rsi.rsi!, directionConfig: { ...rsi.rsi!.directionConfig, objective: 'ship it' } },
+    }, 0)).toBe(false);
+    expect(isBlankConversation({
+      ...rsi,
+      rsi: { ...rsi.rsi!, runs: [{ id: 'run', status: 'completed', iteration: 1, result: null, createdAt: 1, updatedAt: 1 }] },
+    }, 0)).toBe(false);
+  });
+});
+
+describe('pickReusableConversation', () => {
+  it('prefers the active blank conversation', () => {
+    const active = blank('active', null, 1);
+    const older = blank('older', null, 99);
+    const picked = pickReusableConversation(
+      [older, active], 'chat', null, active.id, 0, { active: 0, older: 0 },
+    );
+    expect(picked?.id).toBe('active');
+  });
+
+  it('reuses the newest blank conversation when the active one is used', () => {
+    const used = blank('used', null, 3);
+    const older = blank('older', null, 1);
+    const newer = blank('newer', null, 2);
+    const picked = pickReusableConversation(
+      [used, older, newer], 'chat', null, used.id, 2, { used: 2, older: 0, newer: 0 },
+    );
+    expect(picked?.id).toBe('newer');
+  });
+
+  it('does not cross modes or folders', () => {
+    const chat = blank('chat', null, 1);
+    const otherFolder = blank('other', '/proj/other', 2);
+    expect(pickReusableConversation([chat], 'work', '/proj/app', null, 0, {})).toBeNull();
+    expect(pickReusableConversation([otherFolder], 'work', '/proj/app', null, 0, { other: 0 })).toBeNull();
+  });
+
+  it('reuses a blank RSI conversation only in the same workspace', () => {
+    const rsi = (id: string, rootPath: string | null): Conversation => ({
+      ...blank(id, rootPath, 1),
+      agentMode: 'rsi',
+      rsi: defaultRsiState(),
+    });
+    expect(pickReusableConversation([rsi('r1', '/proj/app')], 'rsi', '/proj/app', null, 0, { r1: 0 })?.id).toBe('r1');
+    expect(pickReusableConversation([rsi('r2', '/proj/other')], 'rsi', '/proj/app', null, 0, { r2: 0 })).toBeNull();
+  });
+
+  it('treats unknown counts as used when the main process cannot report them', () => {
+    const blankConv = blank('a', null, 1);
+    expect(pickReusableConversation([blankConv], 'chat', null, null, 0, null)).toBeNull();
+    expect(pickReusableConversation([blankConv], 'chat', null, 'a', 0, null)?.id).toBe('a');
   });
 });

@@ -1,0 +1,10 @@
+node_modules/
+dist/
+console/dist/
+.cua/
+artifacts/
+native/bin/
+*.log
+.env
+.env.*
+!.env.example

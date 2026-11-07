@@ -1,23 +1,63 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
-  FiSquare, FiCircle, FiArrowUpRight, FiEdit3,
-  FiDownload, FiX, FiCheck,
+  FiSquare, FiCircle, FiArrowUpRight, FiEdit3, FiType,
+  FiDownload, FiX, FiCheck, FiCornerUpLeft, FiCornerUpRight,
 } from 'react-icons/fi';
 import { useLanguageStore, useWorkspaceStore } from '../../stores';
 import { useScreenshotStore } from '../../stores/screenshot.store';
 
-type Tool = 'rect' | 'ellipse' | 'arrow' | 'pen';
+type Tool = 'rect' | 'ellipse' | 'arrow' | 'pen' | 'text';
 
 type Shape =
-  | { kind: 'rect'; x0: number; y0: number; x1: number; y1: number }
-  | { kind: 'ellipse'; x0: number; y0: number; x1: number; y1: number }
-  | { kind: 'arrow'; x0: number; y0: number; x1: number; y1: number }
-  | { kind: 'pen'; pts: { x: number; y: number }[] };
+  | { kind: 'rect'; x0: number; y0: number; x1: number; y1: number; color: string }
+  | { kind: 'ellipse'; x0: number; y0: number; x1: number; y1: number; color: string }
+  | { kind: 'arrow'; x0: number; y0: number; x1: number; y1: number; color: string }
+  | { kind: 'pen'; pts: { x: number; y: number }[]; color: string }
+  | {
+      kind: 'text'; x: number; y: number; text: string; color: string;
+      fontSize: number; maxWidth: number;
+    };
+
+type BoxShape = Extract<Shape, { kind: 'rect' | 'ellipse' | 'arrow' }>;
+type DraftShape = BoxShape | Extract<Shape, { kind: 'pen' }>;
 
 interface Rect { x: number; y: number; w: number; h: number }
+interface Point { x: number; y: number }
+interface TextEdit {
+  x: number; y: number; text: string; color: string;
+  fontSize: number; maxWidth: number;
+}
+
+interface BarTheme {
+  dark: boolean;
+  background: string;
+  base: string;
+  border: string;
+  fg: string;
+  divider: string;
+}
 
 const MIN_SEL = 8;
 const LW = 3;
+const TEXT_SIZE = 16;
+const TEXT_LINE_HEIGHT = 1.32;
+const FONT_FAMILY = '-apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif';
+const COLOR_KEY = 'conecode.screenshotColor';
+
+// WeChat-style palette: readable on both bright and dark screenshots.
+const BASE_COLORS = [
+  '#ff3b30', '#ff9500', '#ffd60a', '#34c759',
+  '#0a84ff', '#bf5af2', '#ffffff', '#111114',
+];
+
+const DARK_BAR: BarTheme = {
+  dark: true,
+  background: 'rgba(24, 24, 28, 0.94)',
+  base: '#18181c',
+  border: 'rgba(255, 255, 255, 0.14)',
+  fg: 'rgba(255, 255, 255, 0.92)',
+  divider: 'rgba(255, 255, 255, 0.16)',
+};
 
 function contain(nw: number, nh: number, bw: number, bh: number): Rect {
   const s = Math.min(bw / nw, bh / nh);
@@ -26,9 +66,109 @@ function contain(nw: number, nh: number, bw: number, bh: number): Rect {
   return { x: (bw - w) / 2, y: (bh - h) / 2, w, h };
 }
 
-function drawShape(ctx: CanvasRenderingContext2D, s: Shape, color: string): void {
-  ctx.strokeStyle = color;
-  ctx.fillStyle = color;
+function parseColor(value: string): { r: number; g: number; b: number } | null {
+  const text = String(value || '').trim();
+  const short = /^#([0-9a-f])([0-9a-f])([0-9a-f])$/i.exec(text);
+  if (short) {
+    return {
+      r: parseInt(short[1] + short[1], 16),
+      g: parseInt(short[2] + short[2], 16),
+      b: parseInt(short[3] + short[3], 16),
+    };
+  }
+  const full = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(text);
+  if (full) {
+    return { r: parseInt(full[1], 16), g: parseInt(full[2], 16), b: parseInt(full[3], 16) };
+  }
+  const rgb = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/i.exec(text);
+  if (rgb) {
+    return { r: Number(rgb[1]), g: Number(rgb[2]), b: Number(rgb[3]) };
+  }
+  return null;
+}
+
+function luminance(r: number, g: number, b: number): number {
+  const channel = (v: number) => {
+    const c = v / 255;
+    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+}
+
+/** White or near-black ink for a filled surface (labels, active tool). */
+function readableInk(color: string): string {
+  const rgb = parseColor(color);
+  if (!rgb) return '#ffffff';
+  return luminance(rgb.r, rgb.g, rgb.b) > 0.55 ? '#111114' : '#ffffff';
+}
+
+function rgbToHsl(r: number, g: number, b: number): { h: number; s: number } {
+  const rn = r / 255;
+  const gn = g / 255;
+  const bn = b / 255;
+  const max = Math.max(rn, gn, bn);
+  const min = Math.min(rn, gn, bn);
+  const l = (max + min) / 2;
+  if (max === min) return { h: 0, s: 0 };
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let h = 0;
+  if (max === rn) h = ((gn - bn) / d + (gn < bn ? 6 : 0)) * 60;
+  else if (max === gn) h = ((bn - rn) / d + 2) * 60;
+  else h = ((rn - gn) / d + 4) * 60;
+  return { h, s };
+}
+
+/**
+ * Tint the floating bar with the average color behind it. The surface stays
+ * high-contrast (dark or light) while its hue follows the desktop — so the
+ * bar adapts to any wallpaper/app, not just black vs white.
+ */
+function barThemeFor(r: number, g: number, b: number, dark: boolean): BarTheme {
+  const { h, s } = rgbToHsl(r, g, b);
+  const hue = Math.round(h);
+  const tint = Math.round(Math.min(dark ? 42 : 30, s * 100 * (dark ? 0.55 : 0.4)));
+  const base = dark ? `hsl(${hue}, ${tint}%, 14%)` : `hsl(${hue}, ${tint}%, 96%)`;
+  const background = dark
+    ? `hsla(${hue}, ${tint}%, 14%, 0.96)`
+    : `hsla(${hue}, ${tint}%, 96%, 0.97)`;
+  return {
+    dark,
+    background,
+    base,
+    border: dark ? 'rgba(255, 255, 255, 0.16)' : 'rgba(0, 0, 0, 0.10)',
+    fg: dark ? 'rgba(255, 255, 255, 0.92)' : 'rgba(20, 18, 16, 0.90)',
+    divider: dark ? 'rgba(255, 255, 255, 0.16)' : 'rgba(0, 0, 0, 0.10)',
+  };
+}
+
+/** Greedy wrap that works for CJK (character) and Latin (word-ish) text. */
+function wrapText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
+  if (maxWidth <= 0) return text.split('\n');
+  const lines: string[] = [];
+  for (const paragraph of text.split('\n')) {
+    if (!paragraph) {
+      lines.push('');
+      continue;
+    }
+    let line = '';
+    for (const ch of Array.from(paragraph)) {
+      const next = line + ch;
+      if (line && ctx.measureText(next).width > maxWidth) {
+        lines.push(line);
+        line = ch;
+      } else {
+        line = next;
+      }
+    }
+    lines.push(line);
+  }
+  return lines;
+}
+
+function drawShape(ctx: CanvasRenderingContext2D, s: Shape): void {
+  ctx.strokeStyle = s.color;
+  ctx.fillStyle = s.color;
   ctx.lineWidth = LW;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
@@ -66,44 +206,75 @@ function drawShape(ctx: CanvasRenderingContext2D, s: Shape, color: string): void
       for (const p of s.pts.slice(1)) ctx.lineTo(p.x, p.y);
       ctx.stroke();
     }
+  } else if (s.kind === 'text') {
+    ctx.font = `500 ${s.fontSize}px ${FONT_FAMILY}`;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    const lines = wrapText(ctx, s.text, s.maxWidth);
+    const lineHeight = s.fontSize * TEXT_LINE_HEIGHT;
+    lines.forEach((line, i) => ctx.fillText(line, s.x, s.y + i * lineHeight));
   }
 }
 
-function ToolBtn({ title, active, danger, success, dark, onClick, children }: {
-  title: string; active?: boolean; danger?: boolean; success?: boolean; dark?: boolean;
-  onClick: () => void; children: React.ReactNode;
+function ToolBtn({ title, active, activeColor, danger, success, solid, disabled, theme, onClick, children }: {
+  title: string;
+  active?: boolean;
+  activeColor?: string;
+  danger?: boolean;
+  success?: boolean;
+  solid?: string;
+  disabled?: boolean;
+  theme: BarTheme;
+  onClick: () => void;
+  children: React.ReactNode;
 }) {
-  // The bar floats over arbitrary desktop content: fixed high-contrast pairs
-  // (dark or light, chosen by the pixels behind it) instead of theme grays.
-  const idle = dark
-    ? 'text-white/75 hover:bg-white/10 hover:text-white'
-    : 'text-black/65 hover:bg-black/10 hover:text-black';
-  const dangerCls = dark ? 'text-[#ff6b62] hover:bg-white/10' : 'text-red-600 hover:bg-black/5';
-  const successCls = dark ? 'text-[#4ade80] hover:bg-white/10' : 'text-green-600 hover:bg-black/5';
+  const idleColor = danger
+    ? (theme.dark ? '#ff6b62' : '#dc2626')
+    : success
+      ? (theme.dark ? '#4ade80' : '#16a34a')
+      : theme.fg;
+  const style: React.CSSProperties = {
+    color: solid ? '#ffffff' : active ? readableInk(activeColor || '#C96442') : idleColor,
+  };
+  if (active || solid) {
+    style.backgroundColor = solid || activeColor || '#C96442';
+    style.boxShadow = '0 2px 10px rgba(0, 0, 0, 0.24)';
+  }
   return (
-    <button onClick={onClick} title={title} aria-label={title}
-      className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all ${
-        active
-          ? 'bg-[var(--accent)] text-white shadow-md scale-105'
-          : danger ? dangerCls : success ? successCls : idle
-      }`}>
+    <button
+      onClick={onClick}
+      title={title}
+      aria-label={title}
+      aria-pressed={active}
+      disabled={disabled}
+      style={style}
+      className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all duration-100 ${
+        disabled
+          ? 'opacity-30 cursor-default'
+          : active || solid
+            ? 'cursor-pointer scale-[1.02]'
+            : `cursor-pointer ${theme.dark ? 'hover:bg-white/10' : 'hover:bg-black/10'}`
+      }`}
+    >
       {children}
     </button>
   );
 }
 
 /**
- * Full-screen screenshot: drag a region, annotate with 7 tools only
- * (rect / ellipse / arrow / pen / save / cancel / confirm), then
- * confirm to clipboard + chat, or save to disk.
+ * Full-screen screenshot: drag a region, annotate with WeChat-style tools
+ * (rectangle / ellipse / arrow / pen / text + colors + undo), then confirm to
+ * clipboard + chat, or save to disk.
  *
  * Props override the close/confirm targets: the fullscreen overlay window
  * reports back to main over IPC (main reshows + drops the shot into chat),
  * while the in-app instance (permission-error card) keeps store behavior.
  */
-export default function ScreenshotOverlay({ onClose, onConfirm }: {
+export default function ScreenshotOverlay({ onClose, onConfirm, onReady }: {
   onClose?: () => void;
   onConfirm?: (dataUrl: string) => void | Promise<void>;
+  /** Overlay window only: image is decoded and painted; main may show it. */
+  onReady?: () => void;
 } = {}) {
   const image = useScreenshotStore((s) => s.image);
   const captureError = useScreenshotStore((s) => s.error);
@@ -115,35 +286,82 @@ export default function ScreenshotOverlay({ onClose, onConfirm }: {
   const boxRef = useRef<HTMLDivElement>(null);
   const workRef = useRef<HTMLCanvasElement>(null);
   const barRef = useRef<HTMLDivElement>(null);
-  const [img, setImg] = useState<HTMLImageElement | null>(null);
-  const [box, setBox] = useState(() => ({
-    w: typeof window !== 'undefined' ? window.innerWidth : 0,
-    h: typeof window !== 'undefined' ? window.innerHeight : 0,
-  }));
-  const [phase, setPhase] = useState<'select' | 'annotate'>('select');
-  const [anchor, setAnchor] = useState<{ x: number; y: number } | null>(null);
-  const [sel, setSel] = useState<Rect | null>(null);
-  const [tool, setTool] = useState<Tool>('rect');
-  const [shapes, setShapes] = useState<Shape[]>([]);
-  const [draft, setDraft] = useState<Shape | null>(null);
-  const [savedTick, setSavedTick] = useState(false);
-  const [busy, setBusy] = useState(false);
-  // Floating bar theme follows the pixels behind it (recomputed below).
-  const [barDark, setBarDark] = useState(true);
+  const textAreaRef = useRef<HTMLTextAreaElement>(null);
+  const onReadyRef = useRef(onReady);
+  useEffect(() => { onReadyRef.current = onReady; }, [onReady]);
 
-  const color = useMemo(() => {
+  const accentColor = useMemo(() => {
     try {
       return getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#ef6c3d';
     } catch {
       return '#ef6c3d';
     }
   }, []);
+  const [color, setColor] = useState<string>(() => {
+    try {
+      const saved = localStorage.getItem(COLOR_KEY);
+      if (saved && parseColor(saved)) return saved;
+    } catch {}
+    return accentColor;
+  });
+  const palette = useMemo(
+    () => Array.from(new Set([accentColor, color, ...BASE_COLORS])),
+    [accentColor, color],
+  );
+
+  const [img, setImg] = useState<HTMLImageElement | null>(null);
+  const [box, setBox] = useState(() => ({
+    w: typeof window !== 'undefined' ? window.innerWidth : 0,
+    h: typeof window !== 'undefined' ? window.innerHeight : 0,
+  }));
+  const [phase, setPhase] = useState<'select' | 'annotate'>('select');
+  const [anchor, setAnchor] = useState<Point | null>(null);
+  const [sel, setSel] = useState<Rect | null>(null);
+  const [tool, setTool] = useState<Tool>('rect');
+  const [shapes, setShapes] = useState<Shape[]>([]);
+  const shapesRef = useRef<Shape[]>([]);
+  const [draft, setDraft] = useState<DraftShape | null>(null);
+  const [redoCount, setRedoCount] = useState(0);
+  const redoRef = useRef<Shape[]>([]);
+  const [textDraft, setTextDraft] = useState<TextEdit | null>(null);
+  const textDraftRef = useRef<TextEdit | null>(null);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [savedTick, setSavedTick] = useState(false);
+  const [busy, setBusy] = useState(false);
+  // The floating bar adapts its dark/light surface + tint to the pixels behind it.
+  const [barTheme, setBarTheme] = useState<BarTheme>(DARK_BAR);
 
   useEffect(() => {
     if (!image) return;
+    let alive = true;
     const el = new Image();
-    el.onload = () => setImg(el);
+    let raf1 = 0;
+    let raf2 = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let done = false;
+    const notifyReady = () => {
+      if (!alive || done) return;
+      done = true;
+      onReadyRef.current?.();
+    };
+    el.onload = () => {
+      if (!alive) return;
+      setImg(el);
+      // Let React commit (and ideally paint) the captured image while the
+      // window is still hidden, then let main reveal it in one frame.
+      raf1 = requestAnimationFrame(() => {
+        raf2 = requestAnimationFrame(notifyReady);
+      });
+      timer = setTimeout(notifyReady, 80);
+    };
     el.src = image.dataUrl;
+    return () => {
+      alive = false;
+      el.onload = null;
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+      if (timer) clearTimeout(timer);
+    };
   }, [image]);
 
   useEffect(() => {
@@ -156,16 +374,72 @@ export default function ScreenshotOverlay({ onClose, onConfirm }: {
     return () => window.removeEventListener('resize', measure);
   }, []);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        handleClose();
-      }
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [handleClose]);
+  const setShapesBoth = useCallback((next: Shape[]) => {
+    shapesRef.current = next;
+    setShapes(next);
+  }, []);
+
+  const updateTextDraft = useCallback((next: TextEdit | null) => {
+    textDraftRef.current = next;
+    setTextDraft(next);
+  }, []);
+
+  const cancelText = useCallback(() => {
+    updateTextDraft(null);
+  }, [updateTextDraft]);
+
+  const pushShape = useCallback((shape: Shape) => {
+    redoRef.current = [];
+    setRedoCount(0);
+    setShapesBoth([...shapesRef.current, shape]);
+  }, [setShapesBoth]);
+
+  const commitText = useCallback(() => {
+    const current = textDraftRef.current;
+    if (!current) return;
+    updateTextDraft(null);
+    const text = current.text.replace(/\s+$/, '');
+    if (!text.trim()) return;
+    pushShape({
+      kind: 'text',
+      x: current.x,
+      y: current.y,
+      text,
+      color: current.color,
+      fontSize: current.fontSize,
+      maxWidth: current.maxWidth,
+    });
+  }, [pushShape, updateTextDraft]);
+
+  const undo = useCallback(() => {
+    const list = shapesRef.current;
+    if (list.length === 0) return;
+    const last = list[list.length - 1];
+    redoRef.current = [...redoRef.current, last];
+    setRedoCount(redoRef.current.length);
+    setShapesBoth(list.slice(0, -1));
+  }, [setShapesBoth]);
+
+  const redo = useCallback(() => {
+    const stack = redoRef.current;
+    if (stack.length === 0) return;
+    const next = stack[stack.length - 1];
+    redoRef.current = stack.slice(0, -1);
+    setRedoCount(redoRef.current.length);
+    setShapesBoth([...shapesRef.current, next]);
+  }, [setShapesBoth]);
+
+  const selectColor = (value: string) => {
+    setColor(value);
+    setPaletteOpen(false);
+    try { localStorage.setItem(COLOR_KEY, value); } catch {}
+  };
+
+  const selectTool = (next: Tool) => {
+    commitText();
+    setPaletteOpen(false);
+    setTool(next);
+  };
 
   const isFullscreen = useMemo(() => {
     if (typeof window === 'undefined') return false;
@@ -189,11 +463,11 @@ export default function ScreenshotOverlay({ onClose, onConfirm }: {
   const scaleX = img && fit && fit.w > 0 ? img.naturalWidth / fit.w : 1;
   const scaleY = img && fit && fit.h > 0 ? img.naturalHeight / fit.h : 1;
 
-  // Floating bar follows the pixels behind it: sample the displayed image
-  // region under the bar (24px thumbnail), dim it like the overlay does
-  // (0.45) unless it overlaps the full-bright selection, and pick the bar
-  // theme with enough contrast. Runs when layout-affecting state settles.
-  useEffect(() => {
+  // Multi-color adaptation: sample the pixels behind the bar, pick a
+  // contrasting dark/light surface, then tint it with the backdrop's hue so
+  // the toolbar fits any wallpaper, app or screenshot color. Layout effect so
+  // the first painted frame already has the right theme (no dark flash).
+  useLayoutEffect(() => {
     if (phase !== 'annotate' || !img || !fit) return;
     const bar = barRef.current;
     const boxEl = boxRef.current;
@@ -208,37 +482,61 @@ export default function ScreenshotOverlay({ onClose, onConfirm }: {
       const ix2 = Math.min(bx + b.width, fit.x + fit.w);
       const iy2 = Math.min(by + b.height, fit.y + fit.h);
       if (ix2 <= ix || iy2 <= iy || b.width <= 0 || b.height <= 0) {
-        setBarDark(true);
+        setBarTheme(DARK_BAR);
         return;
       }
       const sx = img.naturalWidth / fit.w;
       const sy = img.naturalHeight / fit.h;
       const c = document.createElement('canvas');
-      const N = 24;
+      const N = 28;
       c.width = N;
       c.height = N;
       const ctx = c.getContext('2d', { willReadFrequently: true });
       if (!ctx) return;
       ctx.drawImage(img, (ix - fit.x) * sx, (iy - fit.y) * sy, (ix2 - ix) * sx, (iy2 - iy) * sy, 0, 0, N, N);
       const d = ctx.getImageData(0, 0, N, N).data;
-      let sum = 0;
+      let rs = 0;
+      let gs = 0;
+      let bs = 0;
+      let lum = 0;
+      let count = 0;
       for (let i = 0; i < d.length; i += 4) {
-        sum += (0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2]) / 255;
+        const r0 = d[i];
+        const g0 = d[i + 1];
+        const b0 = d[i + 2];
+        rs += r0;
+        gs += g0;
+        bs += b0;
+        lum += (0.2126 * r0 + 0.7152 * g0 + 0.0722 * b0) / 255;
+        count++;
       }
-      const avg = sum / (d.length / 4);
-      const overlapsBright =
-        !!sel &&
-        bx < sel.x + sel.w && bx + b.width > sel.x &&
-        by < sel.y + sel.h && by + b.height > sel.y;
-      setBarDark(avg * (overlapsBright ? 1 : 0.45) < 0.5);
+      if (!count) return;
+      const dark = lum / count < 0.5;
+      setBarTheme(barThemeFor(rs / count, gs / count, bs / count, dark));
     } catch {
-      setBarDark(true);
+      setBarTheme(DARK_BAR);
     }
     // fit is a fresh object every render — depend on its primitives instead.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, img, fit?.x, fit?.y, fit?.w, fit?.h, sel, box.w, box.h]);
+  }, [phase, img, fit?.x, fit?.y, fit?.w, fit?.h, box.w, box.h]);
 
-  const clampToFit = useCallback((x: number, y: number): { x: number; y: number } => {
+  const textOpen = textDraft !== null;
+  useEffect(() => {
+    if (!textOpen) return;
+    const el = textAreaRef.current;
+    if (!el) return;
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
+  }, [textOpen]);
+
+  useEffect(() => {
+    const el = textAreaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.max(20, el.scrollHeight)}px`;
+  }, [textDraft?.text]);
+
+  const clampToFit = useCallback((x: number, y: number): Point => {
     if (!fit) return { x, y };
     return {
       x: Math.min(fit.x + fit.w, Math.max(fit.x, x)),
@@ -246,7 +544,7 @@ export default function ScreenshotOverlay({ onClose, onConfirm }: {
     };
   }, [fit]);
 
-  const posInBox = (e: React.PointerEvent): { x: number; y: number } => {
+  const posInBox = (e: React.PointerEvent): Point => {
     const r = boxRef.current!.getBoundingClientRect();
     return clampToFit(e.clientX - r.left, e.clientY - r.top);
   };
@@ -273,8 +571,11 @@ export default function ScreenshotOverlay({ onClose, onConfirm }: {
     if (phase !== 'select') return;
     setAnchor(null);
     if (sel && sel.w >= MIN_SEL && sel.h >= MIN_SEL) {
-      setShapes([]);
+      setShapesBoth([]);
+      redoRef.current = [];
+      setRedoCount(0);
       setDraft(null);
+      cancelText();
       setTool('rect');
       setPhase('annotate');
     } else {
@@ -283,7 +584,7 @@ export default function ScreenshotOverlay({ onClose, onConfirm }: {
   };
 
   // ---- annotation ----------------------------------------------------------
-  const local = (e: React.PointerEvent): { x: number; y: number } => {
+  const local = (e: React.PointerEvent): Point => {
     const r = workRef.current!.getBoundingClientRect();
     return {
       x: Math.min(sel!.w, Math.max(0, e.clientX - r.left)),
@@ -291,20 +592,48 @@ export default function ScreenshotOverlay({ onClose, onConfirm }: {
     };
   };
 
+  const startText = useCallback((p: Point) => {
+    if (!sel) return;
+    updateTextDraft({
+      x: p.x,
+      y: p.y,
+      text: '',
+      color,
+      fontSize: TEXT_SIZE,
+      maxWidth: Math.max(24, sel.w - p.x - 2),
+    });
+  }, [sel, color, updateTextDraft]);
+
   const onWorkDown = (e: React.PointerEvent) => {
     if (!sel) return;
+    setPaletteOpen(false);
+    if (tool === 'text') {
+      // A click that ends the current text box must not immediately open a
+      // fresh one under the same pointer (the old textarea's blur would then
+      // commit the new, empty draft and remove it).
+      if (textDraftRef.current) {
+        commitText();
+        return;
+      }
+      startText(local(e));
+      return;
+    }
+    commitText();
     (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
     const p = local(e);
-    if (tool === 'pen') setDraft({ kind: 'pen', pts: [p] });
-    else setDraft({ kind: tool, x0: p.x, y0: p.y, x1: p.x, y1: p.y });
+    if (tool === 'pen') {
+      setDraft({ kind: 'pen', pts: [p], color });
+    } else {
+      setDraft({ kind: tool, x0: p.x, y0: p.y, x1: p.x, y1: p.y, color });
+    }
   };
   const onWorkMove = (e: React.PointerEvent) => {
     if (!draft || !sel) return;
     const p = local(e);
     if (draft.kind === 'pen') {
-      setDraft({ kind: 'pen', pts: [...draft.pts, p] });
+      setDraft({ kind: 'pen', pts: [...draft.pts, p], color: draft.color });
     } else {
-      setDraft({ kind: draft.kind, x0: draft.x0, y0: draft.y0, x1: p.x, y1: p.y });
+      setDraft({ ...draft, x1: p.x, y1: p.y });
     }
   };
   const onWorkUp = () => {
@@ -313,7 +642,7 @@ export default function ScreenshotOverlay({ onClose, onConfirm }: {
       (draft.kind === 'pen' && draft.pts.length === 0) ||
       ((draft.kind === 'rect' || draft.kind === 'ellipse' || draft.kind === 'arrow') &&
         Math.abs(draft.x1 - draft.x0) < 3 && Math.abs(draft.y1 - draft.y0) < 3);
-    if (!tiny) setShapes((s) => [...s, draft]);
+    if (!tiny) pushShape(draft);
     setDraft(null);
   };
 
@@ -332,9 +661,9 @@ export default function ScreenshotOverlay({ onClose, onConfirm }: {
       (sel.x - fit.x) * sx, (sel.y - fit.y) * sy, sel.w * sx, sel.h * sy,
       0, 0, sel.w, sel.h,
     );
-    for (const sh of shapes) drawShape(ctx, sh, color);
-    if (draft) drawShape(ctx, draft, color);
-  }, [img, sel, fit, shapes, draft, color]);
+    for (const shape of shapes) drawShape(ctx, shape);
+    if (draft) drawShape(ctx, draft);
+  }, [img, sel, fit, shapes, draft]);
 
   const exportPNG = useCallback((): string | null => {
     if (!img || !sel || !fit) return null;
@@ -351,12 +680,13 @@ export default function ScreenshotOverlay({ onClose, onConfirm }: {
       0, 0, c.width, c.height,
     );
     ctx.scale(c.width / sel.w, c.height / sel.h);
-    for (const sh of shapes) drawShape(ctx, sh, color);
+    for (const shape of shapesRef.current) drawShape(ctx, shape);
     return c.toDataURL('image/png');
-  }, [img, sel, fit, shapes, color]);
+  }, [img, sel, fit]);
 
   const handleSave = async () => {
     if (busy) return;
+    commitText();
     const url = exportPNG();
     if (!url) return;
     setBusy(true);
@@ -373,6 +703,7 @@ export default function ScreenshotOverlay({ onClose, onConfirm }: {
 
   const handleConfirm = async () => {
     if (busy) return;
+    commitText();
     const url = exportPNG();
     if (!url) return;
     // Overlay-window mode: hand the pixels to main (it reshows the app and
@@ -398,6 +729,40 @@ export default function ScreenshotOverlay({ onClose, onConfirm }: {
       close();
     }
   };
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.isComposing) return;
+      const target = e.target as HTMLElement | null;
+      const inText = target instanceof HTMLTextAreaElement;
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        if (textDraftRef.current) {
+          e.stopPropagation();
+          cancelText();
+          return;
+        }
+        if (paletteOpen) {
+          setPaletteOpen(false);
+          return;
+        }
+        handleClose();
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z' && !inText) {
+        e.preventDefault();
+        if (e.shiftKey) redo();
+        else undo();
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        void handleSave();
+      }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [handleClose, cancelText, paletteOpen, undo, redo, handleSave]);
 
   if (!image || !img || !fit) {
     // Capture failed (or still loading): say so instead of vanishing.
@@ -439,6 +804,7 @@ export default function ScreenshotOverlay({ onClose, onConfirm }: {
   }
 
   const selLabel = sel ? `${Math.round(sel.w * scaleX)} × ${Math.round(sel.h * scaleY)}` : '';
+  const labelInk = readableInk(color);
 
   return (
     <div ref={boxRef} className="fixed inset-0 z-[100] select-none overflow-hidden">
@@ -482,9 +848,10 @@ export default function ScreenshotOverlay({ onClose, onConfirm }: {
               </div>
               <div className="absolute inset-0 border-2 rounded-[2px]" style={{ borderColor: color }} />
               <div
-                className="absolute px-2 py-0.5 rounded-md text-[12px] font-semibold text-white whitespace-nowrap shadow-sm"
+                className="absolute px-2 py-0.5 rounded-md text-[12px] font-semibold whitespace-nowrap shadow-sm"
                 style={{
                   backgroundColor: color,
+                  color: labelInk,
                   left: 0,
                   top: sel.y > 28 ? -28 : 4,
                 }}
@@ -500,8 +867,11 @@ export default function ScreenshotOverlay({ onClose, onConfirm }: {
             {/* Working canvas = the cropped region, full brightness */}
             <canvas
               ref={workRef}
-              className="absolute cursor-crosshair"
-              style={{ left: sel.x, top: sel.y, width: sel.w, height: sel.h }}
+              className="absolute"
+              style={{
+                left: sel.x, top: sel.y, width: sel.w, height: sel.h,
+                cursor: tool === 'text' ? 'text' : 'crosshair',
+              }}
               onPointerDown={onWorkDown}
               onPointerMove={onWorkMove}
               onPointerUp={onWorkUp}
@@ -511,42 +881,138 @@ export default function ScreenshotOverlay({ onClose, onConfirm }: {
               style={{ left: sel.x, top: sel.y, width: sel.w, height: sel.h, borderColor: color }}
             />
             <div
-              className="absolute px-2 py-0.5 rounded-md text-[12px] font-semibold text-white whitespace-nowrap shadow-sm"
+              className="absolute pointer-events-none px-2 py-0.5 rounded-md text-[12px] font-semibold whitespace-nowrap shadow-sm"
               style={{
                 left: sel.x,
                 top: sel.y > 28 ? sel.y - 28 : Math.min(sel.y + sel.h + 6, box.h - 28),
                 backgroundColor: color,
+                color: labelInk,
               }}
             >
               {selLabel}
             </div>
-            {/* 7 tools only: rect ellipse arrow pen | save | cancel confirm */}
+            {textDraft && (
+              <textarea
+                ref={textAreaRef}
+                value={textDraft.text}
+                onChange={(e) => {
+                  const current = textDraftRef.current;
+                  if (current) updateTextDraft({ ...current, text: e.target.value });
+                }}
+                onBlur={commitText}
+                onKeyDown={(e) => {
+                  if (e.nativeEvent.isComposing) return;
+                  if (e.key === 'Escape') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    cancelText();
+                  } else if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                    e.preventDefault();
+                    commitText();
+                  }
+                }}
+                rows={1}
+                spellCheck={false}
+                placeholder={t('screenshotTextPlaceholder')}
+                className="absolute z-20 resize-none overflow-hidden bg-transparent p-0 m-0 border-0 shadow-none select-text placeholder:text-[#9a9a9a]"
+                style={{
+                  left: sel.x + textDraft.x,
+                  top: sel.y + textDraft.y,
+                  width: textDraft.maxWidth,
+                  color: textDraft.color,
+                  caretColor: textDraft.color,
+                  fontSize: textDraft.fontSize,
+                  lineHeight: TEXT_LINE_HEIGHT,
+                  fontFamily: FONT_FAMILY,
+                  fontWeight: 500,
+                  wordBreak: 'break-all',
+                  outline: '1px dashed rgba(127, 127, 127, 0.7)',
+                  outlineOffset: 2,
+                }}
+              />
+            )}
+            {/* WeChat-style floating bar: tools | undo/redo/color | save | cancel/confirm */}
             <div
               ref={barRef}
-              className={`absolute bottom-10 left-1/2 -translate-x-1/2 flex items-center gap-1 px-2 py-1.5 rounded-2xl backdrop-blur-xl border shadow-2xl anim-menu ${
-                barDark ? 'bg-[#1e1e20]/95 border-white/10' : 'bg-white/92 border-black/10'
-              }`}>
-              <ToolBtn title={t('toolRect')} dark={barDark} active={tool === 'rect'} onClick={() => setTool('rect')}>
+              role="toolbar"
+              className="absolute bottom-10 left-1/2 -translate-x-1/2 flex items-center gap-0.5 px-2 py-1.5 rounded-2xl backdrop-blur-xl border shadow-2xl anim-menu z-30"
+              style={{ backgroundColor: barTheme.background, borderColor: barTheme.border }}
+            >
+              <ToolBtn title={t('toolRect')} theme={barTheme} active={tool === 'rect'} activeColor={color} onClick={() => selectTool('rect')}>
                 <FiSquare size={15} />
               </ToolBtn>
-              <ToolBtn title={t('toolEllipse')} dark={barDark} active={tool === 'ellipse'} onClick={() => setTool('ellipse')}>
+              <ToolBtn title={t('toolEllipse')} theme={barTheme} active={tool === 'ellipse'} activeColor={color} onClick={() => selectTool('ellipse')}>
                 <FiCircle size={15} />
               </ToolBtn>
-              <ToolBtn title={t('toolArrow')} dark={barDark} active={tool === 'arrow'} onClick={() => setTool('arrow')}>
+              <ToolBtn title={t('toolArrow')} theme={barTheme} active={tool === 'arrow'} activeColor={color} onClick={() => selectTool('arrow')}>
                 <FiArrowUpRight size={16} />
               </ToolBtn>
-              <ToolBtn title={t('toolPen')} dark={barDark} active={tool === 'pen'} onClick={() => setTool('pen')}>
+              <ToolBtn title={t('toolPen')} theme={barTheme} active={tool === 'pen'} activeColor={color} onClick={() => selectTool('pen')}>
                 <FiEdit3 size={15} />
               </ToolBtn>
-              <div className={`w-px h-6 mx-0.5 ${barDark ? 'bg-white/15' : 'bg-black/10'}`} />
-              <ToolBtn title={savedTick ? t('screenshotSaved') : t('screenshotSave')} dark={barDark} onClick={handleSave}>
-                {savedTick ? <FiCheck size={15} className={barDark ? 'text-[#4ade80]' : 'text-green-600'} /> : <FiDownload size={15} />}
+              <ToolBtn title={t('toolText')} theme={barTheme} active={tool === 'text'} activeColor={color} onClick={() => selectTool('text')}>
+                <FiType size={16} />
               </ToolBtn>
-              <div className={`w-px h-6 mx-0.5 ${barDark ? 'bg-white/15' : 'bg-black/10'}`} />
-              <ToolBtn title={t('screenshotCancel')} dark={barDark} danger onClick={handleClose}>
+              <div className="w-px h-6 mx-0.5" style={{ backgroundColor: barTheme.divider }} />
+              <ToolBtn title={t('screenshotUndo')} theme={barTheme} disabled={shapes.length === 0} onClick={() => { commitText(); undo(); }}>
+                <FiCornerUpLeft size={15} />
+              </ToolBtn>
+              <ToolBtn title={t('screenshotRedo')} theme={barTheme} disabled={redoCount === 0} onClick={() => { commitText(); redo(); }}>
+                <FiCornerUpRight size={15} />
+              </ToolBtn>
+              <div className="relative">
+                <button
+                  title={t('screenshotColor')}
+                  aria-label={t('screenshotColor')}
+                  onClick={() => { commitText(); setPaletteOpen((open) => !open); }}
+                  className={`w-9 h-9 rounded-xl flex items-center justify-center cursor-pointer transition-colors ${
+                    barTheme.dark ? 'hover:bg-white/10' : 'hover:bg-black/10'
+                  }`}
+                >
+                  <span
+                    className="w-4 h-4 rounded-full"
+                    style={{
+                      backgroundColor: color,
+                      boxShadow: color.toLowerCase() === '#ffffff'
+                        ? '0 0 0 1px rgba(0,0,0,0.28)'
+                        : '0 0 0 1.5px rgba(255,255,255,0.55)',
+                    }}
+                  />
+                </button>
+                {paletteOpen && (
+                  <div
+                    className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 p-2 rounded-2xl border shadow-2xl backdrop-blur-xl"
+                    style={{ backgroundColor: barTheme.base, borderColor: barTheme.border }}
+                  >
+                    <div className="grid grid-cols-5 gap-1.5">
+                      {palette.map((item) => (
+                        <button
+                          key={item}
+                          title={item}
+                          aria-label={item}
+                          onClick={() => selectColor(item)}
+                          className="w-6 h-6 rounded-full cursor-pointer transition-transform hover:scale-110"
+                          style={{
+                            backgroundColor: item,
+                            boxShadow: item === color
+                              ? `0 0 0 2px ${barTheme.base}, 0 0 0 4px ${item}`
+                              : '0 0 0 1px rgba(127,127,127,0.35)',
+                          }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div className="w-px h-6 mx-0.5" style={{ backgroundColor: barTheme.divider }} />
+              <ToolBtn title={savedTick ? t('screenshotSaved') : t('screenshotSave')} theme={barTheme} onClick={() => void handleSave()}>
+                {savedTick ? <FiCheck size={15} className={barTheme.dark ? 'text-[#4ade80]' : 'text-green-600'} /> : <FiDownload size={15} />}
+              </ToolBtn>
+              <div className="w-px h-6 mx-0.5" style={{ backgroundColor: barTheme.divider }} />
+              <ToolBtn title={t('screenshotCancel')} theme={barTheme} danger onClick={() => { cancelText(); handleClose(); }}>
                 <FiX size={16} />
               </ToolBtn>
-              <ToolBtn title={t('screenshotConfirm')} dark={barDark} success onClick={handleConfirm}>
+              <ToolBtn title={t('screenshotConfirm')} theme={barTheme} solid="#22c55e" onClick={() => void handleConfirm()}>
                 <FiCheck size={16} />
               </ToolBtn>
             </div>

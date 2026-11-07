@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   applyRecordedUsage, applyServerResetTo, hydrateRecords,
   recordFreeUsage, syncFreeUsage, hydrateFreeUsage,
+  FREE_WEEKLY_TOKEN_LIMIT,
 } from './freeUsage';
 import type { FreeWeeklyUsageRecord } from './freeUsage';
 
@@ -56,6 +57,23 @@ describe('applyServerResetTo — the server-driven reset marker', () => {
     expect(applyServerResetTo(null, '2026-10-26T00:00:00Z', now).changed).toBe(true);
     expect(applyServerResetTo(sameWeek, null, now).changed).toBe(false);
     expect(applyServerResetTo(sameWeek, 'not a date', now).changed).toBe(false);
+  });
+
+  it.each([null, 'not a date', '2026-10-26T00:00:00Z', '2026-01-01T00:00:00Z'])('rolls an exhausted counter into the new week with marker %s', (marker) => {
+    const resetAt = '2026-10-26T00:00:00.000Z';
+    const lastWeek = {
+      ...applyRecordedUsage(null, FREE_WEEKLY_TOKEN_LIMIT, new Date(2026, 9, 28, 12).getTime()),
+      resetAt,
+    };
+    const nextWeek = new Date(2026, 10, 4, 12).getTime();
+    const { record, changed } = applyServerResetTo(lastWeek, marker, nextWeek);
+    expect(changed).toBe(true);
+    expect(record.used).toBe(0);
+    expect(record.weekStart).toBe(applyRecordedUsage(null, 0, nextWeek).weekStart);
+    expect(record.resetAt).toBe(resetAt);
+
+    const afterUsage = applyRecordedUsage(record, 100, nextWeek);
+    expect(applyServerResetTo(afterUsage, marker, nextWeek)).toEqual({ record: afterUsage, changed: false });
   });
 });
 

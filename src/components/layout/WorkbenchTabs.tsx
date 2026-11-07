@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { FiFile, FiMonitor, FiX, FiPlus } from 'react-icons/fi';
 import { useUIStore, useWorkspaceStore, useLanguageStore, usePreviewStore, useAiHighlightsStore } from '../../stores';
 
@@ -47,8 +48,15 @@ export default function WorkbenchTabs({ active, subtitle, actions }: Props) {
   useEffect(() => {
     if (!menu) return;
     const close = () => setMenu(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
     window.addEventListener('click', close);
-    return () => window.removeEventListener('click', close);
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('resize', close);
+    return () => {
+      window.removeEventListener('click', close);
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', close);
+    };
   }, [menu]);
 
   // Swap the open file without leaving the conversation — the sidebar tree only
@@ -64,12 +72,12 @@ export default function WorkbenchTabs({ active, subtitle, actions }: Props) {
 
   return (
     <div
-      className="flex items-center bg-[var(--glass-surface)]/80 backdrop-blur-xl border-b border-[var(--glass-border)] shrink-0 min-w-0"
+      className="flex items-center bg-[color-mix(in_srgb,var(--glass-surface)_80%,transparent)] backdrop-blur-xl border-b border-[var(--glass-border)] shrink-0 min-w-0"
       style={{ WebkitAppRegion: 'drag', ...(!sidebarOpen && IS_MAC ? { paddingLeft: 74 } : null) } as any}
     >
       <div ref={stripRef} className="flex items-center shrink min-w-0 overflow-x-auto" role="tablist" style={{ WebkitAppRegion: 'no-drag' } as any}>
         {openTabs.map((path) => {
-          const name = path.split('/').pop() || path;
+          const name = path.split(/[/\\]/).pop() || path;
           const isActive = active === 'code' && selectedFile === path;
           const dirty = !!dirtyTabs[path];
           const ai = (aiLines[path]?.length ?? 0) > 0;
@@ -102,14 +110,11 @@ export default function WorkbenchTabs({ active, subtitle, actions }: Props) {
             closeLabel={t('close')}
             icon={<FiMonitor size={13} className={active === 'preview' ? 'text-[var(--accent)]' : 'text-[var(--text-muted)]'} />}
             badge={
-              <span
-                className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                  previewState === 'running' ? 'bg-[var(--success)]'
-                  : previewState === 'starting' ? 'bg-[var(--warning)] animate-pulse'
-                  : previewState === 'error' ? 'bg-[var(--error)]'
-                  : 'bg-[var(--text-muted)]'
-                }`}
-              />
+              previewState === 'starting' || previewState === 'error' ? (
+                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                  previewState === 'starting' ? 'bg-[var(--warning)] animate-pulse' : 'bg-[var(--error)]'
+                }`} />
+              ) : undefined
             }
             onSelect={() => setWorkbenchTab('preview')}
             onClose={closePreview}
@@ -120,13 +125,13 @@ export default function WorkbenchTabs({ active, subtitle, actions }: Props) {
           onClick={openFile}
           title={t('openFile')}
           aria-label={t('openFile')}
-          className="w-7 h-7 ml-1 rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--glass-card)] transition-colors shrink-0"
+          className="w-7 h-7 ml-1 rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--glass-card)] transition-colors shrink-0 cursor-pointer"
         >
           <FiPlus size={14} />
         </button>
       </div>
 
-      <span className="flex-1 truncate px-3 text-[11px] text-[var(--text-muted)] min-w-[40px]">{subtitle}</span>
+      <span className="flex-1 truncate px-3 text-[11px] text-[var(--text-muted)] min-w-0">{subtitle}</span>
 
       {actions && (
         <div className="flex items-center gap-1 px-2 shrink-0" style={{ WebkitAppRegion: 'no-drag' } as any}>
@@ -134,15 +139,15 @@ export default function WorkbenchTabs({ active, subtitle, actions }: Props) {
         </div>
       )}
 
-      {menu && (
+      {menu && createPortal(
         <div onClick={(e) => e.stopPropagation()}
-          className="fixed z-50 w-[190px] rounded-2xl border border-[var(--glass-border)] bg-[var(--glass-surface)]/95 backdrop-blur-2xl shadow-2xl py-1.5 overflow-hidden ring-1 ring-black/5 dark:ring-white/10 anim-fade-in"
-          style={{ left: Math.min(menu.x, window.innerWidth - 200), top: Math.min(menu.y, window.innerHeight - 160) }}>
+          className="fixed z-50 w-[190px] rounded-2xl border border-[var(--glass-border)] bg-[color-mix(in_srgb,var(--glass-surface)_95%,transparent)] backdrop-blur-2xl shadow-2xl py-1.5 overflow-hidden ring-1 ring-black/5 dark:ring-white/10 anim-fade-in"
+          style={{ left: Math.max(8, Math.min(menu.x, window.innerWidth - 200)), top: Math.max(8, Math.min(menu.y, window.innerHeight - 160)), WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
           <MenuBtn label={t('close')} onClick={() => { void closeTab(menu.path); setMenu(null); }} />
           <MenuBtn label={t('closeOthers')} onClick={() => { void closeOtherTabs(menu.path); setMenu(null); }} />
           <MenuBtn label={t('closeAll')} onClick={() => { closeAllTabs(); setMenu(null); }} />
           <MenuBtn label={t('copyPath')} onClick={() => { void navigator.clipboard.writeText(menu.path).catch(() => {}); setMenu(null); }} />
-        </div>
+        </div>, document.body
       )}
     </div>
   );
@@ -151,7 +156,7 @@ export default function WorkbenchTabs({ active, subtitle, actions }: Props) {
 function MenuBtn({ label, onClick }: { label: string; onClick: () => void }) {
   return (
     <button onClick={onClick}
-      className="w-full text-left px-3.5 py-1.5 text-[12px] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--glass-card)] transition-colors">
+      className="w-full text-left px-3.5 py-1.5 text-[12px] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--glass-card)] transition-colors cursor-pointer">
       {label}
     </button>
   );
@@ -178,11 +183,11 @@ function Tab({ active, icon, label, badge, title, closeLabel, onSelect, onClose,
       onContextMenu={onMenu}
       className={`group relative flex items-center gap-2 pl-3.5 pr-2.5 py-1.5 border-r border-[var(--glass-border)] text-[12.5px] transition-all shrink-0 cursor-pointer ${
         active
-          ? 'bg-[var(--glass-card)]/90 text-[var(--text-primary)] font-medium shadow-2xs after:absolute after:bottom-0 after:left-0 after:right-0 after:h-[2px] after:bg-[var(--accent)]'
-          : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--glass-card)]/40'
+          ? 'bg-[color-mix(in_srgb,var(--glass-card)_90%,transparent)] text-[var(--text-primary)] font-medium shadow-2xs after:absolute after:bottom-0 after:left-0 after:right-0 after:h-[2px] after:bg-[var(--accent)]'
+          : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[color-mix(in_srgb,var(--glass-card)_40%,transparent)]'
       }`}
     >
-      <button role="tab" aria-selected={active} onClick={onSelect} className="flex items-center gap-2 min-w-0 outline-none">
+      <button role="tab" aria-selected={active} onClick={onSelect} className="flex items-center gap-2 min-w-0 outline-none cursor-pointer">
         {icon}
         <span className="truncate max-w-[160px]">{label}</span>
         {badge}
@@ -194,7 +199,7 @@ function Tab({ active, icon, label, badge, title, closeLabel, onSelect, onClose,
           aria-label={closeLabel}
           // Always offered on the tab you are looking at — closing the open file
           // should not depend on discovering a hover state.
-          className={`p-0.5 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--glass-card)] focus:opacity-100 transition-opacity ${
+          className={`p-0.5 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--glass-card)] focus:opacity-100 transition-opacity cursor-pointer ${
             active ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
           }`}
         >

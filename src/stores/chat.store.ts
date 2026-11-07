@@ -8,6 +8,7 @@ import { useSettingsStore, effectiveApprovalMode } from './settings.store';
 import { useLanguageStore } from './language.store';
 import { useTodosStore, type TodoStatus } from './todos.store';
 import { useMemoryStore } from './memory.store';
+import { useMemoryV2Store, isMemoryV2Active, memoryV2ContextBlock } from './memoryV2.store';
 import { useFreeStore } from './free.store';
 import type { MemoryEntry } from '../core/memory/memory';
 import { formatMemoryFiles } from '../core/memory/memoryFiles';
@@ -21,11 +22,14 @@ import { useComputerStore } from './computer.store';
 import { useGoalStore, type ConversationGoal } from './goal.store';
 import { resolveEffort } from '../core/model/resolveEffort';
 import { effectiveContextWindow } from '../core/model/context';
-import { buildCostSnapshot } from '../core/pricing/cost';
+import { buildCostSnapshot, messageCost, formatUSD } from '../core/pricing/cost';
+import { rsiHistoryContext } from '../core/agents/rsiHistory';
+import { RsiExecutionMonitor, type RsiToolEvidence } from '../core/agents/rsiRuntime';
 import { useInstallGateStore, isHolding } from './installGate.store';
 import { usePluginStore } from './plugin.store';
 import { useProviderStore } from './provider.store';
 import { useImageGenStore } from './imageGen.store';
+import { pickReusableConversation } from '../core/workspace/conversations';
 import { usePromptStore } from './prompt.store';
 import { resolveImageGenCredentials, requestImageGeneration } from '../core/image/imageGen';
 import { ASPECT_RATIOS, resolveArtStyleId } from '../core/image/prompts';
@@ -85,6 +89,68 @@ let conversationLoadRequest = 0;
 /** Re-entrancy guard: two rapid "enter RSI" flips must not spawn two sessions. */
 let rsiAutoCreateInFlight = false;
 
+/**
+ * Coalesce rapid "new chat" clicks per mode/folder. Without this, two calls
+ * that both await the message-count IPC can each see the same blank state and
+ * create a duplicate conversation.
+ */
+const newConversationInFlight = new Map<string, Promise<string>>();
+function coalesceNewConversation(key: string, run: () => Promise<string>): Promise<string> {
+  const pending = newConversationInFlight.get(key);
+  if (pending) return pending;
+  const started = run().finally(() => {
+    if (newConversationInFlight.get(key) === started) newConversationInFlight.delete(key);
+  });
+  newConversationInFlight.set(key, started);
+  return started;
+}
+
+/**
+ * Persisted message counts per conversation. Null when the main process does
+ * not expose the bridge (older builds, tests): callers then only trust the
+ * active conversation's in-memory transcript instead of reopening unknown ones.
+ */
+async function readMessageCounts(): Promise<Record<string, number> | null> {
+  try {
+    const api = (window as any).electronAPI?.message;
+    const counts = await api?.counts?.();
+    return counts && typeof counts === 'object' ? counts as Record<string, number> : null;
+  } catch {
+    return null;
+  }
+}
+
+export interface SendMessageOptions {
+  rsiExecution?: boolean;
+  /** Internal continuation: preserve evidence and spend across user interaction. */
+  rsiResume?: boolean;
+}
+const rsiSpendBaselines = new Map<string, number>();
+interface RsiExecutionSession {
+  runId: string | null;
+  rootPath: string | null;
+  monitor: RsiExecutionMonitor;
+  spendUsd: number;
+  startSpendUsd?: number;
+}
+const rsiExecutionSessions = new Map<string, RsiExecutionSession>();
+
+function resumableRsiSession(convId: string): RsiExecutionSession | undefined {
+  const session = rsiExecutionSessions.get(convId);
+  const runs = useChatStore.getState().conversations.find((c) => c.id === convId)?.rsi?.runs ?? [];
+  const latest = runs[runs.length - 1];
+  return session && latest?.id === session.runId && latest.status !== 'completed' ? session : undefined;
+}
+
+function resumeRsiExecution(convId: string): boolean {
+  const state = useChatStore.getState();
+  const runs = state.conversations.find((c) => c.id === convId)?.rsi?.runs ?? [];
+  const run = runs[runs.length - 1];
+  const users = state.messages.filter((m) => m.conversationId === convId && m.role === 'user' && !m.isToolResult && !m.isLocalNotice);
+  const user = users[users.length - 1];
+  return !!run && run.status !== 'completed' && (!user || run.updatedAt >= user.createdAt);
+}
+
 /** Live streaming state of one conversation's agent run. */
 export interface StreamRunState {
   content: string;
@@ -96,7 +162,7 @@ export interface StreamRunState {
    * Auto-retry in progress after a transient failure (network drop, model
    * stream death). Rendered as a live reconnecting pill so a retry reads as
    * activity, not a silent freeze. Null while streaming normally. `max` is
-   * null for open-ended retries (RSI runs until the user stops).
+   * reserved for older open-ended retry records; new runs are bounded.
    */
   retry: { attempt: number; max: number | null } | null;
 }
@@ -243,11 +309,16 @@ function endRun(convId: string) {
 // ---------------------------------------------------------------------------
 
 /** Patch the RSI state of one conversation on disk and in memory. */
+const rsiStateWrites = new Map<string, Promise<void>>();
+
 async function applyRsiState(
   convId: string,
   mutate: (rsi: RsiConversationState) => RsiConversationState,
 ): Promise<void> {
-  try {
+  // Each mutation reads the state left by its predecessor. Direction autosave
+  // must not overwrite a run added while its persistence request was pending.
+  const previous = rsiStateWrites.get(convId) ?? Promise.resolve();
+  const pending = previous.catch(() => {}).then(async () => {
     const conv = useChatStore.getState().conversations.find((c) => c.id === convId);
     if (!conv || !isRsiConversation(conv) || !conv.rsi) return;
     const rsi = mutate(conv.rsi);
@@ -255,8 +326,12 @@ async function applyRsiState(
     useChatStore.setState((s) => ({
       conversations: s.conversations.map((c) => (c.id === convId ? { ...c, rsi } : c)),
     }));
-  } catch {
-    // Best-effort: the transcript itself always carries the run evidence.
+  });
+  rsiStateWrites.set(convId, pending);
+  try {
+    await pending;
+  } finally {
+    if (rsiStateWrites.get(convId) === pending) rsiStateWrites.delete(convId);
   }
 }
 
@@ -285,7 +360,8 @@ export async function finalizeRsiRun(
 ): Promise<void> {
   let iteration = 0;
   try {
-    const root = useWorkspaceStore.getState().rootPath;
+    const conversation = useChatStore.getState().conversations.find((c) => c.id === convId);
+    const root = conversation?.rootPath;
     if (root) {
       const raw = await window.electronAPI.fs.readFile(
         `${rsiWorkspaceDir(root, convId)}/LOOP_STATE.json`,
@@ -293,21 +369,24 @@ export async function finalizeRsiRun(
       iteration = readRsiProgress(raw)?.iteration ?? 0;
     }
   } catch { /* no evidence yet — iteration stays 0 */ }
-  await applyRsiState(convId, (rsi) => ({
-    ...rsi,
-    status: outcome === 'failed' ? 'failed' : outcome === 'completed' ? 'completed' : 'idle',
-    runs: rsi.runs.map((run) => (
-      run.id === runId
-        ? {
-            ...run,
-            status: outcome,
-            iteration,
-            result: outcome === 'failed' ? (cause || 'failed') : null,
-            updatedAt: Date.now(),
-          }
-        : run
-    )),
-  }));
+  await applyRsiState(convId, (rsi) => {
+    if (!rsi.runs.some((run) => run.id === runId)) return rsi;
+    // Read the serialized, current state after the progress-file await: another
+    // execution or direction save may have landed while the old run unwound.
+    const runs = rsi.runs.map((run) => run.id === runId
+      ? {
+          ...run,
+          status: outcome,
+          iteration,
+          result: outcome === 'failed' ? (cause || 'failed') : outcome === 'stopped' ? cause || null : null,
+          updatedAt: Date.now(),
+        }
+      : run);
+    // Only the newest execution owns the conversation's status. A superseded
+    // run can finish after its replacement has started or already completed.
+    const latest = runs[runs.length - 1];
+    return { ...rsi, runs, status: latest.status === 'stopped' ? 'idle' : latest.status };
+  });
 }
 
 /**
@@ -388,7 +467,7 @@ function screenshotParts(images: string[]): any[] {
 
 interface FileAction {
   action: 'read_file' | 'list_dir' | 'ask_user' | 'edit_file' | 'create_file' | 'create_dir' | 'delete' | 'rename' | 'copy' | 'exec' | 'open_app' | 'open_path' | 'system_info' | 'perf_snapshot' | 'perf_monitor' | 'perf_inspect' | 'cost_snapshot' | 'run_background' | 'background_status' | 'search' | 'glob' | 'update_todos' | 'git_status' | 'git_diff' | 'web_fetch' | 'web_search' | 'download' | 'mcp_call' | 'spawn_agent' | 'use_skill' | 'computer' | 'github_push'
-    | 'page_navigate' | 'page_snapshot' | 'page_click' | 'page_fill' | 'page_eval' | 'page_console' | 'remember'
+    | 'page_navigate' | 'page_snapshot' | 'page_click' | 'page_fill' | 'page_eval' | 'page_console' | 'remember' | 'memory_search'
     | 'generate_image'
     | 'github_release';
   /** The `computer` tool's own request, nested so its `action` field survives. */
@@ -402,6 +481,10 @@ interface FileAction {
   /** remember: which drawer of memory this belongs in, and the evidence for it. */
   kind?: string;
   why?: string;
+  /** memory_search: optional filters. */
+  layers?: string[];
+  scope?: string;
+  limit?: number;
   /** github_push: optional commit message for the project push. */
   message?: string;
   /** generate_image arguments */
@@ -450,7 +533,7 @@ interface FileAction {
 // either deferred for user confirmation or terminal.
 const INFO_ACTIONS = new Set([
   'read_file', 'list_dir', 'create_file', 'create_dir', 'open_app', 'open_path', 'system_info', 'perf_snapshot', 'perf_monitor', 'perf_inspect', 'cost_snapshot', 'background_status', 'search', 'glob', 'update_todos', 'git_status', 'git_diff', 'web_fetch', 'web_search', 'download', 'mcp_call', 'spawn_agent', 'use_skill', 'github_push', 'github_release',
-  'page_navigate', 'page_snapshot', 'page_click', 'page_fill', 'page_eval', 'page_console', 'remember', 'generate_image',
+  'page_navigate', 'page_snapshot', 'page_click', 'page_fill', 'page_eval', 'page_console', 'remember', 'memory_search', 'generate_image',
 ]);
 
 // These tools are independent reads: when a model emits only this class in one
@@ -458,7 +541,7 @@ const INFO_ACTIONS = new Set([
 // because a later call may depend on an earlier mutation.
 const INDEPENDENT_READ_ACTIONS = new Set([
   'read_file', 'list_dir', 'search', 'glob', 'system_info', 'perf_snapshot', 'perf_monitor', 'perf_inspect', 'cost_snapshot', 'background_status', 'git_status', 'git_diff',
-  'web_fetch', 'web_search', 'use_skill',
+  'web_fetch', 'web_search', 'use_skill', 'memory_search',
 ]);
 
 // Every action name the executor understands (superset of INFO_ACTIONS). Used to
@@ -466,7 +549,7 @@ const INDEPENDENT_READ_ACTIONS = new Set([
 const KNOWN_ACTIONS = new Set([
   'read_file', 'list_dir', 'ask_user', 'edit_file', 'create_file', 'create_dir',
   'delete', 'rename', 'copy', 'exec', 'open_app', 'open_path', 'system_info', 'perf_snapshot', 'perf_monitor', 'perf_inspect', 'cost_snapshot', 'run_background', 'background_status', 'search', 'glob', 'update_todos', 'git_status', 'git_diff', 'web_fetch', 'web_search', 'download', 'mcp_call', 'spawn_agent', 'use_skill', 'computer', 'github_push',
-  'page_navigate', 'page_snapshot', 'page_click', 'page_fill', 'page_eval', 'page_console', 'remember', 'generate_image', 'github_release',
+  'page_navigate', 'page_snapshot', 'page_click', 'page_fill', 'page_eval', 'page_console', 'remember', 'memory_search', 'generate_image', 'github_release',
 ]);
 
 // On-demand performance check backing the perf_snapshot tool (and the
@@ -531,6 +614,7 @@ async function runCostSnapshot(convId?: string): Promise<string> {
     (providerId, modelId) => modelTable.get(providerId || '')?.find((m) => m.id === modelId)?.pricing,
     settings.maxEpisodeCost ?? 0.5,
     !!settings.costLock,
+    { startSpendUsd: target ? rsiSpendBaselines.get(target) : undefined },
   );
 }
 
@@ -716,8 +800,8 @@ const MAX_STREAM_RETRIES = 2;
  * it dropped. A dead endpoint gets (1+MAX_STREAM_RETRIES)×(1+MAX_TURN_RETRIES)
  * = 9 chances per iteration before the turn falls back to the manual one-click
  * continue. The budget restores after any iteration that reaches a response.
- * RSI mode ignores this bound entirely: it extends forever — the user's stop
- * button is the only budget.
+ * RSI uses the same bound: permanent errors and dead endpoints cannot make
+ * progress by consuming unlimited attempts.
  */
 const MAX_TURN_RETRIES = 2;
 
@@ -739,13 +823,19 @@ const flushingQueues = new Set<string>();
  * flushQueue (background view) share it; live-array writes only touch the
  * conversation on screen.
  */
-async function deliverToConversation(convId: string, content: string, providerId: string, modelId: string): Promise<void> {
+async function deliverToConversation(convId: string, content: string, providerId: string, modelId: string, options: SendMessageOptions = {}): Promise<void> {
   const set = useChatStore.setState;
   if (providerId === FREE_PROVIDER_ID && useFreeStore.getState().weeklyUsed >= FREE_WEEKLY_TOKEN_LIMIT) {
     set({ error: 'ConeCode Free has reached its weekly usage limit of 2B tokens.' });
     return;
   }
   const get = useChatStore.getState;
+  const transcript = get().activeConversationId === convId ? get().messages : [];
+  const last = transcript[transcript.length - 1];
+  if (options.rsiExecution === undefined && last?.isQuestion && resumeRsiExecution(convId)
+    && !/^\s*(?:stop|pause|cancel|停止|暂停|取消|不用继续|先别做)[.!。！\s]*$/i.test(content)) {
+    options = { ...options, rsiExecution: true, rsiResume: true };
+  }
   // Attached images belong to THIS turn: they ride the user message (rendered
   // in the transcript, replayed to the model) and leave the composer on send —
   // they must not linger in the box or re-upload on every later message.
@@ -800,13 +890,14 @@ async function deliverToConversation(convId: string, content: string, providerId
 
   const canContinue = await autoCompactIfNeeded(convId, providerId, modelId);
   if (!canContinue) return;
-  await runAgentLoop(convId, providerId, modelId);
+  await runAgentLoop(convId, providerId, modelId, options);
 }
 
 function isTransientStreamError(error: any): boolean {
   if (error?.name === 'AbortError') return false;
   const text = String(error?.message || error || '').toLowerCase();
-  return /incomplete model stream|missing completion marker|timed out|timeout|stream idle|network|fetch failed|econnreset|econnrefused|enotfound|socket|502|503|504|429|temporarily unavailable|overloaded/.test(text);
+  if (/(?:^|\D)(?:400|401|403|404|413|422)(?:\D|$)|invalid api key|invalid_api_key|authentication failed|insufficient_quota/.test(text)) return false;
+  return /incomplete model stream|missing completion marker|timed out|timeout|stream idle|network|fetch failed|econnreset|econnrefused|enotfound|socket|500|502|503|504|429|temporarily unavailable|overloaded/.test(text);
 }
 
 /**
@@ -816,15 +907,16 @@ function isTransientStreamError(error: any): boolean {
  */
 export const retryTiming = { baseMs: 500 };
 
-/** Upper bound on one retry's backoff — endless retries (RSI) must not wait minutes. */
+/** Upper bound on one retry's backoff. */
 const MAX_RETRY_BACKOFF_MS = 5000;
 
 /** Resolve after `ms`, early when the run is aborted — no dangling timers. */
 function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
     if (signal.aborted) return resolve();
-    const timer = setTimeout(resolve, ms);
-    signal.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+    const finish = () => { clearTimeout(timer); signal.removeEventListener('abort', finish); resolve(); };
+    const timer = setTimeout(finish, ms);
+    signal.addEventListener('abort', finish, { once: true });
   });
 }
 
@@ -869,7 +961,7 @@ async function executeIndependentRead(
     case 'perf_inspect':
       return runPerfSnapshot();
     case 'cost_snapshot':
-      return runCostSnapshot();
+      return runCostSnapshot(scope);
     case 'git_status': {
       const out = await window.electronAPI.git.status(action.cwd || action.path || ws.rootPath || undefined);
       return out?.trim() ? out : 'Not a git repository, or working tree is clean.';
@@ -1769,10 +1861,16 @@ ${parallelRule}
       });
     }
 
-    // Long-term memory: what previous sessions learned about this user. Placed
-    // high so tone/process guidance shapes the whole reply, not just its ending.
-    const memoryBlock = useMemoryStore.getState().promptBlock(ws.rootPath);
-    if (memoryBlock) systemMessages.push({ role: 'system', content: memoryBlock });
+    // Long-term memory, placed high so tone/process guidance shapes the whole
+    // reply. Memory 2.0 injects ONLY the memories retrieved for this task; the
+    // legacy flat block is the compatibility fallback when v2 is not active.
+    if (isMemoryV2Active()) {
+      const v2Block = memoryV2ContextBlock();
+      if (v2Block) systemMessages.push({ role: 'system', content: v2Block });
+    } else {
+      const memoryBlock = useMemoryStore.getState().promptBlock(ws.rootPath);
+      if (memoryBlock) systemMessages.push({ role: 'system', content: memoryBlock });
+    }
   }
 
   // Installed skills: ids + descriptions only. Bodies are pulled on demand by
@@ -2142,7 +2240,7 @@ async function autoCompactIfNeeded(convId: string, providerId: string, modelId: 
  * stop the loop and wait for the user; their outcome is later fed back via
  * feedToolResults.
  */
-async function runAgentLoop(convId: string, providerId: string, modelId: string) {
+async function runAgentLoop(convId: string, providerId: string, modelId: string, options: SendMessageOptions = {}) {
   const set = useChatStore.setState;
   const get = useChatStore.getState;
 
@@ -2199,11 +2297,41 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
   const rsiDirection = rsiState
     ? rsiDirectionPrompt(convId, taskWorkspace.rootPath, rsiState.directionConfig)
     : null;
-  // A real execution on an RSI conversation registers as that conversation's
-  // run record. Best-effort persistence: never blocks the loop.
-  const rsiRunId = await beginRsiRun(convId).catch(() => null);
-  let rsiOutcome: 'completed' | 'stopped' | 'failed' = 'completed';
+  // Discussing the direction is not an execution. The start control opts in;
+  // typed requests opt in lazily if they actually ask the executor to do work.
+  let rsiExecuting = agentMode === 'rsi' && !planMode && !reviewMode && options.rsiExecution === true;
+  const previousSession = options.rsiResume ? resumableRsiSession(convId) : undefined;
+  const rsiSession: RsiExecutionSession = previousSession?.rootPath === taskWorkspace.rootPath ? previousSession : {
+    runId: null, rootPath: taskWorkspace.rootPath, monitor: new RsiExecutionMonitor(), spendUsd: 0,
+  };
+  let rsiRunId = rsiExecuting ? await beginRsiRun(convId).catch(() => null) : null;
+  const rsiMonitor = rsiSession.monitor;
+  if (rsiExecuting) {
+    rsiSession.runId = rsiRunId;
+    rsiExecutionSessions.set(convId, rsiSession);
+  }
+  let rsiRecovery = '';
+  let rsiHistory = '';
+  const refreshRsiHistory = async () => {
+    if (!rsiState || !taskWorkspace.rootPath) return;
+    const directory = rsiWorkspaceDir(taskWorkspace.rootPath, convId);
+    const read = (name: string) => window.electronAPI.fs.readFile(`${directory}/${name}`).catch(() => null);
+    const [goalVector, loopState, reflections] = await Promise.all([read('GOAL_VECTOR.md'), read('LOOP_STATE.json'), read('REFLECTIONS.md')]);
+    rsiHistory = rsiHistoryContext({ goalVector, loopState, reflections });
+    rsiMonitor.setGoal(goalVector);
+  };
+  let rsiOutcome: 'completed' | 'stopped' | 'failed' = 'stopped';
   let rsiCause: string | null = null;
+  let waitingForUser = false;
+  const rsiCostStopReason = (): string | null => {
+    const settings = useSettingsStore.getState();
+    const cap = settings.maxEpisodeCost * 2;
+    const rsiSpend = rsiSession.spendUsd;
+    return rsiExecuting && settings.costLock && Number.isFinite(cap) && cap >= 0
+      && rsiSpend > cap + Number.EPSILON * Math.max(1, cap, rsiSpend) * 4
+      ? `RSI cost lock: known spend ${formatUSD(rsiSpend)} exceeded ${formatUSD(cap)} in this execution. Unknown-priced turns are not included.`
+      : null;
+  };
 
   const { useCodeChangesStore } = await import('./codeChanges.store');
   const { useModelStore } = await import('./model.store');
@@ -2240,13 +2368,31 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string)
   const MAX_CONTINUATIONS = 3;
   /** True only when the loop exits on MAX_ITERATIONS while the model kept asking for tools. */
   let capCandidate = false;
-/** Whole-iteration auto-retries used after the per-stream budget ran out. */
-let turnRetries = 0;
+  /** Whole-iteration auto-retries used after the per-stream budget ran out. */
+  let turnRetries = 0;
   try {
+    if (agentMode === 'rsi') {
+      const initialMessages = get().activeConversationId === convId ? get().messages : await window.electronAPI.message.list(convId);
+      const models = useModelStore.getState().models;
+      if (rsiSession.startSpendUsd === undefined) rsiSession.startSpendUsd = initialMessages.reduce((sum, message) => {
+        const pricing = models.get(message.providerId ?? '')?.find((m) => m.id === message.modelId)?.pricing;
+        return sum + (message.role === 'assistant' ? messageCost(message.promptTokens, message.completionTokens, pricing) ?? 0 : 0);
+      }, 0);
+      if (ownsRun()) rsiSpendBaselines.set(convId, rsiSession.startSpendUsd);
+    }
+    await refreshRsiHistory();
     for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
       if (abortController.signal.aborted || !ownsRun()) break;
       capCandidate = false;
- 
+      if (rsiExecuting) {
+        rsiCause = rsiCostStopReason();
+        if (rsiCause) break;
+        if (rsiMonitor.repeatedFailure()) {
+          rsiCause = 'RSI stopped after the same tool failed three times without a successful code change. Inspect the failure and revise the approach before continuing.';
+          break;
+        }
+      }
+
       const selectedModel = resolveModel();
       const modelName = selectedModel?.name || modelId;
       const sessionKey = `${providerId}:${modelId}`;
@@ -2283,6 +2429,8 @@ let turnRetries = 0;
         // constraints) and its isolated archive path — after the mode overlay
         // so it is never diluted by other protocol text.
         ...(rsiDirection ? [{ role: 'system' as const, content: rsiDirection }] : []),
+        ...(rsiHistory ? [{ role: 'system' as const, content: rsiHistory }] : []),
+        ...(rsiExecuting ? [{ role: 'system' as const, content: `${rsiMonitor.context()}\n${rsiRecovery}` }] : []),
         // Local UI notices (/help, /diff output, etc.) are shown in the
         // transcript but must not be replayed to the model as context; tool
         // calls and their results are re-linked into a protocol-valid exchange.
@@ -2310,12 +2458,10 @@ let turnRetries = 0;
       // user is watching — clearing it would flicker the transcript backwards.
       if (ownsRun() && !continuing) patchRun(convId, { content: '', toolName: null });
 
-      // Reasoning models spend output tokens "thinking" before they answer, so a
-      // low cap truncates them mid-thought and yields an empty reply. Give them a
-      // higher floor (the provider clamps to the model's real limit).
-      const maxTokens = selectedModel?.supportsReasoning
-        ? Math.max(selectedModel.maxOutputTokens || 0, 32000)
-        : (selectedModel?.maxOutputTokens || 8192);
+      // An advertised or user-configured output limit is a ceiling, including
+      // for reasoning models. Use a larger default only when no limit is known.
+      const maxTokens = selectedModel?.maxOutputTokens
+        || (selectedModel?.supportsReasoning ? 32000 : 8192);
 
       // Streamed text is accumulated into this run's buffer by the single global
       // chunk listener registered at the bottom of this file (chunks carry the
@@ -2335,7 +2481,11 @@ let turnRetries = 0;
         const request = requestMessages();
         try {
           // A previous attempt's retry pill must not linger into live streaming.
-          patchRun(convId, { retry: null });
+          // A retry attempt also starts with a clean thinking slate: the
+          // interrupted attempt's reasoning must never flash back into view.
+          patchRun(convId, streamAttempt > 0
+            ? { retry: null, reasoningContent: '', status: null }
+            : { retry: null });
           streamResult = await window.electronAPI.chat.stream({
             providerId,
             modelId,
@@ -2367,36 +2517,24 @@ let turnRetries = 0;
           }
           // A user abort is never retried — the stop button wins everywhere.
           if (e?.name === 'AbortError') throw e;
-          // RSI runs unattended: retry EVERY failure until the user stops —
-          // the budget below keeps extending and even permanent-looking errors
-          // (expired key fixed mid-run, restarted endpoint) get picked up.
-          if (agentMode !== 'rsi' && !isTransientStreamError(e)) throw e;
+          if (!isTransientStreamError(e)) throw e;
           if (streamAttempt >= maxStreamAttempts) {
-            // Per-stream budget exhausted. Extend it for another full round
-            // instead of leaving the loop — the stitch machinery below keeps
-            // the watched partial alive and the retry pill shows the growing
-            // attempt counter. Bounded for normal mode; endless for RSI.
-            if (agentMode !== 'rsi') {
-              if (turnRetries >= MAX_TURN_RETRIES) throw e;
-              turnRetries++;
-            }
+            if (turnRetries >= MAX_TURN_RETRIES) throw e;
+            turnRetries++;
             maxStreamAttempts += MAX_STREAM_RETRIES + 1;
-            console.warn('[runAgentLoop] stream budget exhausted — extending for a turn-level retry', {
-              turnAttempt: agentMode === 'rsi' ? 'endless' : turnRetries,
-              nextBudget: maxStreamAttempts + 1,
-              message: e?.message,
-            });
           }
           console.warn('[runAgentLoop] transient stream failure, retrying', {
-            attempt: streamAttempt + 1,
-            endless: agentMode === 'rsi' || undefined,
-            message: e?.message,
+            attempt: streamAttempt + 1, message: e?.message,
           });
-          // Surface the auto-retry on the live run: a reconnecting pill instead
-          // of a silent freeze the user reads as "卡死了". Open-ended retries
-          // (RSI) show a bare counter — there is no max to reach.
+          // Apply the tokens that arrived before the failure, then drop the
+          // interrupted attempt's partial thinking: reconnecting is not
+          // "thinking", so the live view shows the retry pill and any stitched
+          // reply text, never a stale thought process.
+          flushRunDeltas();
           patchRun(convId, {
-            retry: { attempt: streamAttempt + 1, max: agentMode === 'rsi' ? null : maxStreamAttempts + 1 },
+            retry: { attempt: streamAttempt + 1, max: maxStreamAttempts + 1 },
+            reasoningContent: '',
+            status: null,
           });
           // A dropped stream that already delivered pure-text partial keeps it:
           // resume from the partial instead of restarting the turn and losing
@@ -2404,9 +2542,7 @@ let turnRetries = 0;
           // arrived (or a tool call was already announced) is the buffer
           // cleared for a clean restart. Stitching consumes attempts from the
           // same retry budget, so this can never spin forever.
-          flushRunDeltas();
           const partialText = ownsRun() ? runBuffer().content : '';
-          const partialReasoning = ownsRun() ? runBuffer().reasoningContent : '';
           const partialHasTools = ownsRun() && !!runBuffer().toolName;
           const stitchedAlready = stitch.active && stitch.forIteration === iteration
             && (!!stitch.rawContent || !!stitch.rawReasoning);
@@ -2418,7 +2554,9 @@ let turnRetries = 0;
               active: true,
               forIteration: iteration,
               rawContent: partialText,
-              rawReasoning: partialReasoning,
+              // The interrupted attempt's thinking is discarded, not stitched:
+              // only streamed reply text resumes across a retry.
+              rawReasoning: '',
               promptTokens: 0,
               completionTokens: 0,
               tokens: 0,
@@ -2432,8 +2570,7 @@ let turnRetries = 0;
             patchRun(convId, { content: '', reasoningContent: '', toolName: null });
           }
           // Abort-aware, capped backoff: a stop during the wait ends the run
-          // instead of firing one more doomed request; endless retries (RSI)
-          // plateau at MAX_RETRY_BACKOFF_MS instead of waiting minutes.
+          // instead of firing one more doomed request.
           await abortableSleep(
             Math.min(retryTiming.baseMs * (streamAttempt + 1), MAX_RETRY_BACKOFF_MS),
             abortController.signal,
@@ -2455,6 +2592,8 @@ let turnRetries = 0;
       // On a stitched turn the buffer still holds earlier segments, so only the
       // return value is read for the current one.
       const authoritative = extractStreamResult(streamResult);
+      if (agentMode === 'rsi') rsiSession.spendUsd += messageCost(authoritative.promptTokens, authoritative.completionTokens, selectedModel?.pricing) ?? 0;
+      rsiCause = rsiCostStopReason();
       // Structured calls the provider returned. A turn that only calls tools has
       // no prose at all, so several checks below key off this being non-empty.
       // Only the FINAL segment's calls run — earlier segments were continued
@@ -2519,7 +2658,7 @@ let turnRetries = 0;
       // one-click continue takes over. Tool-carrying turns never enter here:
       // their calls execute below and the loop continues on the results.
       const hasWork = nativeCalls.length > 0 || extractToolActionEntries(finalContent).length > 0;
-      if (finishReason() === 'length' && !hasWork && stitch.segments <= MAX_CONTINUATIONS
+      if (finishReason() === 'length' && !hasWork && stitch.segments <= MAX_CONTINUATIONS && !rsiCause
         && !abortController.signal.aborted && ownsRun()) {
         stitch.active = true;
         stitch.forIteration = iteration + 1;
@@ -2623,6 +2762,7 @@ let turnRetries = 0;
         : extractToolActionEntries(finalContent);
 
       if (pending.length === 0) {
+        if (rsiCause) break;
         // No action this turn. If the model was cut off at the token limit
         // (finish_reason 'length'), it likely meant to keep going (e.g. emit a
         // tool call) — surface that rather than ending as if it were done.
@@ -2656,10 +2796,26 @@ let turnRetries = 0;
             });
           }
         }
-        // If there's content but no actions, the model finished its response
-        // normally (e.g. explaining something). The message was already saved above.
+        if (rsiExecuting && finishReason() !== 'length') {
+          const decision = rsiMonitor.finish();
+          if (decision === 'recover') {
+            rsiRecovery = 'The last reply ended the tool loop before completion was evidenced. Continue the authorized RSI task with one concrete investigation, implementation, or verification action. If blocked, use ask_user; if no useful safe candidate exists, explain why and stop. Do not repeat the same summary or invent measurements.';
+            continue;
+          }
+          if (decision === 'complete') rsiOutcome = 'completed';
+          else rsiCause = 'RSI stopped: no passing verification was observed after the latest edit despite two recovery attempts. The result is not marked complete.';
+        } else if (rsiExecuting) rsiCause = 'RSI output was truncated before completion.';
         break;
       }
+
+      if (agentMode === 'rsi' && !rsiExecuting && !planMode && !reviewMode && pending.some((entry) => entry.action && ['exec', 'edit_file', 'create_file', 'delete', 'rename', 'copy'].includes(entry.action.action))) {
+        rsiExecuting = true;
+        rsiRunId = await beginRsiRun(convId).catch(() => null);
+        rsiSession.runId = rsiRunId;
+        rsiExecutionSessions.set(convId, rsiSession);
+      }
+      const costBlocked = rsiCostStopReason();
+      if (costBlocked) rsiCause = costBlocked;
 
       const codeChangesStore = useCodeChangesStore.getState();
       // One record per executed call. Native turns turn each into its own `tool`
@@ -2673,7 +2829,7 @@ let turnRetries = 0;
 
       // A batch made entirely of independent reads is genuinely parallel. Keep
       // result ordering stable so each native call id still receives its result.
-      const parallelReadBatch = pending.length > 1 && pending.every(
+      const parallelReadBatch = !costBlocked && pending.length > 1 && pending.every(
         (entry) => !!entry.action && INDEPENDENT_READ_ACTIONS.has(entry.action.action),
       );
       if (parallelReadBatch) {
@@ -2687,17 +2843,19 @@ let turnRetries = 0;
           }
         }));
         outcomes.push(...results);
+        if (rsiExecuting) results.forEach((outcome, i) => rsiMonitor.observe({ ...pending[i].action!, succeeded: !/^Error:/i.test(outcome.result), detail: outcome.result }));
         shouldContinue = true;
       }
 
       if (!parallelReadBatch) for (const entry of pending) {
         const call = entry.call;
-        if (askedUser || awaitingUserAction) {
+        const stopped = abortController.signal.aborted || !ownsRun();
+        if (stopped || costBlocked || askedUser || awaitingUserAction) {
           const label = entry.action ? toolActionLabel(entry.action) : (entry.label || call?.name || 'tool');
           outcomes.push({
             call,
             label,
-            result: askedUser
+            result: stopped ? 'Skipped because this execution was stopped.' : costBlocked ? `Skipped: ${costBlocked}` : askedUser
               ? 'Skipped because an earlier tool call asked the user a question.'
               : 'Skipped because an earlier action is awaiting user approval.',
           });
@@ -2768,9 +2926,15 @@ let turnRetries = 0;
           },
           pendingNote: string,
         ): Promise<string> => {
+          if (abortController.signal.aborted || !ownsRun()) return 'Skipped because this execution was stopped.';
           const id = await codeChangesStore.addChange({ ...changeCtx, ...data });
+          if (abortController.signal.aborted || !ownsRun()) {
+            codeChangesStore.discardMessageApprovals(convId, new Set([assistantMsg.id]));
+            return 'Skipped because this execution was stopped.';
+          }
           if (shouldAutoApprove(effectiveApprovalMode(), data.kind)) {
             const outcome = await codeChangesStore.autoApply(id);
+            if (rsiExecuting) rsiMonitor.observe({ ...action, path: action.path || action.oldPath || action.srcPath, succeeded: outcome.success, detail: outcome.result });
             shouldContinue = true;
             return outcome.result || pendingNote;
           }
@@ -2822,6 +2986,10 @@ let turnRetries = 0;
             // rolled back; a created file used to be invisible to revert.
             const existed = await window.electronAPI.fs.exists(action.path!);
             const previous = existed ? (await window.electronAPI.fs.readFile(action.path!)) ?? '' : '';
+            if (abortController.signal.aborted || !ownsRun()) {
+              result = 'Skipped because this execution was stopped.';
+              break;
+            }
             const changeId = await codeChangesStore.addChange({
               ...changeCtx,
               // Overwriting an existing file is an edit — keeping its previous
@@ -2834,6 +3002,11 @@ let turnRetries = 0;
                 ? `AI overwrote ${action.path!.split('/').pop()}`
                 : `AI created ${action.path!.split('/').pop()}`,
             });
+            if (abortController.signal.aborted || !ownsRun()) {
+              codeChangesStore.discardMessageApprovals(convId, new Set([assistantMsg.id]));
+              result = 'Skipped because this execution was stopped.';
+              break;
+            }
             const outcome = await codeChangesStore.autoApply(changeId);
             const ok = outcome.success;
             result = ok ? `File created: ${action.path}` : `Error: Could not create file ${action.path}`;
@@ -3109,11 +3282,68 @@ let turnRetries = 0;
             const kind = (action.kind ?? 'workflow') as MemoryEntry['kind'];
             // Project memory needs a project to belong to; without a folder open
             // it is recorded globally rather than pinned to nothing.
-            const scopePath = kind === 'project' ? ws.rootPath : null;
+            const scopePath = kind === 'project' || kind === 'codeIssue' ? ws.rootPath : null;
+            if (isMemoryV2Active()) {
+              const type = kind === 'workflow' ? 'constraint'
+                : kind === 'project' ? 'project_fact'
+                  : kind === 'codeIssue' ? 'known_bug'
+                    : 'user_fact';
+              const layer = scopePath ? 'project' : 'global';
+              const saved = await useMemoryV2Store.getState().saveMemory({
+                content: action.text!,
+                type,
+                layer,
+                projectId: scopePath ? undefined : null,
+                tags: ['remembered', kind],
+                importance: kind === 'workflow' || kind === 'project' ? 0.8 : 0.65,
+                status: 'confirmed',
+                origin: 'user',
+                why: action.why,
+              });
+              result = saved
+                ? `Remembered (${kind}${scopePath ? ', this project' : ''}): ${action.text}`
+                : 'Memory 2.0 could not save that memory.';
+              break;
+            }
             await useMemoryStore.getState().add(action.text!, kind, scopePath, action.why);
             result = `Remembered (${kind}${scopePath ? ', this project' : ''}): ${action.text}`;
             break;
           }
+          case 'memory_search': {
+            const query = action.query?.trim() || '';
+            if (!query) { result = 'Error: memory_search needs a query.'; break; }
+            const scope = action.scope === 'project' || action.scope === 'global' ? action.scope : 'all';
+            const limit = Math.max(1, Math.min(20, action.limit ?? 8));
+            if (isMemoryV2Active()) {
+              const hits = await useMemoryV2Store.getState().search({
+                text: query,
+                scope,
+                layers: Array.isArray(action.layers) ? action.layers as any : undefined,
+                includeRelated: true,
+                relatedDepth: 1,
+                limit,
+              });
+              if (!hits.length) {
+                result = 'No matching long-term memory. Continue without it; do not invent a memory.';
+                break;
+              }
+              result = hits.map((hit) => {
+                const r = hit.record;
+                const why = r.why ? `\n  reason: ${r.why}` : '';
+                const source = r.sourceSessionId ? ` · session ${r.sourceSessionId.slice(0, 8)}` : '';
+                return `- [${r.layer}/${r.type} | ${r.status} | v${r.version} | ${hit.source}${source}] ${r.title}\n  ${r.content}${why}`;
+              }).join('\n\n');
+              break;
+            }
+            const legacy = useMemoryStore.getState().relevant(ws.rootPath)
+              .filter((entry) => entry.text.toLowerCase().includes(query.toLowerCase()) || query.toLowerCase().includes(entry.text.toLowerCase()))
+              .slice(0, limit);
+            result = legacy.length
+              ? legacy.map((entry) => `- [${entry.kind}] ${entry.text}${entry.why ? `\n  reason: ${entry.why}` : ''}`).join('\n\n')
+              : 'No matching long-term memory.';
+            break;
+          }
+
           case 'page_navigate': {
             const { usePreviewStore } = await import('./preview.store');
             const { useUIStore } = await import('./ui.store');
@@ -3277,9 +3507,11 @@ let turnRetries = 0;
           // provider with an unanswered tool_call_id. Return the failure to the
           // model so it can correct the next attempt.
           result = toolFailure(label, error);
+          if (rsiExecuting && !INFO_ACTIONS.has(action.action)) rsiMonitor.observe({ ...action, succeeded: false, detail: result });
           shouldContinue = true;
         }
 
+        if (rsiExecuting && INFO_ACTIONS.has(action.action)) rsiMonitor.observe({ ...action, succeeded: !/^Error:/i.test(result), detail: result });
         if (result) outcomes.push({ call, label, result, image });
         if (INFO_ACTIONS.has(action.action)) shouldContinue = true;
       }
@@ -3336,7 +3568,12 @@ let turnRetries = 0;
         set((s) => s.activeConversationId === convId ? { messages: [...s.messages, questionToShow!] } : {});
       }
 
-      if (askedUser || !shouldContinue) break;
+      if (askedUser || awaitingUserAction || !shouldContinue) {
+        waitingForUser = !costBlocked;
+        if (rsiExecuting && !costBlocked) rsiCause = askedUser ? 'Waiting for the user to answer.' : awaitingUserAction ? 'Waiting for action approval.' : 'Waiting for a delegated action; execution is not complete.';
+        break;
+      }
+      if (rsiExecuting) await refreshRsiHistory();
       // Reaching this line on the FINAL iteration means the loop exits on the
       // iteration cap with the model still asking for tools — historically the
       // run then just disappeared ("无征兆中断"). capCandidate survives the loop
@@ -3346,6 +3583,7 @@ let turnRetries = 0;
     // Exit after the cap: leave a persistable trace on the transcript, not just
     // isStreaming=false. The notice is local-only (never sent to the model).
     if (capCandidate && ownsRun()) {
+      if (rsiExecuting) rsiCause = 'RSI reached the tool-turn limit; execution is not complete.';
       const capNotice: Message = {
         id: uuidv4(),
         conversationId: convId,
@@ -3360,7 +3598,12 @@ let turnRetries = 0;
     }
     // A stop between turns exits the loop without an exception — the RSI run
     // record must say "stopped", not "completed".
-    if (abortController.signal.aborted) rsiOutcome = 'stopped';
+    if (abortController.signal.aborted) { rsiOutcome = 'stopped'; rsiCause = 'Stopped by the user.'; }
+    if (rsiExecuting && !waitingForUser && !capCandidate && !abortController.signal.aborted && rsiOutcome !== 'completed' && ownsRun()) {
+      const notice: Message = { id: uuidv4(), conversationId: convId, role: 'assistant', content: rsiCause || 'RSI stopped before verified completion.', createdAt: Date.now(), isLocalNotice: true };
+      await persistMessage(notice);
+      set((s) => s.activeConversationId === convId ? { messages: [...s.messages, notice], continuableConvId: convId } : {});
+    }
   } catch (e: any) {
     rsiOutcome = abortController.signal.aborted ? 'stopped' : 'failed';
     rsiCause = e?.message || String(e);
@@ -3441,6 +3684,8 @@ let turnRetries = 0;
   } finally {
     if (runControllers.get(convId) === abortController) {
       endRun(convId);
+      rsiSpendBaselines.delete(convId);
+      if (rsiOutcome === 'completed' && rsiExecutionSessions.get(convId) === rsiSession) rsiExecutionSessions.delete(convId);
     }
     // Close the RSI run record with the real outcome — completed, user-stopped
     // or failed with its cause. A superseded run still finalizes its own id.
@@ -3494,7 +3739,19 @@ interface ChatStore {
   togglePlanMode: () => void;
   setReviewMode: (on: boolean) => void;
   fetchConversations: () => Promise<void>;
+  /**
+   * Force-create a fresh conversation. Internal flows that need their own
+   * dedicated transcript (Autopilot, project brief, background runs) use this;
+   * UI "new chat" actions should call newConversation instead.
+   */
   createConversation: (providerId: string, modelId: string, folderPath?: string | null) => Promise<string>;
+  /**
+   * Open a new chat, but reuse an existing blank conversation for the same
+   * mode and folder instead of stacking another empty "New Chat" row.
+   */
+  newConversation: (providerId: string, modelId: string, folderPath?: string | null) => Promise<string>;
+  /** Same reuse rule for RSI conversations (blank RSI state only). */
+  newRsiConversation: (providerId: string, modelId: string) => Promise<string>;
   setActiveConversation: (id: string) => Promise<void>;
   setConversationFolder: (rootPath: string | null) => Promise<void>;
   /**
@@ -3517,7 +3774,7 @@ interface ChatStore {
   createRsiConversation: (providerId: string, modelId: string) => Promise<string>;
   /** Update ONLY the given conversation's RSI direction config. */
   updateRsiDirection: (convId: string, patch: Partial<RsiDirectionConfig>) => Promise<void>;
-  sendMessage: (content: string, providerId: string, modelId: string) => Promise<void>;
+  sendMessage: (content: string, providerId: string, modelId: string, options?: SendMessageOptions) => Promise<void>;
   /**
    * Typed while a run is live (opencode-style queue): stash for this
    * conversation instead of blocking. Returns 'sent' when the run already
@@ -3540,7 +3797,7 @@ interface ChatStore {
    * the loop picks the result up next turn). Never starts two runs at once.
    */
   resumeAfterBackground: (parentConversationId: string, label: string, summary: string) => Promise<void>;
-  feedToolResults: (conversationId: string, providerId: string, modelId: string, content: string) => Promise<void>;
+  feedToolResults: (conversationId: string, providerId: string, modelId: string, content: string, evidence?: RsiToolEvidence[]) => Promise<void>;
   resendMessage: (messageId: string) => Promise<void>;
   editMessage: (messageId: string, content: string, providerId: string, modelId: string) => Promise<void>;
   /** Stop the agent run of one conversation (defaults to the active one). */
@@ -3604,9 +3861,23 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       if (rsiAutoCreateInFlight) return;
       rsiAutoCreateInFlight = true;
       void (async () => {
+        // The user may have switched away while this hand-off was pending.
+        if (get().agentMode !== 'rsi') return;
+        // Reopen the newest existing RSI session instead of spawning another
+        // blank one every time the mode is entered. Only when the user has no
+        // RSI conversation at all do we create the first one.
+        const existing = get().conversations
+          .filter(isRsiConversation)
+          .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+        if (existing) {
+          if (get().agentMode !== 'rsi') return;
+          await get().setActiveConversation(existing.id);
+          return;
+        }
         const { useModelStore } = await import('./model.store');
+        if (get().agentMode !== 'rsi') return;
         const sel = useModelStore.getState().getSelectedModel();
-        await get().createRsiConversation(sel?.providerId || '', sel?.id || '');
+        await get().newRsiConversation(sel?.providerId || '', sel?.id || '');
       })().finally(() => { rsiAutoCreateInFlight = false; });
       return;
     }
@@ -3627,7 +3898,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           const { useModelStore } = await import('./model.store');
           const sel = useModelStore.getState().getSelectedModel();
           const ws = useWorkspaceStore.getState();
-          await get().createConversation(
+          await get().newConversation(
             sel?.providerId || '',
             sel?.id || '',
             vm === 'chat' ? null : ws.rootPath,
@@ -3672,7 +3943,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       set({ workspaceSnapshots: newSnapshots });
     }
 
-    const isChat = viewMode === 'chat';
+    // A folder-bound conversation is Work mode even when the folder was opened
+    // from the Chat view; only an explicitly folder-less chat stays Chat.
+    const isChat = viewMode === 'chat' && (folderPath === undefined || folderPath === null);
     const rootPath = folderPath !== undefined
       ? folderPath
       : (isChat ? null : ws.rootPath);
@@ -3692,10 +3965,99 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     return conv.id;
   },
 
+  newConversation: async (providerId, modelId, folderPath) => {
+    const viewMode = useUIStore.getState().viewMode;
+    const isChat = viewMode === 'chat' && (folderPath === undefined || folderPath === null);
+    const rootPath = folderPath !== undefined
+      ? folderPath
+      : (isChat ? null : useWorkspaceStore.getState().rootPath);
+    const key = `${isChat ? 'chat' : 'work'}:${rootPath ?? ''}`;
+
+    return coalesceNewConversation(key, async () => {
+      // Re-read after the IPC round-trip: another action may have opened or
+      // created a conversation while the message counts were loading.
+      const counts = await readMessageCounts();
+      const current = get();
+      const reusable = pickReusableConversation(
+        current.conversations,
+        isChat ? 'chat' : 'work',
+        rootPath ?? null,
+        current.activeConversationId,
+        current.messages.length,
+        counts,
+      );
+      if (!reusable) return get().createConversation(providerId, modelId, folderPath);
+
+      // A blank row is a real conversation record, so keep its identity and
+      // folder binding; only refresh the model/mode the next turn will use.
+      const patch: Partial<Conversation> = {};
+      if (providerId && reusable.providerId !== providerId) patch.providerId = providerId;
+      if (modelId && reusable.modelId !== modelId) patch.modelId = modelId;
+      if (isChat && reusable.isChatMode !== true) patch.isChatMode = true;
+      if (!isChat && reusable.isChatMode !== false) patch.isChatMode = false;
+      if (Object.keys(patch).length) {
+        await window.electronAPI.conversation.update(reusable.id, patch);
+        set((s) => ({
+          conversations: s.conversations.map((c) => c.id === reusable.id ? { ...c, ...patch } : c),
+        }));
+      }
+      if (get().activeConversationId !== reusable.id) {
+        await get().setActiveConversation(reusable.id);
+      }
+      return reusable.id;
+    });
+  },
+
+  newRsiConversation: async (providerId, modelId) => {
+    const rootPath = useWorkspaceStore.getState().rootPath ?? null;
+
+    return coalesceNewConversation(`rsi:${rootPath ?? ''}`, async () => {
+      const counts = await readMessageCounts();
+      const current = get();
+      const reusable = pickReusableConversation(
+        current.conversations,
+        'rsi',
+        rootPath,
+        current.activeConversationId,
+        current.messages.length,
+        counts,
+      );
+      if (!reusable) return get().createRsiConversation(providerId, modelId);
+
+      const patch: Partial<Conversation> = {};
+      if (providerId && reusable.providerId !== providerId) patch.providerId = providerId;
+      if (modelId && reusable.modelId !== modelId) patch.modelId = modelId;
+      if (Object.keys(patch).length) {
+        await window.electronAPI.conversation.update(reusable.id, patch);
+        set((s) => ({
+          conversations: s.conversations.map((c) => c.id === reusable.id ? { ...c, ...patch } : c),
+        }));
+      }
+      if (get().activeConversationId !== reusable.id) {
+        await get().setActiveConversation(reusable.id);
+      } else {
+        useUIStore.getState().setViewMode('work');
+        set({ agentMode: 'rsi' });
+      }
+      return reusable.id;
+    });
+  },
+
   setActiveConversation: async (id) => {
     const state = get();
     if (id === state.activeConversationId) return;
     if (!state.conversations.some((conversation) => conversation.id === id)) return;
+    // Session end: give Memory 2.0 one last chance to sediment a decision or
+    // lesson before the transcript leaves the active context.
+    if (isMemoryV2Active()
+      && state.activeConversationId
+      && !state.streamingRuns[state.activeConversationId]
+      && state.messages.length) {
+      const left = state.messages
+        .filter((m) => !m.isLocalNotice && !m.isToolResult && m.role !== 'tool')
+        .map((m) => ({ role: m.role, content: m.content }));
+      void useMemoryV2Store.getState().endSession(state.activeConversationId, left);
+    }
     const request = ++conversationLoadRequest;
     const ws = useWorkspaceStore.getState();
 
@@ -3816,7 +4178,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     } else {
       const { useModelStore } = await import('./model.store');
       const sel = useModelStore.getState().getSelectedModel();
-      await get().createConversation(sel?.providerId || '', sel?.id || '', dir);
+      await get().newConversation(sel?.providerId || '', sel?.id || '', dir);
     }
     return dir;
   },
@@ -3837,9 +4199,17 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
   deleteConversation: async (id) => {    const deletingActive = get().activeConversationId === id;
     const deletingRunning = !!get().streamingRuns[id];
+    if (deletingActive && !deletingRunning && isMemoryV2Active()) {
+      const left = get().messages
+        .filter((m) => !m.isLocalNotice && !m.isToolResult && m.role !== 'tool')
+        .map((m) => ({ role: m.role, content: m.content }));
+      if (left.length) void useMemoryV2Store.getState().endSession(id, left);
+    }
     if (deletingActive) conversationLoadRequest++;
     if (deletingRunning) get().stopGeneration(id);
     await window.electronAPI.conversation.delete(id);
+    rsiExecutionSessions.delete(id);
+    rsiSpendBaselines.delete(id);
     const newSnapshots = new Map(get().workspaceSnapshots);
     newSnapshots.delete(id);
     set((s) => ({
@@ -3932,32 +4302,63 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     });
   },
 
-  sendMessage: async (content, providerId, modelId) => {    // Hold: do not start a new run while something is installing — the
+  sendMessage: async (content, providerId, modelId, options) => {    // Hold: do not start a new run while something is installing — the
     // auto-continue path is the only sender until the gate releases.
     if (isHolding(useInstallGateStore.getState().jobs)) return;
     let convId = get().activeConversationId;
     if (!convId) {
-      convId = await get().createConversation(providerId, modelId);
+      convId = await get().newConversation(providerId, modelId);
     }
     // Only block when THIS conversation already has a run — other conversations
     // (even on the same model) may keep streaming concurrently. Mid-run typing
     // goes through enqueueMessage instead of being dropped here.
     if (get().streamingRuns[convId] || get().messageEdits[convId]) return;
 
-    await deliverToConversation(convId, content, providerId, modelId);
+    // Task start: decide whether history is needed and retrieve it BEFORE the
+    // system prompt is assembled. Bounded and failure-tolerant (see beginTask).
+    // Wait for an in-flight Memory 2.0 init so the very first message after
+    // launch does not silently fall back to the legacy flat memory.
+    if (!useMemoryV2Store.getState().initialized) {
+      await useMemoryV2Store.getState().init(useWorkspaceStore.getState().rootPath).catch(() => undefined);
+    }
+    const v2Active = isMemoryV2Active();
+    if (v2Active) {
+      await useMemoryV2Store.getState().beginTask(content, convId);
+    }
 
-    // Learn from the exchange once the turn has fully settled, so the next
-    // session already knows this user. Runs silently and never blocks or fails
-    // the turn (see learnFromExchange).
+    await deliverToConversation(convId, content, providerId, modelId, options);
+
+    // Task completion: sediment only at value nodes, or fall back to the legacy
+    // fixed-cadence extractor when Memory 2.0 is not active.
     if (get().activeConversationId !== convId) return;
-    void useMemoryStore.getState().learnFromExchange({
-      providerId,
-      modelId,
-      projectPath: useWorkspaceStore.getState().rootPath,
-      messages: get().messages
-        .filter((m) => !m.isLocalNotice && !m.isToolResult && m.role !== 'tool')
-        .map((m) => ({ role: m.role, content: m.content })),
-    });
+    const exchangeMessages = get().messages
+      .filter((m) => !m.isLocalNotice && !m.isToolResult && m.role !== 'tool')
+      .map((m) => ({ role: m.role, content: m.content }));
+    if (v2Active) {
+      const failed = !!get().error;
+      void useMemoryV2Store.getState().endTask({
+        messages: exchangeMessages,
+        sessionId: convId,
+        taskText: content,
+        failed,
+        // A chat turn finishing is not automatically a "task completed" value
+        // node. Let the extractor detect decisions/solutions/completions from
+        // the exchange; only a real failure is an explicit signal.
+        event: failed ? 'task_failed' : undefined,
+      });
+      if (failed) {
+        void useMemoryV2Store.getState().recordFailure({
+          task: content, reason: String(get().error).slice(0, 600), sessionId: convId,
+        });
+      }
+    } else {
+      void useMemoryStore.getState().learnFromExchange({
+        providerId,
+        modelId,
+        projectPath: useWorkspaceStore.getState().rootPath,
+        messages: exchangeMessages,
+      });
+    }
   },
 
   enqueueMessage: (conversationId, content, providerId, modelId) => {
@@ -4043,7 +4444,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     await get().flushQueue(conversationId);
   },
 
-  feedToolResults: async (conversationId, providerId, modelId, content) => {
+  feedToolResults: async (conversationId, providerId, modelId, content, evidence) => {
+    const session = resumableRsiSession(conversationId);
+    if (session && evidence) evidence.forEach((item) => session.monitor.observe(item));
     // ALWAYS persist the outcome first — dropping it (as an early isStreaming
     // return used to) breaks the loop: the model never learns what the command
     // it asked for actually did.
@@ -4069,7 +4472,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     // result reaches the model — starting a second concurrent loop here would
     // double-stream this conversation.
     if (get().streamingRuns[conversationId]) return;
-    await runAgentLoop(conversationId, providerId, modelId);
+    await runAgentLoop(conversationId, providerId, modelId, { rsiExecution: resumeRsiExecution(conversationId), rsiResume: true });
   },
 
   editMessage: async (messageId, content, providerId, modelId) => {
@@ -4188,7 +4591,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       modelId = sel.id;
     }
     set({ error: null });
-    await deliverToConversation(convId, useLanguageStore.getState().t('continuePrompt'), providerId, modelId);
+    await deliverToConversation(convId, useLanguageStore.getState().t('continuePrompt'), providerId, modelId, { rsiExecution: resumeRsiExecution(convId), rsiResume: true });
   },
 
   // Drop the tail of the transcript, in storage as well as in memory, so a
@@ -4214,7 +4617,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     let convId = get().activeConversationId;
     if (!convId) {
       if (!providerId || !modelId) return;
-      convId = await get().createConversation(providerId, modelId);
+      convId = await get().newConversation(providerId, modelId);
     }
     const msg: Message = {
       id: uuidv4(),

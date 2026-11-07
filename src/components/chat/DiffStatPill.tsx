@@ -54,7 +54,7 @@ export default function DiffStatPill() {
     <div className="max-w-[900px] mx-auto w-full px-4 mb-2 flex justify-center">
       {/* Themed via variables, floating frosted pill */}
       <div className="inline-flex items-center gap-2.5 px-4 py-1.5 rounded-full text-xs font-medium shadow-md
-        bg-[var(--glass-card)]/90 backdrop-blur-xl text-[var(--text-primary)] border border-[var(--glass-border)] ring-1 ring-black/5 dark:ring-white/10">
+        bg-[color-mix(in_srgb,var(--glass-card)_90%,transparent)] backdrop-blur-xl text-[var(--text-primary)] border border-[var(--glass-border)] ring-1 ring-black/5 dark:ring-white/10">
         <span className="font-medium">{files} {t('filesChanged')}</span>
         {added > 0 && <span className="text-[var(--success)] font-semibold">+{added}</span>}
         {removed > 0 && <span className="text-[var(--error)] font-semibold">-{removed}</span>}

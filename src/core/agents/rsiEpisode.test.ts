@@ -156,8 +156,9 @@ describe('runRsiEpisode (executable closed loop)', () => {
     expect(rec.rebuilt).toBe(false);
     expect(rec.state.best.id).toBe('rsi-001');
     const second = runRsiEpisode(rec.state, baseDeps(fs, ws, { candidate: cand({ id: 'rsi-002' }) }));
-    // Same metrics as best: not better overall, but non-dominated → frontier.
-    expect(second.outcome.verdict.action).toBe('retain-frontier');
+    // Same metrics add no frontier evidence; record the attempt without
+    // growing the archive or replacing the incumbent.
+    expect(second.outcome.verdict.action).toBe('reject');
     expect(second.state.best.id).toBe('rsi-001'); // incumbent untouched
     expect(second.state.episodeIndex).toBe(first.state.episodeIndex + 1);
     // Corrupt LOOP_STATE.json falls back to tree rebuild, never crashes.
@@ -175,6 +176,21 @@ describe('runRsiEpisode (executable closed loop)', () => {
     }));
     expect(r.stop.shouldStop).toBe(true);
     expect(r.stop.reasons).toContain('episode-budget-exhausted');
+    expect(ws.get('/ws/a.ts')).toBe('v0');
+    expect(r.state.episodeIndex).toBe(0);
+    expect(r.preempted).toBe('loop-stopped');
+  });
+
+  it('requires a frozen goal and honors an already stopped loop before mutation', () => {
+    const fs = memFs();
+    const ws = new Map([['/ws/a.ts', 'v0']]);
+    const missing = runRsiEpisode(createLoopState(goal, '/ws'), baseDeps(fs, ws));
+    expect(missing.preempted).toBe('goal-vector-missing');
+    expect(ws.get('/ws/a.ts')).toBe('v0');
+    fs.writeFile('rsi/GOAL_VECTOR.md', GOAL_MD);
+    const resumed = runRsiEpisode(missing.state, baseDeps(fs, ws));
+    expect(resumed.preempted).toBe('loop-stopped');
+    expect(ws.get('/ws/a.ts')).toBe('v0');
   });
 
   it('DREAM persists an evidence-backed policy switch, keeps default on thin data', () => {
@@ -223,7 +239,7 @@ describe('undeclared-creation detection (sync orchestrator)', () => {
       if (dir !== '/ws') return null;
       return [...ws.keys()].filter((k) => k.startsWith('/ws/')).map((k) => k.slice(4)).sort();
     };
-    const memFs2 = memFs();
+    const memFs2 = memFs({ 'rsi/GOAL_VECTOR.md': GOAL_MD });
     const r = runRsiEpisode(bootstrapSearch(goal, '/ws'), baseDeps(memFs2, ws, {
       candidate: cand({ id: 'undeclared' }),
       readWorkspaceFile: (p) => ws.get(p) ?? null,

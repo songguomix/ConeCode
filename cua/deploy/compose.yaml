@@ -1,0 +1,23 @@
+# Local-only headless runtime. The published port is bound to 127.0.0.1.
+# NOT VALIDATED in this delivery: Docker daemon was unavailable. See README.
+services:
+  cua:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: cua-runtime:local
+    environment:
+      CUA_ALLOW_NON_LOOPBACK_BIND: '1'
+    ports:
+      - "127.0.0.1:4317:4317"
+    volumes:
+      - cua-data:/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    mem_limit: 2g
+    cpus: 2
+volumes:
+  cua-data:

@@ -102,13 +102,20 @@ export const useFreeStore = create<FreeStore>((set, get) => ({
       const previous = get().status;
       const modelState = useModelStore.getState();
       if (!status.available) modelState.removeProvider(FREE_PROVIDER_ID);
-      else if (!previous?.available || JSON.stringify(previous.models) !== JSON.stringify(status.models) || !modelState.models.has(FREE_PROVIDER_ID)) {
-        await modelState.fetchModels(FREE_PROVIDER_ID);
+      else if (!previous?.available || JSON.stringify(previous.models) !== JSON.stringify(status.models) || !modelState.models.has(FREE_PROVIDER_ID)
+        || (status.models.length > 0 && !modelState.models.get(FREE_PROVIDER_ID)?.length)) {
+        const fetched = await modelState.fetchModels(FREE_PROVIDER_ID);
         const updated = useModelStore.getState();
+        const models = updated.models.get(FREE_PROVIDER_ID);
+        // The main process can return [] when its second status request fails.
+        // Keep that failure retryable instead of caching a successful status
+        // alongside an empty (or stale) model list indefinitely.
+        if (!fetched || (status.models.length > 0 && !models?.length)) {
+          throw new Error('Free model list unavailable');
+        }
         if (updated.selectedProviderId === FREE_PROVIDER_ID && !updated.getSelectedModel()) {
           useModelStore.setState({ selectedModelId: null, selectedProviderId: null });
         }
-        const models = updated.models.get(FREE_PROVIDER_ID);
         if (!useModelStore.getState().selectedModelId && models?.[0]) {
           updated.selectModel(models[0].id, FREE_PROVIDER_ID, false);
         }

@@ -40,20 +40,15 @@ export default function NewChatHero() {
   ], [t]);
 
   return (
-    <div className="flex-1 flex flex-col items-center justify-center px-4 py-8 max-w-[840px] mx-auto w-full my-auto">
+    <div className="flex-1 flex flex-col items-center justify-center px-4 py-8 max-w-[840px] mx-auto w-full my-auto min-w-0">
       {/* Brand & Greeting */}
       <div className="flex flex-col items-center text-center mb-6 select-none">
-        <div className="w-16 h-16 rounded-2xl overflow-hidden border border-[var(--glass-border)] shadow-[0_8px_30px_rgba(0,0,0,0.08)] dark:shadow-[0_8px_30px_rgba(0,0,0,0.35)] flex items-center justify-center mb-4 hover:scale-105 transition-transform duration-300">
-          <AppIcon size={64} className="w-full h-full object-cover" />
+        <div className="w-12 h-12 shrink-0 rounded-2xl overflow-hidden border border-[var(--glass-border)] shadow-xs flex items-center justify-center mb-4">
+          <AppIcon size={48} className="w-full h-full object-cover" />
         </div>
-
-        <h1 className="text-2xl sm:text-3xl font-bold font-serif text-[var(--text-primary)] tracking-tight mb-2">
+        <h1 className="text-2xl sm:text-3xl font-bold font-serif text-[var(--text-primary)] tracking-tight">
           {greetingText}
         </h1>
-
-        <p className="text-[13px] sm:text-[14px] text-[var(--text-muted)] max-w-md mx-auto font-sans leading-relaxed">
-          {t('newChatSub')}
-        </p>
       </div>
 
       {/* Centered ChatInput */}
@@ -67,7 +62,7 @@ export default function NewChatHero() {
           <button
             key={item.labelKey}
             onClick={() => setInputContent(item.prompt)}
-            className="flex items-center gap-2 px-3.5 py-1.5 rounded-full text-[12px] bg-[var(--glass-card)] hover:bg-[var(--bg-2)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] border border-[var(--glass-border)] hover:border-[var(--accent)]/40 shadow-2xs backdrop-blur-md transition-all hover:scale-[1.02] active:scale-[0.98]"
+            className="flex items-center gap-2 px-3.5 py-1.5 rounded-full text-[12px] bg-[var(--glass-card)] hover:bg-[var(--bg-2)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] border border-[var(--glass-border)] hover:border-[color-mix(in_srgb,var(--accent)_40%,transparent)] shadow-2xs transition-colors cursor-pointer"
           >
             {item.icon}
             <span className="font-medium">{t(item.labelKey)}</span>

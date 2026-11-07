@@ -50,28 +50,6 @@ export default function CommandApprovalCard({
     cardRef.current?.focus();
   }, [change.id]);
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      // Ignore if user is typing in another input/textarea
-      const target = event.target as HTMLElement;
-      if (target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA') return;
-
-      if (event.key === 'Escape' && !busy) {
-        event.preventDefault();
-        onClose();
-      } else if (event.key === 'Enter' && !busy) {
-        event.preventDefault();
-        if (pending) {
-          void execute();
-        } else {
-          (onComplete || onClose)();
-        }
-      }
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [busy, pending, onClose, onComplete, change.id]);
-
   const execute = async () => {
     setBusy(true);
     setError(null);
@@ -139,6 +117,20 @@ export default function CommandApprovalCard({
       tabIndex={-1}
       role="region"
       aria-label={t('commandExecution')}
+      onKeyDown={(event) => {
+        // Only the focused card owns these shortcuts. Descendant controls keep
+        // their native Enter action, and other tabs cannot approve a command.
+        if (event.target !== event.currentTarget || busy || event.defaultPrevented ||
+            event.nativeEvent.isComposing || event.repeat || event.ctrlKey || event.metaKey || event.altKey) return;
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          onClose();
+        } else if (event.key === 'Enter') {
+          event.preventDefault();
+          if (pending) void execute();
+          else (onComplete || onClose)();
+        }
+      }}
       className="w-full rounded-2xl border border-[var(--border)] bg-[var(--bg-2)] shadow-xl overflow-hidden outline-none select-text anim-slide-up"
       style={{ opacity: 1 }}
     >
@@ -149,8 +141,8 @@ export default function CommandApprovalCard({
             <FiTerminal size={14} />
           </div>
           <div className="flex items-center gap-2 min-w-0">
-            <h3 className="text-[13px] font-semibold text-[var(--text-primary)] truncate">
-              {t('commandExecution') || '申请运行命令'}
+            <h3 className="text-[13.5px] font-bold text-[var(--text-primary)] font-serif tracking-tight truncate">
+              {t('commandExecution')}
             </h3>
             {totalPending && totalPending > 1 && (
               <span className="text-[10.5px] font-mono px-1.5 py-0.5 rounded-md bg-[var(--bg-2)] border border-[var(--border)] text-[var(--text-muted)]">
@@ -190,7 +182,7 @@ export default function CommandApprovalCard({
         {/* Monospace Command Preview */}
         <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-1)] overflow-hidden shadow-2xs">
           {change.cwd && (
-            <div className="flex items-center gap-1.5 px-3 py-1.5 border-b border-[var(--border)] bg-[var(--bg-3)]/40 text-[11px] text-[var(--text-muted)] font-sans">
+            <div className="flex items-center gap-1.5 px-3 py-1.5 border-b border-[var(--border)] bg-[color-mix(in_srgb,var(--bg-3)_40%,transparent)] text-[11px] text-[var(--text-muted)] font-sans">
               <FiFolder size={12} className="shrink-0 text-[var(--warning)]" />
               <span className="shrink-0">{t('workingDirectory')}:</span>
               <code className="truncate font-mono text-[var(--text-secondary)]" title={change.cwd}>
@@ -242,7 +234,7 @@ export default function CommandApprovalCard({
       {/* Action Footer Bar - fully opaque */}
       <div className="flex items-center justify-between gap-3 px-4 py-3 border-t border-[var(--border)] bg-[var(--bg-1)]">
         <span className="text-[11px] text-[var(--text-muted)] hidden sm:inline">
-          {pending ? '快捷键：Enter 允许 · Esc 取消' : '快捷键：Enter / Esc 完成'}
+          {pending ? t('commandApprovalShortcutPending') : t('commandApprovalShortcutDone')}
         </span>
 
         <div className="flex items-center gap-2 ml-auto">
@@ -251,7 +243,7 @@ export default function CommandApprovalCard({
               <button
                 onClick={reject}
                 disabled={busy}
-                className="px-3.5 py-1.5 rounded-xl border border-[var(--border)] bg-[var(--bg-2)] hover:bg-[var(--error-bg)] hover:text-[var(--error)] hover:border-[var(--error-border)] text-[12px] font-medium text-[var(--text-secondary)] transition-colors disabled:opacity-50 flex items-center gap-1.5"
+                className="px-3.5 py-1.5 rounded-xl border border-[var(--border)] bg-[var(--bg-2)] hover:bg-[var(--error-bg)] hover:text-[var(--error)] hover:border-[var(--error-border)] text-[12px] font-medium text-[var(--text-secondary)] transition-colors disabled:opacity-50 flex items-center gap-1.5 cursor-pointer"
               >
                 <FiX size={13} />
                 <span>{t('reject') || '拒绝'}</span>
@@ -259,12 +251,12 @@ export default function CommandApprovalCard({
               <button
                 onClick={execute}
                 disabled={busy}
-                className="px-4 py-1.5 rounded-xl bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-[12px] font-medium transition-colors disabled:opacity-50 flex items-center gap-1.5 shadow-xs"
+                className="px-4 py-1.5 rounded-xl bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-[12px] font-medium transition-colors disabled:opacity-50 flex items-center gap-1.5 shadow-xs cursor-pointer"
               >
                 {busy ? (
                   <>
                     <FiLoader size={13} className="animate-spin" />
-                    <span>执行中…</span>
+                    <span>{t('executing')}</span>
                   </>
                 ) : (
                   <>
@@ -277,7 +269,7 @@ export default function CommandApprovalCard({
           ) : (
             <button
               onClick={onComplete || onClose}
-              className="px-4 py-1.5 rounded-xl bg-[var(--bg-3)] hover:bg-[var(--bg-4)] text-[12px] font-medium text-[var(--text-primary)] transition-colors"
+              className="px-4 py-1.5 rounded-xl bg-[var(--bg-3)] hover:bg-[var(--bg-4)] text-[12px] font-medium text-[var(--text-primary)] transition-colors cursor-pointer"
             >
               {t('close') || '完成'}
             </button>

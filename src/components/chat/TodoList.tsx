@@ -16,13 +16,13 @@ export default function TodoList() {
 
   return (
     <div className="max-w-[900px] mx-auto w-full px-4 mb-1.5">
-    <div className="rounded-2xl border border-[var(--glass-border)] bg-[var(--glass-surface)]/85 backdrop-blur-xl overflow-hidden group/todos shadow-xs">
+    <div className="rounded-2xl border border-[var(--glass-border)] bg-[color-mix(in_srgb,var(--glass-surface)_85%,transparent)] backdrop-blur-xl overflow-hidden group/todos shadow-xs">
       <div className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-[var(--text-secondary)] min-h-8">
         <button
           onClick={() => setExpanded((value) => !value)}
           aria-expanded={expanded}
           title={expanded ? t('collapseTodos') : t('expandTodos')}
-          className="flex items-center gap-1.5 min-w-0 flex-1 hover:text-[var(--text-primary)] transition-colors text-left"
+          className="flex items-center gap-1.5 min-w-0 flex-1 hover:text-[var(--text-primary)] transition-colors text-left cursor-pointer"
         >
           {expanded ? <FiChevronDown size={11} /> : <FiChevronRight size={11} />}
           <FiCheckSquare size={12} className="text-[var(--accent)]" />
@@ -44,7 +44,7 @@ export default function TodoList() {
         <button
           onClick={clearTodos}
           title={t('clearTodos')}
-          className="opacity-0 group-hover/todos:opacity-100 focus:opacity-100 p-0.5 rounded hover:bg-[var(--bg-3)] hover:text-[var(--error)] transition-all"
+          className="opacity-0 group-hover/todos:opacity-100 focus:opacity-100 p-0.5 rounded hover:bg-[var(--bg-3)] hover:text-[var(--error)] transition-all cursor-pointer"
         >
           <FiTrash2 size={12} />
         </button>
@@ -74,7 +74,7 @@ export default function TodoList() {
               <button
                 onClick={() => removeTodo(i)}
                 title={t('deleteTodo')}
-                className="shrink-0 opacity-0 group-hover/todo:opacity-100 focus:opacity-100 p-0.5 rounded text-[var(--text-muted)] hover:bg-[var(--bg-3)] hover:text-[var(--error)] transition-all"
+                className="shrink-0 opacity-0 group-hover/todo:opacity-100 focus:opacity-100 p-0.5 rounded text-[var(--text-muted)] hover:bg-[var(--bg-3)] hover:text-[var(--error)] transition-all cursor-pointer"
               >
                 <FiX size={11} />
               </button>

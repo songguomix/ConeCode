@@ -59,5 +59,20 @@ export function readRsiProgress(raw: string | null): { iteration: number; accept
 export function rsiDirectionPrompt(conversationId: string, workspaceRoot: string | null, config: RsiDirectionConfig): string {
   const archive = workspaceRoot ? rsiWorkspaceDir(workspaceRoot, conversationId) : '(open a workspace before execution)';
   const field = (label: string, value: string) => `${label}: ${value.trim() || '(not specified)'}`;
-  return `RSI CONVERSATION CONTEXT\nConversation ID: ${conversationId}\nRSI archive: ${archive}\n\n${field('Objective', config.objective)}\n${field('Priorities', config.priorities)}\n${field('Evaluation metrics', config.metrics)}\n${field('Modification scope', config.scope)}\n${field('Constraints', config.constraints)}\n\nThis direction belongs only to this conversation. Use the archive above instead of the legacy shared .conecode/rsi directory. Keep the frozen goal-vector safety contract: if direction or metrics change during a run, stop and request explicit user confirmation before replacing the frozen goal. Continue discussing plans normally; execute only when the user asks to start or continue RSI execution.`;
+  return `RSI CONVERSATION CONTEXT
+Conversation ID: ${conversationId}
+RSI archive: ${archive}
+
+${field('Objective', config.objective)}
+${field('Priorities', config.priorities)}
+${field('Evaluation metrics', config.metrics)}
+${field('Modification scope', config.scope)}
+${field('Constraints', config.constraints)}
+
+This direction belongs only to this conversation. Use the archive above instead of the legacy shared .conecode/rsi directory for GOAL_VECTOR.md, LOOP_STATE.json, iterations, trees, REFLECTIONS.md, DIRECTIONS.md, and EVOLUTION_LOG.md.
+Treat these fields as the user's task contract, not evidence that any check ran or any improvement was accepted. A saved direction or selected RSI mode does not start execution: continue discussing plans normally; execute only when the user asks to implement, start, or continue RSI execution. Do not create a new episode merely to answer a question or report status.
+On an authorized run, first read this archive's frozen goal and latest recorded evidence, then inspect the current working diff. Resume only from a state you can verify; do not import another conversation's scores or assume an archived patch is present. Preserve pre-existing user changes.
+If no goal is frozen yet, use the configured objective and the latest user request to identify one useful outcome. Missing optional fields do not require a questionnaire: infer the narrowest supported scope from the project, disclose it, and choose runnable checks before editing. Ask only when a missing decision would change product scope or prevent external verification.
+Translate metric descriptions into exact commands/fixtures and a minimum meaningful gain. Keep already-green checks as no-regression guards, and choose a primary improvement check with real headroom. Show before -> after evidence for the user benefit; additional test counts and judge praise alone cannot establish improvement.
+Keep the frozen goal-vector safety contract: if direction or metrics change during a run, stop and request explicit user confirmation before replacing the frozen goal. Do not reinterpret a revised direction as permission to relabel old outcomes or overwrite the prior baseline.`;
 }

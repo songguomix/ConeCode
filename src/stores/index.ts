@@ -18,4 +18,5 @@ export { useGoalStore } from './goal.store';
 export { useAiHighlightsStore } from './aiHighlights.store';
 export { useImageGenStore } from './imageGen.store';
 export { usePromptStore, type CustomUserPrompt } from './prompt.store';
+export { useDshMarketStore } from './dshMarket.store';
 

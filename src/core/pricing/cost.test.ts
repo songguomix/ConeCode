@@ -14,6 +14,17 @@ describe('cost math', () => {
     expect(messageCost(10, 10, { input: NaN, output: 1 })).toBeNull();
   });
 
+  it.each([NaN, Infinity, -Infinity, -1])('rejects invalid usage or prices (%s)', (invalid) => {
+    expect(messageCost(invalid, 10, { input: 3, output: 15 })).toBeNull();
+    expect(messageCost(10, invalid, { input: 3, output: 15 })).toBeNull();
+    expect(messageCost(10, 10, { input: invalid, output: 15 })).toBeNull();
+    expect(messageCost(10, 10, { input: 3, output: invalid })).toBeNull();
+  });
+
+  it('does not return an infinite cost when finite inputs overflow', () => {
+    expect(messageCost(Number.MAX_VALUE, 10, { input: Number.MAX_VALUE, output: 15 })).toBeNull();
+  });
+
   it('formats dollars and counts compactly', () => {
     expect(formatUSD(0.0042)).toBe('$0.0042');
     expect(formatUSD(0.5)).toBe('$0.500');
@@ -36,8 +47,54 @@ describe('cost math', () => {
     expect(open).toContain('1 priced turns');
     expect(open).toContain('unknown pricing');
     expect(open).not.toContain('LOCK TRIPPED');
-    const tripped = buildCostSnapshot(turns, pricingOf, 0.01, true);
+    const tripped = buildCostSnapshot(turns, pricingOf, 0.005, true);
     expect(tripped).toContain('LOCK TRIPPED');
     expect(tripped).not.toContain('remaining under lock');
+  });
+
+  it('trips strictly above twice the budget, not at the budget or exactly twice it', () => {
+    const pricingOf = () => ({ input: 1, output: 0 });
+    const snapshot = (promptTokens: number) => buildCostSnapshot(
+      [{ role: 'assistant', promptTokens, completionTokens: 0 }], pricingOf, 0.01, true,
+    );
+    expect(snapshot(10_000)).not.toContain('LOCK TRIPPED');
+    expect(snapshot(20_000)).not.toContain('LOCK TRIPPED');
+    expect(snapshot(20_000)).toContain('remaining under lock (2× budget): $0');
+    expect(snapshot(20_001)).toContain('LOCK TRIPPED');
+  });
+
+  it('excludes earlier conversation spending from this execution lock', () => {
+    const turns = [{ role: 'assistant', promptTokens: 2_010_000, completionTokens: 0 }];
+    const pricingOf = () => ({ input: 1, output: 0 });
+    const snapshot = buildCostSnapshot(turns, pricingOf, 0.01, true, { startSpendUsd: 2 });
+    expect(snapshot).toContain('spend so far: $2.01');
+    expect(snapshot).toContain('execution spend since baseline: $0.0100');
+    expect(snapshot).not.toContain('LOCK TRIPPED');
+    expect(buildCostSnapshot(turns, pricingOf, 0.004, true, { startSpendUsd: 2 })).toContain('LOCK TRIPPED');
+  });
+
+  it('does not trip at exactly twice the budget after floating-point baseline subtraction', () => {
+    const snapshot = buildCostSnapshot(
+      [{ role: 'assistant', promptTokens: 2_020_000, completionTokens: 0 }],
+      () => ({ input: 1, output: 0 }), 0.01, true, { startSpendUsd: 2 },
+    );
+    expect(snapshot).not.toContain('LOCK TRIPPED');
+    expect(snapshot).toContain('remaining under lock (2× budget, this execution): $0');
+  });
+
+  it.each([NaN, Infinity, -1, 5])('does not turn an unusable baseline (%s) into a free execution', (baseline) => {
+    const snapshot = buildCostSnapshot(
+      [{ role: 'assistant', promptTokens: 10, completionTokens: 0 }],
+      () => ({ input: 1, output: 0 }), 0.01, true, { startSpendUsd: baseline },
+    );
+    expect(snapshot).toContain('execution spend: unknown');
+    expect(snapshot).toContain('lock assessment unavailable');
+    expect(snapshot).not.toContain('remaining under lock');
+  });
+
+  it.each([NaN, Infinity, -1])('does not claim the lock is healthy with an invalid budget (%s)', (budget) => {
+    const snapshot = buildCostSnapshot([], () => undefined, budget, true);
+    expect(snapshot).toContain('lock assessment unavailable');
+    expect(snapshot).not.toContain('remaining under lock');
   });
 });

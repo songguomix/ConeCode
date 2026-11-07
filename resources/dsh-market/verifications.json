@@ -1,0 +1,299 @@
+{
+  "format": "conecode-dsh-verifications",
+  "formatVersion": 1,
+  "records": [
+    {
+      "name": "dsh-plugin-error-radar",
+      "version": "0.2.0",
+      "baseline": "0.2.2-rc.1",
+      "baselineCommit": "66491b05e3f05ad35bcdd4f6cd7ed26041d9e3db",
+      "layerVersion": "1.0.0",
+      "environment": {
+        "appVersion": "2.4.9",
+        "electronVersion": "42.11.3",
+        "nodeVersion": "24.19.0",
+        "chromeVersion": "148.0.7778.280",
+        "platform": "darwin",
+        "arch": "arm64"
+      },
+      "state": "verified",
+      "verifiedCapabilities": [
+        "command:radar",
+        "command:health",
+        "config:save",
+        "disable-cleanup",
+        "re-enable",
+        "restart-restore",
+        "failed-update-rollback",
+        "config:validation"
+      ],
+      "missingCapabilities": [],
+      "evidence": [
+        {
+          "kind": "install",
+          "summary": "Real npm install of dsh-plugin-error-radar@0.2.0 into an isolated profile."
+        },
+        {
+          "kind": "command",
+          "summary": "/radar reported web_fetch 4 calls, 100% errors and 4 consecutive failures from fixture tool-trace JSONL input.",
+          "observation": "工具可靠性雷达（按错误率排序）:\n  web_fetch 4 次 · 错误率 100% · 连败 4 · p95 5300ms\n⚠ 告警:\n  - web_fetch 错误率 100%（4/4），超过告警线\n  - web_fetch 连续失败 4 次"
+        },
+        {
+          "kind": "command",
+          "summary": "/health --days 7 produced a go/no-go verdict over the same trace fixture.",
+          "observation": "工具健康 · 近 7 天 · 2 个工具 6 次调用 · 错误率 67%（4 次失败）\n判定 ❌ 有系统性故障：web_fetch 连续失败 4 次"
+        },
+        {
+          "kind": "error-path",
+          "summary": "A rejected config (errorRateAlert=999) kept the previous instance; /radar remained usable."
+        },
+        {
+          "kind": "lifecycle",
+          "summary": "Disabled: contributions became empty and invocation was refused. Re-enabled: commands registered again. Uninstalled: package directory and registry entries were removed; plugin data was kept."
+        },
+        {
+          "kind": "rollback",
+          "summary": "A local 0.2.1 package that throws during activation was rejected; 0.2.0 stayed loaded and /radar continued to work."
+        },
+        {
+          "kind": "restart",
+          "summary": "A fresh service instance restored the installed version, config and commands from market-state.json."
+        }
+      ],
+      "notes": "Fixture trace JSONL is input data; plugin output was produced by the real plugin. The package has no DSH Web client half.",
+      "recordedAt": "2026-11-06T14:14:30.000Z"
+    },
+    {
+      "name": "dsh-plugin-guide",
+      "version": "0.4.5",
+      "baseline": "0.2.2-rc.1",
+      "baselineCommit": "66491b05e3f05ad35bcdd4f6cd7ed26041d9e3db",
+      "layerVersion": "1.0.0",
+      "environment": {
+        "appVersion": "2.4.9",
+        "electronVersion": "42.11.3",
+        "nodeVersion": "24.19.0",
+        "chromeVersion": "148.0.7778.280",
+        "platform": "darwin",
+        "arch": "arm64"
+      },
+      "state": "verified",
+      "verifiedCapabilities": [
+        "skill:register",
+        "skill:list",
+        "skill:get"
+      ],
+      "missingCapabilities": [],
+      "evidence": [
+        {
+          "kind": "install",
+          "summary": "Real npm install under Electron Node 24.19.0; engines.dsh and engines.node passed."
+        },
+        {
+          "kind": "skill",
+          "summary": "Registered skill was listed and its Markdown body was read through the Cordis lifecycle.",
+          "observation": "# DSH Plugin Guide\n\nThis skill is a guide, not a judge. It explains the three DSH layers and routes work to the tool that owns the verdict."
+        }
+      ],
+      "notes": "Pure skill plugin. No host services beyond skills were required.",
+      "recordedAt": "2026-11-06T14:14:30.000Z"
+    },
+    {
+      "name": "dsh-plugin-health",
+      "version": "3.0.5",
+      "baseline": "0.2.2-rc.1",
+      "baselineCommit": "66491b05e3f05ad35bcdd4f6cd7ed26041d9e3db",
+      "layerVersion": "1.0.0",
+      "environment": {
+        "appVersion": "2.4.9",
+        "electronVersion": "42.11.3",
+        "nodeVersion": "24.19.0",
+        "chromeVersion": "148.0.7778.280",
+        "platform": "darwin",
+        "arch": "arm64"
+      },
+      "state": "partial",
+      "verifiedCapabilities": [
+        "tool:plugin_health",
+        "host-side load",
+        "update:3.0.4 -> 3.0.5",
+        "rollback:3.0.5"
+      ],
+      "missingCapabilities": [
+        "web-client"
+      ],
+      "evidence": [
+        {
+          "kind": "install",
+          "summary": "Real npm install; host half loaded with the pinned @deepseek-ai/dsh-tools 0.2.2-rc.1 peer."
+        },
+        {
+          "kind": "tool",
+          "summary": "plugin_health returned a structured report for the isolated DSH home.",
+          "observation": "{ \"home\": \"<temp>/dsh-market\", \"profiles\": [\"default\"], \"findings\": [], \"summary\": {\"error\":0,\"warn\":0,\"info\":0}, \"scannedPlugins\": {\"total\":10,\"thirdParty\":3} }"
+        },
+        {
+          "kind": "install",
+          "summary": "Updated the installed 3.0.5 to 3.0.4; the previous package was retained as a rollback backup."
+        },
+        {
+          "kind": "rollback",
+          "summary": "Rolled back to 3.0.5 from the backup; plugin_health executed again after the swap."
+        }
+      ],
+      "notes": "The package ships a DSH Web client half. The host tool is verified; the browser UI is not mounted by ConeCode and is listed as missing.",
+      "recordedAt": "2026-11-06T14:14:30.000Z"
+    },
+    {
+      "name": "dsh-find-plugin",
+      "version": "0.4.0",
+      "baseline": "0.2.2-rc.1",
+      "baselineCommit": "66491b05e3f05ad35bcdd4f6cd7ed26041d9e3db",
+      "layerVersion": "1.0.0",
+      "environment": {
+        "appVersion": "2.4.9",
+        "electronVersion": "42.11.3",
+        "nodeVersion": "24.19.0",
+        "chromeVersion": "148.0.7778.280",
+        "platform": "darwin",
+        "arch": "arm64"
+      },
+      "state": "partial",
+      "verifiedCapabilities": [
+        "tool:find_dsh_plugin",
+        "github-search",
+        "curated-fallback"
+      ],
+      "missingCapabilities": [
+        "@deepseek-ai/dsh-tools declared range excludes 0.2.2-rc.1"
+      ],
+      "evidence": [
+        {
+          "kind": "error-path",
+          "summary": "Installation without an exemption was refused with the exact unmet peer requirement."
+        },
+        {
+          "kind": "install",
+          "summary": "Installed with an exact-version exemption and the shared 0.2.2-rc.1 tool peer."
+        },
+        {
+          "kind": "tool",
+          "summary": "find_dsh_plugin returned ranked, real GitHub dsh-plugin results.",
+          "observation": "[{\"name\":\"dsh-TUI\",\"stars\":7066},{\"name\":\"mirage\",\"stars\":3767}]"
+        }
+      ],
+      "notes": "Author-declared peer range only covers DSH 0.1.x. The tool worked with the baseline peer, but this is a partial compatibility result and is marked as such.",
+      "recordedAt": "2026-11-06T14:14:30.000Z"
+    },
+    {
+      "name": "@dhicoc/dsh-chinese-traditional-wisdom-skill",
+      "version": "1.3.0",
+      "baseline": "0.2.2-rc.1",
+      "baselineCommit": "66491b05e3f05ad35bcdd4f6cd7ed26041d9e3db",
+      "layerVersion": "1.0.0",
+      "environment": {
+        "appVersion": "2.4.9",
+        "electronVersion": "42.11.3",
+        "nodeVersion": "24.19.0",
+        "chromeVersion": "148.0.7778.280",
+        "platform": "darwin",
+        "arch": "arm64"
+      },
+      "state": "verified",
+      "verifiedCapabilities": [
+        "skill:registerProvider",
+        "skill:list",
+        "skill:get"
+      ],
+      "missingCapabilities": [],
+      "evidence": [
+        {
+          "kind": "install",
+          "summary": "Real npm install; the skill provider registered without modifying plugin code."
+        },
+        {
+          "kind": "skill",
+          "summary": "Provider-list returned chinese-traditional-wisdom-ai-agent-workflow and its body was read.",
+          "observation": "# 中国传统文化整体智慧咨询系统\n\n## 0. 本地直调前置检查\n\n> 硬规则：模型不得自行推演、排盘、校时、算数、补全干支。"
+        }
+      ],
+      "notes": "The skill body references local TypeScript/Python resources; ConeCode verified provider registration and body retrieval, not every downstream CLI engine.",
+      "recordedAt": "2026-11-06T14:53:40.000Z"
+    },
+    {
+      "name": "dsh-storage-probe",
+      "version": "1.0.0",
+      "baseline": "0.2.2-rc.1",
+      "baselineCommit": "66491b05e3f05ad35bcdd4f6cd7ed26041d9e3db",
+      "layerVersion": "1.0.0",
+      "environment": {
+        "appVersion": "2.4.9",
+        "electronVersion": "42.11.3",
+        "nodeVersion": "24.19.0",
+        "chromeVersion": "148.0.7778.280",
+        "platform": "darwin",
+        "arch": "arm64"
+      },
+      "state": "verified",
+      "verifiedCapabilities": [
+        "storage:ctx.storage",
+        "storage:ctx.storageDomain",
+        "storage:json-backend",
+        "storage:restart-persistence"
+      ],
+      "missingCapabilities": [],
+      "evidence": [
+        {
+          "kind": "load",
+          "summary": "A real Cordis plugin opened a zod-validated domain through @deepseek-ai/dsh-storage-domain."
+        },
+        {
+          "kind": "tool",
+          "summary": "The fixture tool read the durably written record from the JSON backend."
+        },
+        {
+          "kind": "restart",
+          "summary": "The same record was read after a full worker/service restart."
+        }
+      ],
+      "notes": "Local compatibility fixture, not community compatibility evidence. It verifies the official DSH storage seam, not LayerFS.",
+      "recordedAt": "2026-11-07T01:07:30.000Z"
+    },
+    {
+      "name": "dsh-layerfs",
+      "version": "0.1.0",
+      "baseline": "0.2.2-rc.1",
+      "baselineCommit": "66491b05e3f05ad35bcdd4f6cd7ed26041d9e3db",
+      "layerVersion": "1.0.0",
+      "environment": {
+        "appVersion": "2.4.9",
+        "electronVersion": "42.11.3",
+        "nodeVersion": "24.19.0",
+        "chromeVersion": "148.0.7778.280",
+        "platform": "darwin",
+        "arch": "arm64"
+      },
+      "state": "incompatible",
+      "verifiedCapabilities": [],
+      "missingCapabilities": [
+        "host-service:shellEnv",
+        "host-service:sessions",
+        "host-service:webServer",
+        "host-service:connection",
+        "host-service:systemPrompt",
+        "web-client",
+        "native-binary",
+        "docker-daemon",
+        "layerfs-bundle"
+      ],
+      "evidence": [
+        {
+          "kind": "error-path",
+          "summary": "Static/preflight assessment of Ephemeral-AI-Lab/dsh-layerfs@b9bf3bc: Docker daemon not running, LayerFS checkout/bundle/image absent, required DSH host services and Web client host not provided. No install or fake load was attempted."
+        }
+      ],
+      "notes": "Not an executed plugin verification. It is recorded as incompatible/blocked so a future catalog entry cannot accidentally show it as green.",
+      "recordedAt": "2026-11-07T01:08:00.000Z"
+    }
+  ]
+}

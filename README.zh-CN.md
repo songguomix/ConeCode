@@ -88,6 +88,7 @@ RSI 不得为了跑分削弱审批、沙箱、认证、TLS、权限或测试；�
 - **原位编辑消息。** 编辑历史用户消息并从该处重新生成；取消则保留原对话。
 - **检查点与回滚。** 对话可回滚到检查点，可撤销的文件改动随之恢复；已执行的命令和电脑操作只报告、不假装撤销。
 - **交接。** 把完整对话记录（可选包含工具调用与返回）连同接手提示词导出为 `.md` 文件，拖入另一个 AI 应用即可接着干。
+- **操作悬浮预览。** 在“电脑操控”面板点击“悬浮预览”，把 AI 最近获取的操作画面置顶显示在其他应用上方。预览只有画面，没有按钮、标题栏或外层卡片，拖动画面即可移动；回到主面板可关闭预览。显示预览不会自动开启电脑操控或额外抓屏，停止操控后会清空画面。更新主进程后需要重启应用。
 
 ### 任务流
 
@@ -124,6 +125,7 @@ RSI 不得为了跑分削弱审批、沙箱、认证、TLS、权限或测试；�
   | 仓库导览 | 新人地图：启动链、模块表、先读哪三个文件 |
   | AI 绘图 | 对话中生成图片，含画廊与专业工坊 |
 
+- **插件市场（DSH 兼容）。** 侧边栏的拼图按钮打开。统一发现、安装和验证真实的 DeepSeek Harness 社区插件与本项目原生插件：固定版本的 npm / Git / 本地来源，基于 Cordis 的宿主运行时（工具、命令、Skills），逐插件配置与日志，启用/禁用、更新/回滚与卸载。市场把「作者声明的 DSH 范围」与「ConeCode 实测结果」分开展示，包含部分兼容和不兼容结论；DSH Web 客户端部分会被识别但不会挂载。固定 DSH 基线、兼容矩阵与开发说明见 [`docs/dsh-market/`](docs/dsh-market/README.md)。
 - **技能。** 通过专用运行视图安装和执行技能；技能编辑器保持自定义技能可改；审批模式与命令沙箱对技能实际执行的操作依然生效。
 - **记忆。** 设置内有独立记忆面板，`/memory` 可直接打开；长期任务同时保留目标、TODO 清单与上下文压缩状态，跨会话延续。
 
@@ -182,7 +184,7 @@ npm audit
 npm run dist        # macOS 安装包
 npm run dist:win    # Windows x64 安装包
 npm run dist:linux  # Linux AppImage (x64)
-npm run dist:all    # 一次构建 macOS 与 Windows
+npm run dist:all    # 一次构建 macOS arm64、Windows x64 与 Linux x64
 ```
 
 打包需要 Electron Builder 对应平台的工具。签名和公证需要自己的凭据，仓库不会携带签名材料。
@@ -191,6 +193,7 @@ Cloudflared 是可选的运行时工具，**二进制文件不提交到仓库**�
 
 - macOS Apple Silicon：`resources/bin/cloudflared-darwin-arm64`
 - Windows x64：`resources/bin/cloudflared-win-x64.exe`
+- Linux x64：`resources/bin/cloudflared-linux-x64`
 
 请从 [Cloudflare 官方发布页](https://github.com/cloudflare/cloudflared/releases) 获取对应文件。不捆绑隧道时，可移除相应的 `extraResources` 配置。应用也支持使用单独安装的隧道工具。
 

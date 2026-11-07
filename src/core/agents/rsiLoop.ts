@@ -16,6 +16,7 @@
 import {
   REWARD_FAIL,
   computeReward,
+  dominates,
   selectForArchive,
   type ArchiveVerdict,
   type EpisodeResult,
@@ -71,23 +72,26 @@ export interface CandidateDeclaration {
 /** Paths the candidate may never touch to "pass" (EVOLVE-BLOCK). */
 export const RSI_FROZEN_PATHS = ['.conecode/rsi/GOAL_VECTOR.md'];
 
-function insideWorkspace(p: string, root: string): boolean {
-  const norm = (s: string) => s.replace(/\\/g, '/');
-  const r = norm(root).replace(/\/+$/, '');
-  const q = norm(p);
-  if (q.includes('..')) {
-    // Resolve lexically: any .. that escapes root is forbidden.
-    const parts: string[] = [];
-    for (const seg of q.split('/')) {
-      if (seg === '..') {
-        if (!parts.length) return false;
-        parts.pop();
-      } else if (seg !== '.' && seg !== '') parts.push(seg);
-    }
-    return parts.join('/').startsWith(r.replace(/^\//, '')) || `/${parts.join('/')}`.startsWith(r);
+function normalizedPath(path: string): string {
+  const normalized = path.replace(/\\/g, '/');
+  const prefix = normalized.startsWith('//') ? '//' : normalized.startsWith('/') ? '/' : '';
+  const parts: string[] = [];
+  for (const segment of normalized.split('/')) {
+    if (!segment || segment === '.') continue;
+    if (segment === '..') parts.pop();
+    else parts.push(segment);
   }
-  if (q.startsWith('/')) return q === r || q.startsWith(`${r}/`);
-  return true; // relative paths resolve inside the workspace root
+  const resolved = prefix + parts.join('/');
+  return /^[a-z]:\//i.test(resolved) ? resolved.toLowerCase() : resolved;
+}
+
+function workspacePath(path: string, root: string): string {
+  const p = path.replace(/\\/g, '/');
+  return normalizedPath(p.startsWith('/') || /^[a-z]:/i.test(p) ? p : `${root}/${p}`);
+}
+
+function containsPath(parent: string, child: string): boolean {
+  return child === parent || child.startsWith(`${parent.replace(/\/+$/, '')}/`);
 }
 
 /**
@@ -110,15 +114,30 @@ export function validateCandidate(
   }
   if (goal.metrics.length < 1) errors.push('goal vector must freeze at least one metric');
   if (!cand.blastRadius.touch.length) errors.push('blastRadius.touch must list at least one path');
+  const root = normalizedPath(workspaceRoot);
   for (const p of cand.blastRadius.touch) {
-    if (!insideWorkspace(p, workspaceRoot)) errors.push(`touch path escapes workspace: ${p}`);
+    const resolved = workspacePath(p, workspaceRoot);
+    if (!p.trim() || !containsPath(root, resolved)) errors.push(`touch path escapes workspace: ${p}`);
     for (const frozen of RSI_FROZEN_PATHS) {
-      if (p.replace(/\\/g, '/').endsWith(frozen)) errors.push(`touch path enters frozen eval region: ${p}`);
+      if (containsPath(resolved, workspacePath(frozen, workspaceRoot))) errors.push(`touch path enters frozen eval region: ${p}`);
+    }
+    const conversationGoals = workspacePath('.conecode/rsi/conversations', workspaceRoot);
+    const conversationRoot = `${conversationGoals}/`;
+    const touchesConversationRoot = resolved.startsWith(conversationRoot) && !resolved.slice(conversationRoot.length).includes('/');
+    if (containsPath(resolved, conversationGoals) || touchesConversationRoot
+      || /\/\.conecode\/rsi\/conversations\/[^/]+\/GOAL_VECTOR\.md(?:\/|$)/i.test(resolved)) {
+      errors.push(`touch path enters frozen eval region: ${p}`);
+    }
+    for (const protectedPath of cand.blastRadius.doNotTouch) {
+      const protectedResolved = workspacePath(protectedPath, workspaceRoot);
+      if (containsPath(protectedResolved, resolved) || containsPath(resolved, protectedResolved)) {
+        errors.push(`touch path overlaps doNotTouch: ${p}`);
+      }
     }
   }
-  if (!(cand.editBudget.maxFiles >= 1)) errors.push('editBudget.maxFiles must be >= 1');
-  if (!(cand.editBudget.maxLines >= 1)) errors.push('editBudget.maxLines must be >= 1');
-  if (!(cand.costBudgetUsd >= 0)) errors.push('costBudgetUsd must be >= 0');
+  if (!Number.isInteger(cand.editBudget.maxFiles) || cand.editBudget.maxFiles < 1) errors.push('editBudget.maxFiles must be a positive integer');
+  if (!Number.isInteger(cand.editBudget.maxLines) || cand.editBudget.maxLines < 1) errors.push('editBudget.maxLines must be a positive integer');
+  if (!Number.isFinite(cand.costBudgetUsd) || cand.costBudgetUsd < 0) errors.push('costBudgetUsd must be finite and >= 0');
   return errors;
 }
 
@@ -243,7 +262,10 @@ export function recordEpisodeOutcome(prev: LoopState, input: EpisodeInput, epsil
     ? { ...gated, externalPass: false }
     : gated;
   const reward = computeReward(effective);
-  const bestForSelect = prev.best.id == null ? null : { reward: prev.best.reward };
+  const bestForSelect = prev.best.id == null ? null : {
+    reward: prev.best.reward,
+    metrics: prev.archive.find((entry) => entry.id === prev.best.id)?.metrics,
+  };
   const verdict = selectForArchive(
     effective, input.candidate.id,
     bestForSelect, { reward: prev.baselineReward },
@@ -254,8 +276,7 @@ export function recordEpisodeOutcome(prev: LoopState, input: EpisodeInput, epsil
   const failureReason = accepted ? undefined : (costExceeded ? 'budget-exceeded' : verdict.reason);
   const failureClass: FailureClass | null = accepted
     ? null
-    : classifyFailure(verdict.reason === 'not-better-than-best' || verdict.reason === 'not-better-than-baseline'
-        ? verdict.reason : verdict.reason, costExceeded);
+    : classifyFailure(verdict.reason, costExceeded);
   const status: ExperimentStatus = accepted ? 'accepted' : hardFail ? 'failed' : 'rolled-back';
   const metrics: Record<string, number> = {};
   for (const m of effective.metrics) {
@@ -263,7 +284,7 @@ export function recordEpisodeOutcome(prev: LoopState, input: EpisodeInput, epsil
     metrics[m.id] = m.delta / Math.max(scale, 1e-9);
   }
   const nextArchive = [...prev.archive];
-  if (verdict.action === 'retain-frontier' && !nextArchive.some((a) => a.id === input.candidate.id)) {
+  if (verdict.action !== 'reject' && !nextArchive.some((a) => a.id === input.candidate.id)) {
     nextArchive.push({ id: input.candidate.id, metrics });
   }
   // Prune newly-dominated archive members so the frontier stays honest.
@@ -279,7 +300,7 @@ export function recordEpisodeOutcome(prev: LoopState, input: EpisodeInput, epsil
     spentUsd: prev.spentUsd + Math.max(0, input.costUsd),
     archive: pruned,
     seenIds: [...prev.seenIds, input.candidate.id],
-    recentFailures: failureClass ? [...prev.recentFailures, failureClass].slice(-10) : prev.recentFailures,
+    recentFailures: failureClass ? [...prev.recentFailures, failureClass].slice(-10) : [],
     recentModules: [...prev.recentModules, input.candidate.module].slice(-10),
   };
   return { state, reward, verdict, mustRollback: !accepted, status, failureReason, duplicate: false };
@@ -287,20 +308,7 @@ export function recordEpisodeOutcome(prev: LoopState, input: EpisodeInput, epsil
 
 /** Drop archive members dominated by another member (stable, keeps ties). */
 export function pruneArchive(archive: ParetoCandidate[]): ParetoCandidate[] {
-  return archive.filter((c) => !archive.some((o) => o !== c && dominatesArch(o, c)));
-}
-
-function dominatesArch(a: ParetoCandidate, b: ParetoCandidate): boolean {
-  const keys = new Set([...Object.keys(a.metrics), ...Object.keys(b.metrics)]);
-  if (!keys.size) return false;
-  let better = false;
-  for (const k of keys) {
-    const av = a.metrics[k] ?? -Infinity;
-    const bv = b.metrics[k] ?? -Infinity;
-    if (av < bv) return false;
-    if (av > bv) better = true;
-  }
-  return better;
+  return archive.filter((c) => !archive.some((o) => o !== c && dominates(o, c)));
 }
 
 /** Build the discovery-tree record for this episode (for rsiTree.appendExperiment). */

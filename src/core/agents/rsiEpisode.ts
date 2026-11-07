@@ -116,22 +116,37 @@ export function runRsiEpisode(prev: LoopState, deps: EpisodeDeps): EpisodeRunRes
     };
   }
 
+  // A stop is a boundary for the next candidate, not just a report after it.
+  const beforeStop = evaluateStop(stopInputFrom(prev, stopCfg));
+  if (prev.stopped || beforeStop.shouldStop) {
+    const reasons = [...new Set([...prev.stopReasons, ...beforeStop.reasons])];
+    const state = { ...prev, stopped: true, stopReasons: reasons };
+    const stop = { ...beforeStop, shouldStop: true, reasons, report: `STOP [${reasons.join(' | ')}]: resume explicitly before starting another candidate.` };
+    saveLoopState(deps.fs, deps.rsiDir, state);
+    return {
+      outcome: { state, reward: NaN, verdict: { action: 'reject', reason: 'not-better-than-best' }, mustRollback: false, status: 'rejected', duplicate: false },
+      state, tree: loadTree(deps.fs, deps.treesDir, deps.episodeId) ?? createDiscoveryTree(deps.episodeId, deps.strategyId, now),
+      iterationPath: null, evolutionAppended: false, stop, preempted: 'loop-stopped', rolledBack: null,
+    };
+  }
+
   // 1. Goal-vector freeze: the oracle must not move mid-search.
   const freeze = checkGoalFrozen(deps.fs, deps.rsiDir, deps.goalHash);
-  if (freeze.actualHash != null && !freeze.frozen) {
+  if (!freeze.frozen) {
+    const reason = freeze.actualHash == null ? 'goal-vector-missing' : 'goal-vector-mutated';
     const stop = evaluateStop(stopInputFrom(prev, stopCfg, { cannotVerify: true }));
-    const st: LoopState = { ...prev, stopped: true, stopReasons: [...prev.stopReasons, 'goal-vector-mutated'] };
+    const st: LoopState = { ...prev, stopped: true, stopReasons: [...prev.stopReasons, reason] };
     saveLoopState(deps.fs, deps.rsiDir, st);
     return {
       outcome: {
         state: st, reward: NaN,
         verdict: { action: 'reject', reason: 'external-fail' } as ArchiveVerdict,
-        mustRollback: false, status: 'failed', failureReason: 'goal-vector-mutated', duplicate: false,
+        mustRollback: false, status: 'failed', failureReason: reason, duplicate: false,
       },
       state: st,
       tree: loadTree(deps.fs, deps.treesDir, deps.episodeId) ?? createDiscoveryTree(deps.episodeId, deps.strategyId, now),
       iterationPath: null, evolutionAppended: false, stop,
-      preempted: 'goal-vector-mutated', rolledBack: null,
+      preempted: reason, rolledBack: null,
     };
   }
 

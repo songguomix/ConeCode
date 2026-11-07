@@ -199,6 +199,63 @@ describe('imageGen core', () => {
       expect(result.aspectRatio).toBe('1:1');
     });
 
+    it.each([
+      [{ error: { code: 'free_rate_limited', message: 'https://private.example sk-secret' } }, 429],
+      [{ error: { code: 'free_request_too_large', message: 'https://private.example sk-secret' } }, 413],
+      [{ error: { code: 'free_unavailable', status: 401, message: 'https://private.example sk-secret' } }, 401],
+      [{ type: 'error', status: 403, message: 'https://private.example sk-secret' }, 403],
+      [{ error: 'https://private.example sk-secret' }, 502],
+    ] as const)('rejects a streamed image error without starting another generation (%j)', async (error, status) => {
+      const cancel = vi.fn();
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(
+            'data: {"type":"image_generation.partial_image","b64_json":"cHJldmlldw=="}\n\n'
+            + `data: ${JSON.stringify(error)}\n\n`,
+          ));
+          // Leave the stream open: the error must cancel it immediately.
+        },
+        cancel,
+      });
+      global.fetch = vi.fn(async () => new Response(body, { headers: { 'content-type': 'text/event-stream' } }));
+      const onPartial = vi.fn();
+      const failure = await requestImageGeneration(
+        { prompt: 'a flower', config: { ...defaultConfig, providerId: FREE_PROVIDER_ID, model: 'gpt-image-1' } },
+        '', FREE_PROVIDER.baseUrl, { onPartial },
+      ).catch((error) => error);
+
+      expect(failure).toBeInstanceOf(Error);
+      expect(failure.message).toContain(`HTTP ${status}`);
+      expect(failure.message).not.toMatch(/private|sk-secret|https?:/);
+      expect(global.fetch).toHaveBeenCalledOnce();
+      expect(onPartial).toHaveBeenCalledWith('data:image/png;base64,cHJldmlldw==');
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(body.locked).toBe(false);
+    });
+
+    it('recognizes a named SSE error event without exposing its raw text', async () => {
+      global.fetch = vi.fn(async () => new Response('event: error\ndata: https://private.example sk-secret\n\n', {
+        headers: { 'content-type': 'text/event-stream' },
+      }));
+      await expect(requestImageGeneration(
+        { prompt: 'a flower', config: { ...defaultConfig, model: 'gpt-image-1' } },
+        '', FREE_PROVIDER.baseUrl,
+      )).rejects.toThrow('图像生成失败，请稍后重试。 (HTTP 502)');
+      expect(global.fetch).toHaveBeenCalledOnce();
+    });
+
+    it('still retries unstreamed when a successful stream has no final image', async () => {
+      global.fetch = vi.fn()
+        .mockResolvedValueOnce(new Response('data: [DONE]\n\n', { headers: { 'content-type': 'text/event-stream' } }))
+        .mockResolvedValueOnce(new Response(JSON.stringify({ data: [{ b64_json: 'aW1hZ2U=' }] })));
+      const result = await requestImageGeneration(
+        { prompt: 'a flower', config: { ...defaultConfig, model: 'gpt-image-1' } },
+        '', FREE_PROVIDER.baseUrl,
+      );
+      expect(result.url).toBe('data:image/png;base64,aW1hZ2U=');
+      expect(global.fetch).toHaveBeenCalledTimes(2);
+    });
+
     it('calls /chat/completions and extracts markdown image URL from chat content', async () => {
       const mockResponse = {
         choices: [

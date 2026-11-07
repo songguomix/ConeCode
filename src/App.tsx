@@ -1,11 +1,13 @@
 import { useEffect, useRef } from 'react';
 import { useProviderStore, useModelStore, useChatStore, useSettingsStore, useMemoryStore, useSkillsStore, usePreviewStore, useWorkspaceStore, useCodeChangesStore, useLanguageStore } from './stores';
+import { useMemoryV2Store } from './stores/memoryV2.store';
 import { useScreenshotStore } from './stores/screenshot.store';
 import { useBackgroundStore } from './stores/background.store';
 import { useMonitorStore } from './stores/monitor.store';
 import AppShell from './components/layout/AppShell';
 import { initRemoteBridge } from './core/remote/bridge';
 import { useFreeStore } from './stores/free.store';
+import { useComputerStore } from './stores/computer.store';
 
 export default function App() {
   const fetchProviders = useProviderStore((s) => s.fetchProviders);
@@ -30,6 +32,8 @@ export default function App() {
   const previousStreaming = useRef(false);
   const knownApprovals = useRef<Set<string> | null>(null);
   const initScreenshot = useScreenshotStore((s) => s.init);
+
+  useEffect(() => useComputerStore.getState().subscribeStatus(), []);
 
   useEffect(() => {
     // React StrictMode intentionally re-runs mount effects in development. Do
@@ -67,6 +71,9 @@ export default function App() {
     })();
     // Long-term memory is part of the very first prompt, so load it up front.
     void loadMemory();
+    // Memory 2.0 owns retrieval/extraction once its durable store is available;
+    // the legacy store above remains the fallback when there is no bridge.
+    void useMemoryV2Store.getState().init(useWorkspaceStore.getState().rootPath);
     // Do NOT auto-create a conversation on launch. It raced with the lazy create
     // inside sendMessage, so the first message could spawn a second, empty chat.
     // The conversation is created only on the first send; until then we show the
@@ -100,13 +107,10 @@ export default function App() {
     window.addEventListener('unhandledrejection', onUnhandledRejection);
     if (monitor.enabled) monitor.start();
     // The fullscreen overlay window reports confirmed shots here (it has no
-    // access to this window's chat state): clipboard + chat attachment.
+    // access to this window's chat state). Main already copied the PNG to the
+    // system clipboard natively, so just drop it into the chat.
     const stopShotResult = (window as any).electronAPI?.screenshot?.onResult?.(
-      async (dataUrl: string) => {
-        try {
-          const blob = await (await fetch(dataUrl)).blob();
-          await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
-        } catch {}
+      (dataUrl: string) => {
         useWorkspaceStore.getState().addPastedImage(dataUrl, `screenshot-${Date.now()}.png`);
       },
     );
@@ -133,6 +137,14 @@ export default function App() {
   useEffect(() => {
     void loadSkills();
   }, [loadSkills, rootPath]);
+
+  // Project memory follows the workspace too. Switching projects must swap the
+  // retrieval boundary before the next prompt is built, otherwise one project's
+  // facts can leak into another's context.
+  useEffect(() => {
+    const memory = useMemoryV2Store.getState();
+    if (memory.initialized) void memory.setProject(rootPath);
+  }, [rootPath]);
 
   useEffect(() => {
     const shouldPrevent = preventSleepWhileRunning && isStreaming;

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   FiFolder, FiFile, FiChevronRight, FiChevronDown, FiFolderPlus, FiFilePlus,
   FiRefreshCw, FiMinusSquare, FiX,
@@ -37,23 +38,25 @@ export default function FileTree() {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMenu(null); };
     window.addEventListener('click', close);
     window.addEventListener('keydown', onKey);
+    window.addEventListener('resize', close);
     return () => {
       window.removeEventListener('click', close);
       window.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', close);
     };
   }, [menu]);
 
   // Keep the context menu on screen.
   const menuPos = useMemo(() => {
     if (!menu) return null;
-    return { x: Math.min(menu.x, window.innerWidth - 190), y: Math.min(menu.y, window.innerHeight - 220) };
+    return { x: Math.max(8, Math.min(menu.x, window.innerWidth - 190)), y: Math.max(8, Math.min(menu.y, window.innerHeight - 280)) };
   }, [menu]);
 
   if (!rootPath) {
     return (
       <div className="flex-1 min-h-0 flex flex-col justify-start px-1.5 py-1">
         <button onClick={openFolder}
-          className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg text-[12px] font-medium bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[var(--accent)]/20 transition-colors">
+          className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg text-[12px] font-medium bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[color-mix(in_srgb,var(--accent)_20%,transparent)] transition-colors cursor-pointer">
           <FiFolder size={12} /> {t('openFolder')}
         </button>
       </div>
@@ -147,18 +150,18 @@ export default function FileTree() {
       {/* Add-folder lives at the very top so it is always in reach. */}
       <div className="shrink-0 px-1.5 py-1">
         <button onClick={() => addRootFromDialog()}
-          className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg text-[12px] font-medium bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[var(--accent)]/20 transition-colors">
+          className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg text-[12px] font-medium bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[color-mix(in_srgb,var(--accent)_20%,transparent)] transition-colors cursor-pointer">
           <FiFolderPlus size={12} /> {t('addFolder')}
         </button>
       </div>
       {/* Explorer toolbar — VS Code order: new file, new folder, refresh, collapse. */}
-      <div className="shrink-0 flex items-center gap-0.5 px-1.5 py-1">
+      <div className="file-tree-tools shrink-0 flex flex-wrap items-center gap-0.5 px-1.5 py-1">
         <input
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
           placeholder={t('explorerFilter')}
           spellCheck={false}
-          className="flex-1 min-w-0 bg-[var(--bg-2)] border border-[var(--border)] rounded-lg px-2 py-1 text-[12px] outline-none placeholder:text-[var(--text-muted)] focus:border-[var(--accent)]"
+          className="search-input flex-1 min-w-0 bg-[var(--bg-2)] border border-[var(--border)] rounded-lg px-2 py-1 text-[12px] outline-none placeholder:text-[var(--text-muted)] focus:border-[var(--accent)]"
         />
         <ToolBtn title={t('newFile')} onClick={() => setCreating({ parentDir: rootPath, kind: 'file' })}>
           <FiFilePlus size={13} />
@@ -178,7 +181,7 @@ export default function FileTree() {
         <RootSection path={rootPath} files={files} roots={roots} {...shared}
           trailing={
             <button onClick={() => closeRoot(rootPath)} title={t('closeFolder')}
-              className="p-0.5 rounded hover:bg-[var(--bg-3)] hover:text-[var(--error)] text-[var(--text-muted)] shrink-0">
+              className="p-0.5 rounded hover:bg-[var(--bg-3)] hover:text-[var(--error)] text-[var(--text-muted)] shrink-0 cursor-pointer transition-colors">
               <FiX size={12} />
             </button>
           }
@@ -187,7 +190,7 @@ export default function FileTree() {
           <RootSection key={root.path} path={root.path} files={root.files} roots={roots} {...shared}
             trailing={
               <button onClick={() => closeRoot(root.path)} title={t('closeFolder')}
-                className="p-0.5 rounded hover:bg-[var(--bg-3)] hover:text-[var(--error)] text-[var(--text-muted)] shrink-0">
+                className="p-0.5 rounded hover:bg-[var(--bg-3)] hover:text-[var(--error)] text-[var(--text-muted)] shrink-0 cursor-pointer transition-colors">
                 <FiX size={12} />
               </button>
             }
@@ -195,19 +198,19 @@ export default function FileTree() {
         ))}
       </div>
 
-      {menu && menuPos && (
+      {menu && menuPos && createPortal(
         <div ref={menuRef} onClick={(e) => e.stopPropagation()}
-          className="fixed z-50 w-[180px] rounded-xl border border-[var(--border)] bg-[var(--bg-2)] shadow-xl py-1 overflow-hidden"
+          className="fixed z-50 w-[180px] max-h-[calc(100vh-16px)] overflow-y-auto rounded-2xl border border-[var(--glass-border)] bg-[var(--glass-surface)] backdrop-blur-2xl shadow-2xl py-1.5 ring-1 ring-black/5 dark:ring-white/10 anim-menu"
           style={{ left: menuPos.x, top: menuPos.y }}>
           {menuItems.map((item) => (
             <button key={item.label} onClick={item.action}
-              className={`w-full text-left px-3 py-1.5 text-[12px] transition-colors ${
-                item.danger ? 'text-[var(--error)] hover:bg-[var(--error)]/10' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-3)]'
+              className={`w-full text-left px-3 py-1.5 text-[12px] transition-colors cursor-pointer ${
+                item.danger ? 'text-[var(--error)] hover:bg-[color-mix(in_srgb,var(--error)_10%,transparent)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-3)] hover:text-[var(--text-primary)]'
               }`}>
               {item.label}
             </button>
           ))}
-        </div>
+        </div>, document.body
       )}
     </div>
   );
@@ -215,8 +218,8 @@ export default function FileTree() {
 
 function ToolBtn({ title, onClick, children }: { title: string; onClick: () => void; children: React.ReactNode }) {
   return (
-    <button onClick={onClick} title={title}
-      className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-3)] transition-colors shrink-0">
+    <button onClick={onClick} title={title} aria-label={title}
+      className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-3)] transition-colors shrink-0 cursor-pointer">
       {children}
     </button>
   );
@@ -256,7 +259,7 @@ function RootSection({ path, files, roots, trailing, ...shared }: {
         onContextMenu={(e) => shared.onMenu(e, path, true, true)}
       >
         <button onClick={() => closeRoot(path)} title={`${t('closeFolder')} · ${path}`}
-          className="flex-1 min-w-0 truncate text-left hover:text-[var(--text-primary)] transition-colors">
+          className="flex-1 min-w-0 truncate text-left hover:text-[var(--text-primary)] transition-colors cursor-pointer">
           {rootLabel(path, roots)}
         </button>
         {trailing}
@@ -302,9 +305,15 @@ function FileNode({ item, depth, ...shared }: {
         />
       ) : (
         <div
+          role="button" tabIndex={0} aria-expanded={item.isDirectory ? !!item.expanded : undefined}
+          onKeyDown={(e) => {
+            if (e.target !== e.currentTarget || (e.key !== 'Enter' && e.key !== ' ')) return;
+            e.preventDefault();
+            item.isDirectory ? shared.onToggle(item.path) : shared.onSelect(item.path);
+          }}
           onClick={() => item.isDirectory ? shared.onToggle(item.path) : shared.onSelect(item.path)}
           onContextMenu={(e) => shared.onMenu(e, item.path, item.isDirectory)}
-          className={`flex items-center gap-1.5 px-2 py-1 rounded cursor-pointer transition-colors min-w-0 ${
+          className={`flex items-center gap-1.5 px-2 py-1 rounded-md cursor-pointer transition-colors min-w-0 ${
             isSelected ? 'bg-[var(--accent-soft)] text-[var(--accent)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-2)]'
           }`}
           style={{ paddingLeft: `${indent + 8}px` }}
@@ -356,6 +365,12 @@ function InlineInput({ initial = '', folder, disabled, onSubmit, onCancel, depth
 }) {
   const [value, setValue] = useState(initial);
   const ref = useRef<HTMLInputElement>(null);
+  const finished = useRef(false);
+  const submit = () => {
+    if (disabled || finished.current) return;
+    finished.current = true;
+    onSubmit(value);
+  };
   useEffect(() => { ref.current?.focus(); ref.current?.select(); }, []);
   return (
     <div className="flex items-center gap-1.5 px-2 py-0.5" style={{ paddingLeft: `${depth * 12 + 8}px` }}>
@@ -365,10 +380,11 @@ function InlineInput({ initial = '', folder, disabled, onSubmit, onCancel, depth
         value={value}
         disabled={disabled}
         onChange={(e) => setValue(e.target.value)}
-        onBlur={() => onSubmit(value)}
+        onBlur={submit}
         onKeyDown={(e) => {
-          if (e.key === 'Enter') onSubmit(value);
-          if (e.key === 'Escape') onCancel();
+          if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+          if (e.key === 'Enter') { e.preventDefault(); submit(); }
+          if (e.key === 'Escape') { finished.current = true; onCancel(); }
         }}
         placeholder={folder ? 'folder-name' : 'file-name'}
         spellCheck={false}

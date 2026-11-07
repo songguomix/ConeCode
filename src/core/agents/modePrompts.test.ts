@@ -234,11 +234,50 @@ describe('RSI_MODE_PROMPT auto-skills + computer-use acceptance', () => {
   it('requires computer-use acceptance of the main interface before delivery', () => {
     expect(RSI_MODE_PROMPT).toMatch(/Final acceptance/);
     expect(RSI_MODE_PROMPT).toMatch(/MUST verify with your own eyes/i);
-    expect(RSI_MODE_PROMPT).toMatch(/pre-authorized/i);
-    expect(RSI_MODE_PROMPT).toMatch(/do not ask via ask_user whether to verify/i);
+    expect(RSI_MODE_PROMPT).toMatch(/Existing user authorization and permission settings govern/i);
+    expect(RSI_MODE_PROMPT).toMatch(/does not grant consent or extra privileges/i);
+    expect(RSI_MODE_PROMPT).not.toMatch(/This paragraph IS the user's consent/i);
     expect(RSI_MODE_PROMPT).toMatch(/coordinates read off the screenshot, never guessed/i);
     expect(RSI_MODE_PROMPT).toMatch(/At most 3 rounds/);
     expect(RSI_MODE_PROMPT).toMatch(/mark visual acceptance as NOT done/);
     expect(RSI_MODE_PROMPT).toMatch(/screens seen \/ found-and-fixed \/ still unverified/);
+  });
+});
+
+
+describe('RSI useful-improvement contract', () => {
+  it('separates discussion, observed facts, and authorized execution', () => {
+    expect(RSI_MODE_PROMPT).toMatch(/selecting RSI mode alone is not authorization/);
+    expect(RSI_MODE_PROMPT).toMatch(/status or design question directly without starting another episode/);
+    expect(RSI_MODE_PROMPT).toMatch(/old passing log.*proof of the current workspace/);
+  });
+
+  it('requires headroom and causal reproduction instead of saturated test counts', () => {
+    expect(RSI_MODE_PROMPT).toMatch(/100% pass rate is a guard/);
+    expect(RSI_MODE_PROMPT).toMatch(/reproduce it before editing/);
+    expect(RSI_MODE_PROMPT).toMatch(/Do not manufacture gains by adding easy tests/);
+    expect(RSI_MODE_PROMPT).toMatch(/Equal external results plus better judge scores are NOT an improvement/);
+  });
+
+  it('compares real incremental gain with the incumbent while preserving the baseline', () => {
+    expect(RSI_MODE_PROMPT).toMatch(/cumulative gains use the fixed baseline/);
+    expect(RSI_MODE_PROMPT).toMatch(/incremental gain over the incumbent/);
+    expect(RSI_MODE_PROMPT).toMatch(/frozen minimum\/noise tolerance/);
+    expect(RSI_MODE_PROMPT).toMatch(/Never re-baseline just because a candidate failed/);
+  });
+
+  it('requires a recoverable parent and a changed cause for another attempt', () => {
+    expect(RSI_MODE_PROMPT).toMatch(/Reading a log does NOT restore its code/);
+    expect(RSI_MODE_PROMPT).toMatch(/without overwriting user work/);
+    expect(RSI_MODE_PROMPT).toMatch(/Never retry the same diff\/command.*without a changed cause/);
+    expect(RSI_MODE_PROMPT).toMatch(/Identical metric vectors do not create a new frontier/);
+  });
+
+  it('adapts verification and review cost to the project without inventing evidence', () => {
+    expect(RSI_MODE_PROMPT).toMatch(/actual repository commands/);
+    expect(RSI_MODE_PROMPT).toMatch(/observes the ConeCode host/);
+    expect(RSI_MODE_PROMPT).toMatch(/host snapshot alone cannot prove target-app speed/);
+    expect(RSI_MODE_PROMPT).toMatch(/one panel can evaluate all three roles/);
+    expect(RSI_MODE_PROMPT).toMatch(/Empty\/insufficient history means skip it/);
   });
 });

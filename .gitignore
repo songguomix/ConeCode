@@ -28,6 +28,7 @@ remote-tls.json
 .claude/
 .codex/
 .agents/
+.memory-cloud-data/
 
 # Machine-local files and temporary media
 .DS_Store

@@ -13,9 +13,9 @@
 //   LOOP_STATE.json               crash/interrupt recovery (validated on load)
 //   STRATEGY.md                   current exploration-policy id (DREAM output)
 
-import type { EpisodeResult } from './rsiReward';
+import { dominates, type ArchiveVerdict, type EpisodeResult } from './rsiReward';
 import type { CandidateDeclaration, GoalVector, LoopState } from './rsiLoop';
-import { createLoopState } from './rsiLoop';
+import { classifyFailure, createLoopState } from './rsiLoop';
 import type { DiscoveryTree, ExperimentRecord, RsiFs } from './rsiTree';
 
 export const RSI_ITERATIONS_DIR = 'iterations';
@@ -309,34 +309,23 @@ export function rebuildLoopStateFromTrees(
       state.acceptedCount += 1;
       state.consecutiveNonImproving = 0;
       state.consecutiveHardFails = 0;
+      state.recentFailures = [];
       if (state.best.id == null || n.reward > state.best.reward) state.best = { reward: n.reward, id: n.id };
       state.archive.push({ id: n.id, metrics: { ...n.metrics } });
     } else {
       state.consecutiveNonImproving += 1;
-      if (n.status === 'failed') state.consecutiveHardFails += 1;
-      if (n.failureReason) {
-        const cls = n.failureReason as LoopState['recentFailures'][number];
-        state.recentFailures.push(cls);
-        state.recentFailures = state.recentFailures.slice(-10);
-      }
+      state.consecutiveHardFails = n.status === 'failed' ? state.consecutiveHardFails + 1 : 0;
+      const reason = n.failureReason;
+      const cls = reason === 'invalid-declaration' ? 'no-improvement'
+        : reason === 'mutate-error' || reason === 'verify-error' ? 'external-fail'
+        : classifyFailure(reason as ArchiveVerdict['reason'], reason === 'budget-exceeded');
+      state.recentFailures = [...state.recentFailures, cls].slice(-10);
+      if (reason === 'pareto-nondominated') state.archive.push({ id: n.id, metrics: { ...n.metrics } });
     }
   }
   // Frontier stays the true non-dominated set.
-  state.archive = state.archive.filter((c) => !state.archive.some((o) => o !== c && dominatesMetrics(o.metrics, c.metrics)));
+  state.archive = state.archive.filter((c) => !state.archive.some((o) => o !== c && dominates(o, c)));
   return state;
-}
-
-function dominatesMetrics(a: Record<string, number>, b: Record<string, number>): boolean {
-  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
-  if (!keys.size) return false;
-  let better = false;
-  for (const k of keys) {
-    const av = a[k] ?? -Infinity;
-    const bv = b[k] ?? -Infinity;
-    if (av < bv) return false;
-    if (av > bv) better = true;
-  }
-  return better;
 }
 
 // ---------------------------------------------------------------------------

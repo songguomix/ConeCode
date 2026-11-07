@@ -263,7 +263,7 @@ export const useImageGenStore = create<ImageGenStore>((set, get) => ({
     if (!convId) {
       const selModel = useModelStore.getState().getSelectedModel();
       if (selModel) {
-        convId = await chatStore.createConversation(selModel.providerId, selModel.id);
+        convId = await chatStore.newConversation(selModel.providerId, selModel.id);
       }
     }
 

@@ -149,9 +149,9 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
   };
   return (
     <div className="my-3 rounded-xl border border-[var(--border)] overflow-hidden bg-[var(--bg-2)]">
-      <div className="flex items-center justify-between px-3.5 py-1.5 bg-[var(--bg-3)]/50 border-b border-[var(--border)]">
+      <div className="flex items-center justify-between px-3.5 py-1.5 bg-[color-mix(in_srgb,var(--bg-3)_50%,transparent)] border-b border-[var(--border)]">
         <span className="text-[11px] font-mono text-[var(--text-muted)]">{lang || 'text'}</span>
-        <button onClick={copy} className="flex items-center gap-1 text-[11px] text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors">
+        <button onClick={copy} className="flex items-center gap-1 text-[11px] text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors cursor-pointer">
           {copied ? <FiCheck size={11} /> : <FiCopy size={11} />}{copied ? 'Copied' : 'Copy'}
         </button>
       </div>
@@ -265,7 +265,7 @@ function TableBlock({ block, k }: { block: Extract<MdBlock, { type: 'table' }>; 
       <Tag
         key={idx}
         className={`px-2.5 py-1.5 border border-[var(--border)] ${alignCls(a)} ${
-          head ? 'bg-[var(--bg-3)]/60 font-semibold text-[var(--text-primary)]' : 'text-[var(--text-secondary)]'
+          head ? 'bg-[color-mix(in_srgb,var(--bg-3)_60%,transparent)] font-semibold text-[var(--text-primary)]' : 'text-[var(--text-secondary)]'
         }`}
       >
         <InlineText text={text ?? ''} k={`${k}-${head ? 'h' : 'r'}-${idx}`} />
@@ -280,7 +280,7 @@ function TableBlock({ block, k }: { block: Extract<MdBlock, { type: 'table' }>; 
         </thead>
         <tbody>
           {block.rows.map((row, ri) => (
-            <tr key={ri} className={ri % 2 ? 'bg-[var(--bg-2)]/40' : ''}>
+            <tr key={ri} className={ri % 2 ? 'bg-[color-mix(in_srgb,var(--bg-2)_40%,transparent)]' : ''}>
               {Array.from({ length: cols }, (_, i) => cell(row[i], i, false))}
             </tr>
           ))}
@@ -313,7 +313,7 @@ function MarkdownText({ text }: { text: string }) {
             return <hr key={k} className="my-2.5 border-[var(--border)]" />;
           case 'quote':
             return (
-              <blockquote key={k} className="font-serif font-bold border-l-[3px] border-[var(--accent)] pl-3.5 my-3 text-[15.5px] text-[var(--text-primary)] italic space-y-1 bg-[var(--bg-1)]/40 py-2 rounded-r-xl">
+              <blockquote key={k} className="font-serif font-bold border-l-[3px] border-[var(--accent)] pl-3.5 my-3 text-[15.5px] text-[var(--text-primary)] italic space-y-1 bg-[color-mix(in_srgb,var(--bg-1)_40%,transparent)] py-2 rounded-r-xl">
                 {block.text.split('\n').map((line, li) => (
                   <div key={li}><InlineText text={line} k={`${k}-q-${li}`} /></div>
                 ))}

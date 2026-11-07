@@ -26,6 +26,31 @@ export default defineConfig({
           build: { outDir: 'dist-electron' },
         },
       },
+      {
+        entry: 'electron/dsh-market/worker.ts',
+        vite: {
+          build: {
+            outDir: 'dist-electron',
+            rollupOptions: {
+              external: ['electron'],
+              output: { entryFileNames: 'dsh-worker.js' },
+            },
+          },
+        },
+      },
+      {
+        entry: 'electron/computer-preview-preload.ts',
+        onstart(options) { options.reload(); },
+        vite: {
+          build: {
+            outDir: 'dist-electron',
+            rollupOptions: {
+              external: ['electron'],
+              output: { entryFileNames: 'computer-preview-preload.js' },
+            },
+          },
+        },
+      },
     ]),
     electronRenderer(),
   ],

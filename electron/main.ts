@@ -1,5 +1,8 @@
 import { publishGithubRelease } from './githubRelease';
-import { app, BrowserWindow, ipcMain, dialog, Menu, clipboard, shell, Notification, powerSaveBlocker, desktopCapturer, screen, systemPreferences, globalShortcut, nativeImage } from 'electron';
+import { DshMarketService } from './dsh-market/market-service';
+import { registerDshMarketIpc } from './dsh-market/ipc';
+import { isDshChatServer } from '../src/core/dsh-market/naming';
+import { app, BrowserWindow, ipcMain, dialog, Menu, clipboard, shell, Notification, powerSaveBlocker, desktopCapturer, screen, systemPreferences, globalShortcut, nativeImage, safeStorage } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import { exec, spawn, execSync } from 'child_process';
@@ -12,6 +15,8 @@ import { FREE_PROVIDER, FREE_PROVIDER_ID, freeStatus } from '../src/core/provide
 import { applyRecordedUsage, applyServerResetTo, hydrateRecords } from '../src/core/providers/freeUsage';
 import { terminalShell, TerminalTextStream } from './terminal';
 import { readJSON, writeJSON } from '../src/core/storage/database';
+import { FileMemory2Store } from './memory2.store';
+import { DriveMemoryStore } from './memory-drive';
 import { mcpManager, type McpServerConfig } from '../src/core/mcp/client';
 import {
   resolveSandboxCommand, looksLikeSandboxDenial, SANDBOX_DENIAL_HINT,
@@ -33,11 +38,78 @@ import { remoteServer } from './remote/server';
 import { startTunnel, stopTunnel } from './remote/tunnel';
 import { previewManager, detectPreview } from './preview/devserver';
 import { computerController } from './computer/controller';
+import { ComputerPreviewWindow } from './computer/preview-window';
 import type { ProviderConfig } from '../src/types';
 
 let mainWindow: BrowserWindow | null = null;
+const computerPreview = new ComputerPreviewWindow({
+  createWindow: (options) => new BrowserWindow(options),
+  getMainWindow: () => mainWindow,
+  getStatus: () => computerController.status(),
+  getWorkArea: () => screen.getDisplayMatching(mainWindow?.getBounds() ?? screen.getPrimaryDisplay().bounds).workArea,
+  preloadPath: path.join(__dirname, 'computer-preview-preload.js'),
+  indexFile: path.join(__dirname, '../dist/index.html'),
+  devServerUrl: process.env.VITE_DEV_SERVER_URL,
+});
+let dshMarketService: DshMarketService | null = null;
 /** Currently registered global screenshot hotkey (main-side, so it outlives renderer reloads). */
 let screenshotAccelerator: string | null = null;
+
+// Memory 2.0: created lazily because `app.getPath('userData')` is only valid
+// after the app is ready. Legacy memory.json lives one directory above this.
+let memory2Disk: FileMemory2Store | null = null;
+let memoryDriveDisk: DriveMemoryStore | null = null;
+let memory2RootPath: string | null = null;
+
+function memorySecretCodec() {
+  return safeStorage.isEncryptionAvailable()
+    ? {
+        encrypt: (plain: string) => safeStorage.encryptString(plain).toString('base64'),
+        decrypt: (cipher: string) => safeStorage.decryptString(Buffer.from(cipher, 'base64')),
+      }
+    : undefined;
+}
+
+function memory2Store(): FileMemory2Store {
+  if (!memory2Disk) {
+    memory2Disk = new FileMemory2Store(
+      path.join(app.getPath('userData'), 'data', 'memory2'),
+      os.homedir(),
+      memorySecretCodec(),
+    );
+  }
+  return memory2Disk;
+}
+
+function memoryDriveStore(): DriveMemoryStore {
+  if (!memoryDriveDisk) {
+    memoryDriveDisk = new DriveMemoryStore({
+      dataDir: path.join(app.getPath('userData'), 'data', 'memory2'),
+      secrets: memorySecretCodec(),
+      openExternal: (url) => shell.openExternal(url),
+      redirectPort: Number(process.env.GOOGLE_DRIVE_REDIRECT_PORT) || 0,
+    });
+  }
+  return memoryDriveDisk;
+}
+
+function getDshMarketService(): DshMarketService {
+  if (!dshMarketService) {
+    dshMarketService = new DshMarketService({
+      rootDir: path.join(app.getPath('userData'), 'dsh-market'),
+      appPath: app.getAppPath(),
+      versions: {
+        app: app.getVersion(),
+        electron: process.versions.electron || 'unknown',
+        chrome: process.versions.chrome,
+      },
+      emit: (event) => {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('dsh-market:event', event);
+      },
+    });
+  }
+  return dshMarketService;
+}
 
 function getScreenshotDisplay(): Electron.Display {
   try {
@@ -48,21 +120,17 @@ function getScreenshotDisplay(): Electron.Display {
   }
 }
 
+type ScreenCapture = { dataUrl: string; width: number; height: number };
+type ScreenCaptureError = { error: string; needsPermission?: string };
+
 /**
- * Capture pixels from the active display.
- * Returns pixels, or { error } — pixels (not the media-status string) are
- * the ground truth, because the status API can stay stale after a grant.
+ * Chromium's capture path. Tries full-res first, then progressively smaller:
+ * oversized thumbnails are a known cause of empty captures on some GPUs.
  */
-async function captureScreenOnce(targetDisplay?: Electron.Display): Promise<
-  | { dataUrl: string; width: number; height: number }
-  | { error: string; needsPermission?: string }
-> {
-  const display = targetDisplay || getScreenshotDisplay();
+async function captureDisplayThumbnail(display: Electron.Display): Promise<ScreenCapture | null> {
   const scale = display.scaleFactor || 1;
   const fullW = Math.round(display.bounds.width * scale);
   const fullH = Math.round(display.bounds.height * scale);
-  // Try full-res first, then progressively smaller: oversized thumbnails are
-  // a known cause of empty captures on some GPUs.
   const attempts = [
     { width: fullW, height: fullH },
     { width: 1920, height: Math.max(1, Math.round((1920 * fullH) / Math.max(1, fullW))) },
@@ -83,12 +151,10 @@ async function captureScreenOnce(targetDisplay?: Electron.Display): Promise<
       console.error('screenshot:capture attempt failed', thumbnailSize, err);
     }
   }
-  // A granted macOS TCC permission is not always reflected immediately in
-  // desktopCapturer. The native tool uses the same system permission and
-  // gives us a reliable second capture path before we show a permission UI.
-  const fallback = await captureMacScreenFallback(display);
-  if (fallback) return fallback;
+  return null;
+}
 
+function captureFailure(): ScreenCaptureError {
   let granted = true;
   try {
     granted = process.platform !== 'darwin' || systemPreferences.getMediaAccessStatus('screen') === 'granted';
@@ -96,14 +162,70 @@ async function captureScreenOnce(targetDisplay?: Electron.Display): Promise<
   return granted ? { error: 'empty' } : { error: 'permission', needsPermission: 'screenRecording' };
 }
 
+/** First non-empty result wins; failures and late losers are absorbed. */
+function firstCapture(...attempts: Promise<ScreenCapture | null>[]): Promise<ScreenCapture | null> {
+  return new Promise((resolve) => {
+    let pending = attempts.length;
+    let settled = false;
+    const miss = () => {
+      if (settled) return;
+      pending -= 1;
+      if (pending === 0) resolve(null);
+    };
+    for (const attempt of attempts) {
+      attempt.then((result) => {
+        if (settled) return;
+        if (result) {
+          settled = true;
+          resolve(result);
+          return;
+        }
+        miss();
+      }, miss);
+    }
+  });
+}
+
+/**
+ * Capture pixels from the active display.
+ * Returns pixels, or { error } — pixels (not the media-status string) are
+ * the ground truth, because the status API can stay stale after a grant.
+ * On macOS the Chromium and native paths run in parallel so the overlay can
+ * open as soon as either one produces usable pixels.
+ */
+async function captureScreenOnce(targetDisplay?: Electron.Display): Promise<ScreenCapture | ScreenCaptureError> {
+  const display = targetDisplay || getScreenshotDisplay();
+  const chromium = captureDisplayThumbnail(display);
+  // A granted macOS TCC permission is not always reflected immediately in
+  // desktopCapturer. The native tool uses the same system permission and is
+  // usually much faster on Retina displays, so race both instead of waiting
+  // for Chromium to fail first.
+  const native = process.platform === 'darwin' ? captureMacScreenFallback(display) : Promise.resolve(null);
+  const cap = await firstCapture(chromium, native);
+  if (cap) return cap;
+  return captureFailure();
+}
+
 // ---- WeChat-style system overlay -------------------------------------------
 // The annotation UI lives in its own fullscreen transparent window covering
-// the whole display — NOT inside the app window. Main hides first so the app
-// itself is never in the shot.
+// the whole display — NOT inside the app window. The window is created and
+// warmed up in the background at launch, then reused for every shot: no
+// BrowserWindow construction or page-load wait in the hot path.
 let shotOverlay: BrowserWindow | null = null;
-let shotImage: { dataUrl: string; width: number; height: number } | null = null;
+let shotImage: ScreenCapture | null = null;
+let shotSession = 0;
 /** True when begin() hid the main window (so finish/cancel know to reshow). */
 let shotHidMain = false;
+let shotOverlayLoaded = false;
+let shotOverlayLoading: Promise<void> | null = null;
+/** A capture is between hotkey and overlay reveal; ignore repeat triggers. */
+let shotStarting = false;
+/** Renderer handshake: show the window only after the image has decoded. */
+let shotReady: { session: number; resolve: () => void; timer: ReturnType<typeof setTimeout> } | null = null;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function reshowMainAfterShot(): void {
   if (shotHidMain) {
@@ -115,14 +237,11 @@ function reshowMainAfterShot(): void {
   }
 }
 
-function createShotOverlay(targetDisplay?: Electron.Display): void {
-  if (shotOverlay && !shotOverlay.isDestroyed()) {
-    shotOverlay.focus();
-    return;
-  }
-  const display = targetDisplay || getScreenshotDisplay();
+function ensureShotOverlay(): BrowserWindow {
+  if (shotOverlay && !shotOverlay.isDestroyed()) return shotOverlay;
+  const display = screen.getPrimaryDisplay();
   const b = display.bounds;
-  shotOverlay = new BrowserWindow({
+  const win = new BrowserWindow({
     x: b.x,
     y: b.y,
     width: b.width,
@@ -141,37 +260,130 @@ function createShotOverlay(targetDisplay?: Electron.Display): void {
     show: false,
     enableLargerThanScreen: true,
     roundedCorners: false,
+    // macOS: the first drag must select, not just raise the app.
+    acceptFirstMouse: true,
     title: 'ConeCode Screenshot',
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.js'),
+      // The window is hidden while it decodes the capture and paints the
+      // first frame; throttling would delay that until after show().
+      backgroundThrottling: false,
     },
   });
-  shotOverlay.setBounds(b);
-  shotOverlay.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-  shotOverlay.setAlwaysOnTop(true, 'screen-saver');
+  shotOverlay = win;
+  win.setBounds(b);
+  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  win.setAlwaysOnTop(true, 'screen-saver');
+  shotOverlayLoaded = false;
+  shotOverlayLoading = new Promise<void>((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      shotOverlayLoaded = true;
+      resolve();
+    };
+    win.webContents.once('did-finish-load', finish);
+    win.webContents.once('did-fail-load', finish);
+    setTimeout(finish, 3000);
+  });
   const distPath = path.join(__dirname, '../dist/index.html');
   if (process.env.VITE_DEV_SERVER_URL) {
-    void shotOverlay.loadURL(`${process.env.VITE_DEV_SERVER_URL}#screenshot`);
+    void win.loadURL(`${process.env.VITE_DEV_SERVER_URL}#screenshot`);
   } else if (fs.existsSync(distPath)) {
-    void shotOverlay.loadFile(distPath, { hash: 'screenshot' });
+    void win.loadFile(distPath, { hash: 'screenshot' });
   } else {
-    void shotOverlay.loadURL('http://localhost:5173/#screenshot');
+    void win.loadURL('http://localhost:5173/#screenshot');
   }
-  shotOverlay.once('ready-to-show', () => shotOverlay?.show());
-  shotOverlay.on('closed', () => {
-    shotOverlay = null;
+  win.on('closed', () => {
+    if (shotOverlay === win) shotOverlay = null;
+    shotOverlayLoaded = false;
+    shotOverlayLoading = null;
     shotImage = null;
+    if (shotReady) {
+      clearTimeout(shotReady.timer);
+      shotReady = null;
+    }
     reshowMainAfterShot();
   });
+  // A renderer crash (GPU reset, etc.) must not leave a permanently blank
+  // pre-warmed window: drop it and recreate on the next shot.
+  win.webContents.on('render-process-gone', () => {
+    if (!win.isDestroyed()) win.destroy();
+  });
+  return win;
+}
+
+async function prepareShotOverlay(display: Electron.Display): Promise<BrowserWindow> {
+  const win = ensureShotOverlay();
+  if (!shotOverlayLoaded && shotOverlayLoading) {
+    // A cold first trigger (prewarm still loading) should still open quickly;
+    // the renderer also pulls the image on mount, so a late load is fine.
+    await Promise.race([shotOverlayLoading, delay(1500)]);
+  }
+  if (win.isDestroyed()) throw new Error('screenshot overlay was destroyed');
+  win.setBounds(display.bounds);
+  win.setAlwaysOnTop(true, 'screen-saver');
+  return win;
+}
+
+function resolveShotReady(session: number): void {
+  if (!shotReady || shotReady.session !== session) return;
+  clearTimeout(shotReady.timer);
+  const resolve = shotReady.resolve;
+  shotReady = null;
+  resolve();
+}
+
+async function showShotOverlay(win: BrowserWindow, capture: ScreenCapture): Promise<void> {
+  shotImage = capture;
+  shotSession += 1;
+  const session = shotSession;
+  const ready = new Promise<void>((resolve) => {
+    const timer = setTimeout(() => {
+      if (shotReady?.session === session) shotReady = null;
+      resolve();
+    }, 900);
+    shotReady = { session, resolve, timer };
+  });
+  if (win.isDestroyed()) {
+    if (shotReady?.session === session) {
+      clearTimeout(shotReady.timer);
+      shotReady = null;
+    }
+    return;
+  }
+  win.webContents.send('screenshot:image', { ...capture, session });
+  await ready;
+  if (win.isDestroyed()) return;
+  // The image is already decoded and painted while hidden, so this is one
+  // compositor frame — visually the overlay appears together with the shot.
+  win.show();
+  win.focus();
+}
+
+function hideShotOverlay(): void {
+  const win = shotOverlay;
+  shotImage = null;
+  shotSession += 1;
+  if (shotReady) {
+    clearTimeout(shotReady.timer);
+    shotReady = null;
+  }
+  if (win && !win.isDestroyed()) {
+    win.webContents.send('screenshot:reset');
+    if (win.isVisible()) win.hide();
+  }
+  reshowMainAfterShot();
 }
 
 /**
  * desktopCapturer can occasionally return empty thumbnails on macOS even
  * after Screen Recording has been granted (notably after an in-place TCC
- * permission change). Use the OS capture path as a fallback so an empty
- * Electron thumbnail is not misreported as a missing permission.
+ * permission change). The OS capture path is also usually the fastest route
+ * on Retina displays, so `captureScreenOnce` races it against Chromium.
  */
 async function captureMacScreenFallback(targetDisplay?: Electron.Display): Promise<{ dataUrl: string; width: number; height: number } | null> {
   if (process.platform !== 'darwin') return null;
@@ -190,10 +402,26 @@ async function captureMacScreenFallback(targetDisplay?: Electron.Display): Promi
       child.once('error', reject);
       child.once('exit', (code) => code === 0 ? resolve() : reject(new Error(`screencapture exited with code ${code}`)));
     });
-    const image = nativeImage.createFromPath(output);
-    if (image.isEmpty()) return null;
-    const size = image.getSize();
-    return { dataUrl: image.toDataURL(), width: size.width, height: size.height };
+    const data = fs.readFileSync(output);
+    // `screencapture -t png` already produced a PNG. Pass its bytes through
+    // instead of decoding + re-encoding with nativeImage (the biggest cost on
+    // Retina displays); read the dimensions straight from the IHDR chunk.
+    const isPng = data.length >= 24 &&
+      data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4e && data[3] === 0x47;
+    if (!isPng) {
+      const image = nativeImage.createFromBuffer(data);
+      if (image.isEmpty()) return null;
+      const size = image.getSize();
+      return { dataUrl: image.toDataURL(), width: size.width, height: size.height };
+    }
+    const width = data.readUInt32BE(16);
+    const height = data.readUInt32BE(20);
+    if (!width || !height) return null;
+    return {
+      dataUrl: `data:image/png;base64,${data.toString('base64')}`,
+      width,
+      height,
+    };
   } catch (error) {
     console.error('macOS screenshot fallback failed', error);
     return null;
@@ -598,7 +826,16 @@ function createWindow() {
     mainWindow.loadURL('http://localhost:5173');
   }
 
-  mainWindow.on('closed', () => { mainWindow = null; });
+  mainWindow.on('closed', () => {
+    computerPreview.destroy();
+    mainWindow = null;
+    // The hidden, pre-warmed screenshot window must not keep the app alive on
+    // platforms where closing the last real window quits.
+    if (process.platform !== 'darwin' && shotOverlay && !shotOverlay.isDestroyed()) {
+      shotOverlay.destroy();
+      shotOverlay = null;
+    }
+  });
 
   // Keep the privileged application renderer on its own document. A project
   // preview or a model-generated link must not navigate it to remote content.
@@ -646,6 +883,19 @@ app.on('web-contents-created', (_event, contents) => {
 
 app.whenReady().then(() => {
   createWindow();
+  // Pre-warm the screenshot overlay while the app idles: the window and its
+  // renderer are ready before the user ever presses the shortcut.
+  setTimeout(() => {
+    try {
+      const display = screen.getPrimaryDisplay();
+      void prepareShotOverlay(display).catch(() => {});
+    } catch {}
+  }, 1200);
+  const market = getDshMarketService();
+  registerDshMarketIpc({ service: market, getWindow: () => mainWindow });
+  void market.initialize().catch((error) => {
+    console.error('dsh-market initialization failed', error);
+  });
   registerIPC();
   initProviders();
   // Connect any globally-configured MCP servers in the background.
@@ -653,6 +903,7 @@ app.whenReady().then(() => {
 });
 
 app.on('before-quit', () => {
+  computerPreview.destroy();
   stopTunnel();
   remoteServer.stop();
   previewManager.stop();
@@ -675,10 +926,14 @@ app.on('window-all-closed', () => {
     app.quit();
   }
 });
+app.on('before-quit', () => {
+  void dshMarketService?.runtime.shutdown();
+});
+
 app.on('activate', () => {
-  // A screenshot overlay covers the screen while main hides: dock-click then
-  // means "come back to the shot", not "build another main window".
-  if (shotOverlay && !shotOverlay.isDestroyed()) {
+  // A visible screenshot overlay covers the screen while main hides: a
+  // dock-click then means "come back to the shot", not "build another window".
+  if (shotOverlay && !shotOverlay.isDestroyed() && shotOverlay.isVisible()) {
     shotOverlay.focus();
     return;
   }
@@ -877,6 +1132,7 @@ function registerIPC() {
   ipcMain.handle('conversation:delete', (_, id) => conversationRepo.delete(id));
 
   ipcMain.handle('message:list', (_, convId) => messageRepo.findByConversation(convId));
+  ipcMain.handle('message:counts', () => messageRepo.countsByConversation());
   ipcMain.handle('message:create', (_, data) => messageRepo.create(data));
   ipcMain.handle('message:delete', (_, messageId) => messageRepo.delete(messageId));
   ipcMain.handle('message:editAndTruncate', (_, convId, messageId, content) => messageRepo.editAndTruncate(convId, messageId, content));
@@ -1606,25 +1862,93 @@ function registerIPC() {
     }
   });
 
-  // ---- Long-term memory (what the agent has learned about the user) ------
+  // ---- Legacy long-term memory (kept intact for migration / rollback) ----
   ipcMain.handle('memory:list', () => readJSON<any[]>('memory.json', []));
   ipcMain.handle('memory:save', (_, entries: any[]) => {
     writeJSON('memory.json', Array.isArray(entries) ? entries : []);
     return true;
   });
 
+  // ---- Memory 2.0 -------------------------------------------------------
+  // Atomic per-state writes, backup/restore, object storage, stable project
+  // ids and a read-only view of the legacy data. Nothing here deletes old data.
+  ipcMain.handle('memory2:setRoot', (_, rootPath: string | null) => {
+    memory2RootPath = rootPath ?? null;
+    return true;
+  });
+  ipcMain.handle('memory2:load', () => {
+    try { return memory2Store().load(); } catch { return null; }
+  });
+  ipcMain.handle('memory2:save', (_, state: any) => {
+    try { return memory2Store().save(state); } catch { return false; }
+  });
+  ipcMain.handle('memory2:backup', () => {
+    try { return memory2Store().backup(); } catch (e: any) { return { ok: false, error: e?.message }; }
+  });
+  ipcMain.handle('memory2:restore', () => {
+    try { return memory2Store().restore(); } catch (e: any) { return { ok: false, error: e?.message }; }
+  });
+  ipcMain.handle('memory2:putObject', (_, key: string, content: string) => {
+    try { return memory2Store().putObject(key, content); } catch { return false; }
+  });
+  ipcMain.handle('memory2:getObject', (_, key: string) => {
+    try { return memory2Store().getObject(key); } catch { return null; }
+  });
+  ipcMain.handle('memory2:deviceId', () => {
+    try { return memory2Store().deviceId(); } catch { return ''; }
+  });
+  ipcMain.handle('memory2:legacySnapshot', () => {
+    try { return memory2Store().legacySnapshot(memory2RootPath); } catch { return { entries: [], files: [] }; }
+  });
+  ipcMain.handle('memory2:projectId', (_, rootPath: string) => {
+    try { return memory2Store().projectId(rootPath); } catch { return ''; }
+  });
+
+  // ---- Google Drive memory ------------------------------------------------
+  ipcMain.handle('memory-drive:status', () => {
+    try { return memoryDriveStore().status(); } catch (e: any) { return { configured: false, connected: false, clientIdSet: false, source: 'none', error: e?.message }; }
+  });
+  ipcMain.handle('memory-drive:configure', (_, opts: any) => {
+    try { return memoryDriveStore().configure(opts ?? {}); } catch (e: any) { return { configured: false, connected: false, clientIdSet: false, source: 'none', error: e?.message }; }
+  });
+  ipcMain.handle('memory-drive:connect', (_, opts?: any) => {
+    return memoryDriveStore().connect(opts ?? {}).catch((e: any) => ({ ok: false, error: e?.message ?? String(e) }));
+  });
+  ipcMain.handle('memory-drive:disconnect', () => memoryDriveStore().disconnect());
+  ipcMain.handle('memory-drive:health', () => memoryDriveStore().health());
+  ipcMain.handle('memory-drive:search', (_, tenantId: string, query: any) => memoryDriveStore().search(tenantId, query));
+  ipcMain.handle('memory-drive:remoteChanges', (_, tenantId: string, since: number, limit?: number) => memoryDriveStore().remoteChanges(tenantId, since, limit));
+  ipcMain.handle('memory-drive:pushChanges', (_, tenantId: string, changes: any[]) => memoryDriveStore().pushChanges(tenantId, changes));
+  ipcMain.handle('memory-drive:backup', (_, tenantId: string) => memoryDriveStore().backup(tenantId));
+  ipcMain.handle('memory-drive:restore', (_, tenantId: string) => memoryDriveStore().restore(tenantId));
+  ipcMain.handle('memory-drive:restoreSnapshot', (_, tenantId: string) => memoryDriveStore().restoreSnapshot(tenantId));
+  ipcMain.handle('memory-drive:putObject', (_, tenantId: string, key: string, content: string) => memoryDriveStore().putObject(tenantId, key, content));
+  ipcMain.handle('memory-drive:getObject', (_, tenantId: string, key: string) => memoryDriveStore().getObject(tenantId, key));
+  ipcMain.handle('memory-drive:usage', (_, tenantId: string) => memoryDriveStore().usage(tenantId));
+  ipcMain.handle('memory-drive:devices', (_, tenantId: string) => memoryDriveStore().devices(tenantId));
+  ipcMain.handle('memory-drive:revokeDevice', (_, tenantId: string, deviceId: string) => memoryDriveStore().revokeDevice(tenantId, deviceId));
+  ipcMain.handle('memory-drive:deleteTenantData', (_, tenantId: string) => memoryDriveStore().deleteTenantData(tenantId));
+
   // ---- MCP -------------------------------------------------------------
-  ipcMain.handle('mcp:list', () => mcpManager.listTools());
-  ipcMain.handle('mcp:call', (_, server: string, tool: string, args: any) => mcpManager.callTool(server, tool, args));
+  ipcMain.handle('mcp:list', async () => {
+    const marketTools = await getDshMarketService().listChatTools().catch(() => []);
+    return [...mcpManager.listTools(), ...marketTools];
+  });
+  ipcMain.handle('mcp:call', (_, server: string, tool: string, args: any) =>
+    isDshChatServer(server)
+      ? getDshMarketService().callChatTool(server, tool, args || {})
+      : mcpManager.callTool(server, tool, args));
   ipcMain.handle('mcp:reload', async (_, rootPath?: string) => {
     await mcpManager.reload(readMcpConfig(rootPath), getShellEnv());
-    return mcpManager.listTools();
+    const marketTools = await getDshMarketService().listChatTools().catch(() => []);
+    return [...mcpManager.listTools(), ...marketTools];
   });
   ipcMain.handle('mcp:getConfig', () => readJSON('mcp.json', { mcpServers: {} }));
   ipcMain.handle('mcp:setConfig', async (_, cfg: any) => {
     writeJSON('mcp.json', cfg);
     await mcpManager.reload(readMcpConfig(), getShellEnv());
-    return mcpManager.listTools();
+    const marketTools = await getDshMarketService().listChatTools().catch(() => []);
+    return [...mcpManager.listTools(), ...marketTools];
   });
 
   // ---- Terminal (interactive shells, keyed by tab id) ---------------------
@@ -1768,16 +2092,43 @@ function registerIPC() {
   // Every one of these is a no-op until the user flips the master switch in the
   // panel; the controller itself refuses otherwise, so a compromised renderer
   // can't turn it on by calling `act` directly.
-  ipcMain.handle('computer:status', () => computerController.status());
-  ipcMain.handle('computer:setEnabled', (_, on: boolean) => {
+  computerPreview.register(ipcMain);
+  ipcMain.handle('computer:status', (event) => { computerPreview.assertMain(event); return computerController.status(); });
+  ipcMain.handle('computer:setEnabled', (event, on: boolean) => {
+    computerPreview.assertMain(event);
     computerController.setEnabled(!!on);
+    computerPreview.statusChanged(!on);
     return computerController.status();
   });
-  ipcMain.handle('computer:requestPermissions', () => computerController.requestPermissions());
-  ipcMain.handle('computer:screenshot', () => computerController.screenshot());
-  ipcMain.handle('computer:act', (_, req: any) => computerController.act(req));
-  ipcMain.handle('computer:panic', async () => {
-    await computerController.panic();
+  ipcMain.handle('computer:requestPermissions', (event) => {
+    computerPreview.assertMain(event);
+    const status = computerController.requestPermissions();
+    computerPreview.statusChanged();
+    return status;
+  });
+  ipcMain.handle('computer:screenshot', async (event) => {
+    computerPreview.assertMain(event);
+    return computerPreview.capture(() => computerController.screenshot());
+  });
+  ipcMain.handle('computer:act', async (event, req: any) => {
+    computerPreview.assertMain(event);
+    computerPreview.beginOperation();
+    try {
+      const result = await computerController.act(req);
+      computerPreview.endAction(req, result);
+      return result;
+    } catch (error) {
+      computerPreview.endAction(req, { ok: false, message: String(error) });
+      throw error;
+    }
+  });
+  ipcMain.handle('computer:panic', async (event) => {
+    computerPreview.assertMain(event);
+    computerPreview.clearShot();
+    const stopping = computerController.panic();
+    computerPreview.statusChanged(true);
+    await stopping;
+    computerPreview.statusChanged(true);
     return computerController.status();
   });
 
@@ -1785,40 +2136,83 @@ function registerIPC() {
   // Unlike computer:screenshot (agent eyes, downscaled), this returns the full
   // native-resolution screen so the region crop stays sharp.
   ipcMain.handle('screenshot:capture', () => captureScreenOnce());
-  // WeChat-style flow: hide the app, grab clean pixels, open the fullscreen
-  // overlay window. Returns ok:false (with error) when capture fails — the
-  // main window then shows the failure card instead.
+  // WeChat-style flow: hide the app when it would appear in its own shot, grab
+  // clean pixels, then reveal the already-warmed overlay with the image. When
+  // the app is in the background, capture starts immediately (no hide wait).
   ipcMain.handle('screenshot:begin', async () => {
-    if (shotOverlay && !shotOverlay.isDestroyed()) {
+    if (shotOverlay && !shotOverlay.isDestroyed() && shotOverlay.isVisible()) {
       shotOverlay.focus();
       return { ok: true };
     }
-    const targetDisplay = getScreenshotDisplay();
-    shotHidMain = !!mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible();
-    if (shotHidMain) mainWindow?.hide();
-    // Let the compositor drop our window before grabbing pixels.
-    await new Promise((r) => setTimeout(r, 300));
-    const cap = await captureScreenOnce(targetDisplay);
-    if ('error' in cap) {
+    if (shotStarting) return { ok: true };
+    shotStarting = true;
+    try {
+      const targetDisplay = getScreenshotDisplay();
+      const mainVisible = !!mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible();
+      const mainFocused = mainVisible && !!mainWindow?.isFocused();
+      shotHidMain = mainFocused;
+      if (mainFocused) {
+        // Let the compositor drop our window before grabbing pixels. This is
+        // the only deliberate wait in the hot path; fullscreen spaces animate,
+        // so they get a little longer.
+        const wait = mainWindow?.isFullScreen() ? 380 : 70;
+        mainWindow?.hide();
+        await delay(wait);
+      }
+      const cap = await captureScreenOnce(targetDisplay);
+      if ('error' in cap) {
+        reshowMainAfterShot();
+        // The failure card lives in the main window; bring it forward so the
+        // user actually sees the permission/error explanation.
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.show();
+          mainWindow.focus();
+        }
+        return { ok: false, error: cap.error, needsPermission: cap.needsPermission };
+      }
+      try {
+        const overlay = await prepareShotOverlay(targetDisplay);
+        await showShotOverlay(overlay, cap);
+        return { ok: true };
+      } catch (err) {
+        console.error('screenshot overlay failed', err);
+        shotImage = null;
+        reshowMainAfterShot();
+        return { ok: false, error: 'empty' };
+      }
+    } catch (err) {
+      console.error('screenshot failed', err);
       reshowMainAfterShot();
-      return { ok: false, error: cap.error, needsPermission: (cap as { needsPermission?: string }).needsPermission };
+      return { ok: false, error: 'empty' };
+    } finally {
+      shotStarting = false;
     }
-    shotImage = cap;
-    createShotOverlay(targetDisplay);
+  });
+  // The overlay window pulls the pixels on mount (cold-start safety) and is
+  // pushed the latest session on every new shot.
+  ipcMain.handle('screenshot:get-image', () =>
+    shotImage ? { ...shotImage, session: shotSession } : { error: 'empty' });
+  ipcMain.handle('screenshot:ready', (event, session: number) => {
+    if (shotOverlay && !shotOverlay.isDestroyed() && event.sender === shotOverlay.webContents) {
+      resolveShotReady(Number(session));
+    }
     return { ok: true };
   });
-  // The overlay window pulls the pixels main grabbed for it.
-  ipcMain.handle('screenshot:get-image', () => shotImage ?? { error: 'empty' });
   ipcMain.handle('screenshot:finish', (_, dataUrl: string) => {
     const url = String(dataUrl || '');
-    shotOverlay?.close();
-    reshowMainAfterShot();
-    if (url.startsWith('data:image/')) mainWindow?.webContents.send('screenshot:result', url);
+    hideShotOverlay();
+    if (url.startsWith('data:image/')) {
+      mainWindow?.webContents.send('screenshot:result', url);
+      // Copy natively so it also works when the app is in the background
+      // (renderer clipboard writes require a focused document).
+      try {
+        clipboard.writeImage(nativeImage.createFromDataURL(url));
+      } catch {}
+    }
     return { ok: true };
   });
   ipcMain.handle('screenshot:cancel', () => {
-    shotOverlay?.close();
-    reshowMainAfterShot();
+    hideShotOverlay();
     return { ok: true };
   });
   ipcMain.handle('screenshot:save', async (_, dataUrl: string) => {
@@ -1838,6 +2232,7 @@ function registerIPC() {
     } finally {
       if (lowered && shotOverlay && !shotOverlay.isDestroyed()) {
         shotOverlay.setAlwaysOnTop(true, 'screen-saver');
+        shotOverlay.focus();
       }
     }
   });

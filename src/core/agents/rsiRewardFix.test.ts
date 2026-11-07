@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { REWARD_FAIL, isLocalPlateau, pruneParetoArchive, selectForArchive, type EpisodeResult } from './rsiReward';
+import { REWARD_FAIL, computeReward, dominates, isLocalPlateau, pruneParetoArchive, selectCandidate, selectForArchive, type EpisodeResult } from './rsiReward';
 
 function episode(over: Partial<EpisodeResult> = {}): EpisodeResult {
   return {
@@ -12,6 +12,39 @@ function episode(over: Partial<EpisodeResult> = {}): EpisodeResult {
 }
 
 describe('rsiReward hardening', () => {
+  it('requires valid measured evidence instead of accepting empty or invalid metrics', () => {
+    for (const metrics of [[], [{ id: 'm', delta: NaN }], [{ id: 'm', delta: Infinity }],
+      [{ id: 'm', delta: 1, scale: 0 }], [{ id: 'm', delta: 1, weight: -1 }],
+      [{ id: 'm', delta: 1 }, { id: 'm', delta: 2 }]]) {
+      const candidate = episode({ metrics, judges: { alignment: 1, simplicity: 1, discipline: 1 } });
+      expect(computeReward(candidate)).toBe(REWARD_FAIL);
+      expect(selectForArchive(candidate, 'new', null, { reward: 0 }, []).action).toBe('reject');
+    }
+  });
+
+  it('does not award progress solely for a more flattering judge panel', () => {
+    const flat = episode({ metrics: [{ id: 'm', delta: 0 }], judges: { alignment: 1, simplicity: 1, discipline: 1 } });
+    expect(selectForArchive(flat, 'flat', null, { reward: 0 }, []).action).toBe('reject');
+    const best = { reward: 0.5, metrics: { m: 0.8 } };
+    for (const delta of [0.8, 0.7]) {
+      const candidate = episode({ metrics: [{ id: 'm', delta }], judges: { alignment: 1, simplicity: 1, discipline: 1 } });
+      expect(computeReward(candidate)).toBeGreaterThan(best.reward);
+      expect(selectCandidate(candidate, best, { reward: 0 }).accept).toBe(false);
+    }
+  });
+
+  it('does not grow the frontier with equivalent evidence under a fresh id', () => {
+    const candidate = episode({ metrics: [{ id: 'm', delta: 0.5 }] });
+    expect(selectForArchive(candidate, 'clone', { reward: 5 }, { reward: 0 }, [{ id: 'first', metrics: { m: 0.5 } }]).action).toBe('reject');
+    expect(selectForArchive(candidate, 'first', null, { reward: 0 }, [{ id: 'first', metrics: { m: 0.5 } }]).action).toBe('reject');
+  });
+
+  it('does not compare missing or non-finite metric axes', () => {
+    expect(dominates({ id: 'a', metrics: { speed: 2 } }, { id: 'b', metrics: { memory: 1 } })).toBe(false);
+    expect(dominates({ id: 'a', metrics: { speed: NaN, memory: 2 } }, { id: 'b', metrics: { speed: 1, memory: 1 } })).toBe(false);
+    expect(selectCandidate(episode({ metrics: [{ id: 'speed', delta: 3 }] }), { reward: 0, metrics: { memory: 1 } }, { reward: 0 }).accept).toBe(false);
+  });
+
   it('does not double-register a repeated candidate id', () => {
     const archive = [{ id: 'c1', metrics: { m: 0.9 } }];
     const best = { reward: 5 }; // forces the non-best path

@@ -120,11 +120,11 @@ function MessageChanges({
             <span className="text-xs text-[var(--text-muted)]">{pendingFiles.length} {t('pending')}</span>
             <div className="ml-auto flex items-center gap-1.5">
               <button onClick={applyAll} disabled={busy}
-                className="px-2.5 py-1 rounded-lg bg-green-500/15 text-xs font-semibold text-green-700 dark:text-green-300 hover:bg-green-500/25 border border-green-600/30 flex items-center gap-1 disabled:opacity-50">
+                className="px-2.5 py-1 rounded-lg bg-green-500/15 text-xs font-semibold text-green-700 dark:text-green-300 hover:bg-green-500/25 border border-green-600/30 flex items-center gap-1 disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed transition-all">
                 <FiCheck size={12} /> {t('applyAll')}
               </button>
               <button onClick={rejectAll} disabled={busy}
-                className="px-2.5 py-1 rounded-lg bg-[var(--bg-3)] text-xs font-semibold text-[var(--text-secondary)] hover:bg-[var(--bg-4)] border border-[var(--border)] flex items-center gap-1 disabled:opacity-50">
+                className="px-2.5 py-1 rounded-lg bg-[var(--bg-3)] text-xs font-semibold text-[var(--text-secondary)] hover:bg-[var(--bg-4)] border border-[var(--border)] flex items-center gap-1 disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed transition-all">
                 <FiX size={12} /> {t('rejectAll')}
               </button>
             </div>
@@ -164,17 +164,17 @@ function UndoChangeConfirmBar({ change, onCancel }: { change: CodeChange; onCanc
   };
 
   return (
-    <div className="px-3 py-2 border-t border-[var(--border)] bg-[var(--bg-3)]/60 space-y-1.5">
+    <div className="px-3 py-2 border-t border-[var(--border)] bg-[color-mix(in_srgb,var(--bg-3)_60%,transparent)] space-y-1.5">
       <div className="text-xs font-medium text-[var(--text-secondary)]">{t('undoChangeConfirmTitle')}</div>
       <div className="text-[11px] text-[var(--text-muted)]">{t('undoChangeKeepsChat')}</div>
       {error && <div className="text-[11px] text-[var(--error)] whitespace-pre-wrap">{error}</div>}
       <div className="flex items-center gap-1.5 pt-0.5">
         <button onClick={run} disabled={busy}
-          className="px-2.5 py-1 rounded-lg bg-[var(--bg-4)] text-xs font-semibold text-[var(--text-primary)] hover:brightness-110 border border-[var(--border)] flex items-center gap-1 disabled:opacity-50">
+          className="px-2.5 py-1 rounded-lg bg-[var(--bg-4)] text-xs font-semibold text-[var(--text-primary)] hover:brightness-110 border border-[var(--border)] flex items-center gap-1 disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed transition-all">
           <FiRotateCcw size={11} /> {t('undoChange')}
         </button>
         <button onClick={onCancel} disabled={busy}
-          className="px-2.5 py-1 rounded-lg text-xs font-semibold text-[var(--text-secondary)] hover:bg-[var(--bg-4)] disabled:opacity-50">
+          className="px-2.5 py-1 rounded-lg text-xs font-semibold text-[var(--text-secondary)] hover:bg-[var(--bg-4)] disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed transition-all">
           {t('cancel')}
         </button>
       </div>
@@ -235,7 +235,7 @@ function CheckpointRollbackConfirmBar({ change, onCancel }: { change: CodeChange
   };
 
   return (
-    <div className="px-3 py-2 border-t border-[var(--border)] bg-[var(--bg-3)]/60 space-y-1.5">
+    <div className="px-3 py-2 border-t border-[var(--border)] bg-[color-mix(in_srgb,var(--bg-3)_60%,transparent)] space-y-1.5">
       <div className="text-xs text-[var(--text-secondary)]">
         {t('checkpointRollbackTitle')}
         {preview.files.length > 0 && (
@@ -255,11 +255,11 @@ function CheckpointRollbackConfirmBar({ change, onCancel }: { change: CodeChange
       {error && <div className="text-[11px] text-[var(--error)] whitespace-pre-wrap">{error}</div>}
       <div className="flex items-center gap-1.5 pt-0.5">
         <button onClick={run} disabled={busy}
-          className="px-2.5 py-1 rounded-lg bg-[var(--error)]/15 text-xs font-semibold text-[var(--error)] hover:bg-[var(--error)]/25 border border-[var(--error)]/30 flex items-center gap-1 disabled:opacity-50">
+          className="px-2.5 py-1 rounded-lg bg-[color-mix(in_srgb,var(--error)_15%,transparent)] text-xs font-semibold text-[var(--error)] hover:bg-[color-mix(in_srgb,var(--error)_25%,transparent)] border border-[color-mix(in_srgb,var(--error)_30%,transparent)] flex items-center gap-1 disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed transition-all">
           <FiRotateCcw size={11} /> {t('confirmCheckpointRollback')}
         </button>
         <button onClick={onCancel} disabled={busy}
-          className="px-2.5 py-1 rounded-lg bg-[var(--bg-3)] text-xs font-semibold text-[var(--text-secondary)] hover:bg-[var(--bg-4)] border border-[var(--border)] disabled:opacity-50">
+          className="px-2.5 py-1 rounded-lg bg-[var(--bg-3)] text-xs font-semibold text-[var(--text-secondary)] hover:bg-[var(--bg-4)] border border-[var(--border)] disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed transition-all">
           {t('cancel')}
         </button>
       </div>
@@ -271,7 +271,7 @@ function UndoChangeButton({ onClick }: { onClick: () => void }) {
   const { t } = useLanguageStore();
   return (
     <button onClick={onClick} title={t('undoChangeKeepsChat')}
-      className="px-2 py-1 rounded-lg bg-[var(--bg-3)] text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-4)] flex items-center gap-1">
+      className="px-2 py-1 rounded-lg bg-[var(--bg-3)] text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-4)] flex items-center gap-1 cursor-pointer transition-colors">
       <FiRotateCcw size={11} /> {t('undoChange')}
     </button>
   );
@@ -281,7 +281,7 @@ function CheckpointRollbackButton({ onClick }: { onClick: () => void }) {
   const { t } = useLanguageStore();
   return (
     <button onClick={onClick} title={t('checkpointRollbackChat')}
-      className="px-2 py-1 rounded-lg text-[11px] text-[var(--text-muted)] hover:text-[var(--error)] hover:bg-[var(--error)]/10 flex items-center gap-1">
+      className="px-2 py-1 rounded-lg text-[11px] text-[var(--text-muted)] hover:text-[var(--error)] hover:bg-[color-mix(in_srgb,var(--error)_10%,transparent)] flex items-center gap-1 cursor-pointer transition-colors">
       <FiAlertTriangle size={11} /> {t('rollbackConversation')}
     </button>
   );
@@ -308,7 +308,7 @@ function CommandStatusRow({ change, onReview }: { change: CodeChange; onReview: 
               <span className="hidden sm:inline text-[11px] text-yellow-600 dark:text-yellow-400">{t('pendingApproval')}</span>
               <button
                 onClick={onReview}
-                className="px-2 py-1 rounded-md bg-yellow-500/15 text-[11px] font-semibold text-yellow-700 dark:text-yellow-300 hover:bg-yellow-500/25 border border-yellow-600/25"
+                className="px-2 py-1 rounded-md bg-yellow-500/15 text-[11px] font-semibold text-yellow-700 dark:text-yellow-300 hover:bg-yellow-500/25 border border-yellow-600/25 cursor-pointer transition-colors"
               >
                 {t('reviewCommand')}
               </button>
@@ -404,11 +404,11 @@ function DiffReviewCard({ change }: { change: CodeChange }) {
           {pending ? (
             <>
               <button onClick={accept} disabled={busy}
-                className="px-2.5 py-1 rounded-lg bg-green-500/15 text-xs font-semibold text-green-700 dark:text-green-300 hover:bg-green-500/25 border border-green-600/30 flex items-center gap-1 disabled:opacity-50">
+                className="px-2.5 py-1 rounded-lg bg-green-500/15 text-xs font-semibold text-green-700 dark:text-green-300 hover:bg-green-500/25 border border-green-600/30 flex items-center gap-1 disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed transition-all">
                 <FiCheck size={12} /> {t('apply')}
               </button>
               <button onClick={reject} disabled={busy}
-                className="px-2.5 py-1 rounded-lg bg-[var(--bg-3)] text-xs font-semibold text-[var(--text-secondary)] hover:bg-[var(--bg-4)] border border-[var(--border)] flex items-center gap-1 disabled:opacity-50">
+                className="px-2.5 py-1 rounded-lg bg-[var(--bg-3)] text-xs font-semibold text-[var(--text-secondary)] hover:bg-[var(--bg-4)] border border-[var(--border)] flex items-center gap-1 disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed transition-all">
                 <FiX size={12} /> {t('reject')}
               </button>
             </>

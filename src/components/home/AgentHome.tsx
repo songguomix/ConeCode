@@ -105,25 +105,22 @@ export default function AgentHome() {
     t('homeGreetingNight');
 
   return (
-    <div className="max-w-[860px] mx-auto w-full pt-2 pb-6 min-w-0">
+    <div className="max-w-[840px] mx-auto w-full pt-2 pb-6 min-w-0">
       {/* ---- Hero Greeting Banner with ConeCode Original Icon ---- */}
       <div className="pt-2 pb-4 flex items-center gap-3.5">
-        <div className="w-11 h-11 rounded-2xl flex items-center justify-center border border-[var(--accent)]/20 shadow-xs shrink-0 overflow-hidden">
+        <div className="w-11 h-11 rounded-2xl flex items-center justify-center border border-[color-mix(in_srgb,var(--accent)_20%,transparent)] shadow-xs shrink-0 overflow-hidden">
           <AppIcon size={44} className="w-full h-full object-cover" />
         </div>
         <div className="min-w-0 flex-1">
           <h1 className="text-2xl sm:text-3xl font-serif font-bold text-[var(--text-primary)] tracking-tight truncate">
             {greetingText}
           </h1>
-          <p className="text-[13px] text-[var(--text-muted)] mt-0.5 truncate">
-            {t('homeGreetingSubtitle')}
-          </p>
         </div>
       </div>
 
       {/* ---- Streamlined Workspace Status Pill ---- */}
       {rootPath && (
-        <div className="flex items-center gap-2 mb-4 px-3 py-1.5 rounded-xl bg-[var(--glass-card)] backdrop-blur-md border border-[var(--glass-border)] text-xs text-[var(--text-muted)] flex-wrap shadow-2xs">
+        <div className="flex items-center gap-2 mb-4 px-3 py-1.5 rounded-xl bg-[var(--glass-card)] border border-[var(--glass-border)] text-xs text-[var(--text-muted)] flex-wrap shadow-2xs">
           <span className="inline-flex items-center gap-1.5 font-bold text-[var(--text-primary)] font-serif text-[13px]">
             <FiFolder size={12} className="text-[var(--accent)]" />
             {scan?.projectName || rootPath.split('/').pop()}
@@ -151,7 +148,7 @@ export default function AgentHome() {
             onClick={() => void scanWorkspace()}
             disabled={scanning}
             title={t('homeRescan')}
-            className="ml-auto p-1 rounded-lg hover:text-[var(--accent)] hover:bg-[var(--bg-3)] transition-colors disabled:opacity-50 shrink-0"
+            className="ml-auto p-1 rounded-lg hover:text-[var(--accent)] hover:bg-[var(--bg-3)] transition-colors disabled:opacity-50 shrink-0 cursor-pointer"
           >
             <FiRefreshCw size={11} className={scanning ? 'animate-spin' : ''} />
           </button>
@@ -160,20 +157,20 @@ export default function AgentHome() {
 
       {/* ---- Clean Navigation Tabs (Eliminates Text Stacking) ---- */}
       <div className="flex items-center justify-between gap-3 mb-4 border-b border-[var(--glass-border)] pb-3">
-        <div className="inline-flex p-1 bg-[var(--glass-card)] border border-[var(--glass-border)] rounded-2xl gap-1 shadow-2xs">
+        <div className="inline-flex p-1 bg-[var(--glass-card)] border border-[var(--glass-border)] rounded-xl gap-1 shadow-2xs">
           <button
             type="button"
             onClick={() => setHomeTab('tasks')}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium transition-all cursor-pointer ${
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors cursor-pointer ${
               homeTab === 'tasks'
                 ? 'bg-[var(--glass-surface)] text-[var(--accent)] font-bold shadow-xs border border-[var(--glass-border)]'
-                : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-3)]/40 border border-transparent'
+                : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[color-mix(in_srgb,var(--bg-3)_40%,transparent)] border border-transparent'
             }`}
           >
             <FiZap size={13} className={homeTab === 'tasks' ? 'text-[var(--accent)]' : 'text-[var(--text-muted)]'} />
             <span>{t('tabRecommendedTasks')}</span>
             {tasks.length > 0 && (
-              <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-[var(--accent-soft)] text-[var(--accent)] font-semibold">
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[var(--accent-soft)] text-[var(--accent)] font-semibold">
                 {tasks.length}
               </span>
             )}
@@ -181,10 +178,10 @@ export default function AgentHome() {
           <button
             type="button"
             onClick={() => setHomeTab('ideas')}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium transition-all cursor-pointer ${
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors cursor-pointer ${
               homeTab === 'ideas'
                 ? 'bg-[var(--glass-surface)] text-[var(--accent)] font-bold shadow-xs border border-[var(--glass-border)]'
-                : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-3)]/40 border border-transparent'
+                : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[color-mix(in_srgb,var(--bg-3)_40%,transparent)] border border-transparent'
             }`}
           >
             <FiPackage size={13} className={homeTab === 'ideas' ? 'text-[var(--accent)]' : 'text-[var(--text-muted)]'} />
@@ -193,10 +190,10 @@ export default function AgentHome() {
           <button
             type="button"
             onClick={() => setHomeTab('brief')}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium transition-all cursor-pointer ${
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors cursor-pointer ${
               homeTab === 'brief'
                 ? 'bg-[var(--glass-surface)] text-[var(--accent)] font-bold shadow-xs border border-[var(--glass-border)]'
-                : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-3)]/40 border border-transparent'
+                : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[color-mix(in_srgb,var(--bg-3)_40%,transparent)] border border-transparent'
             }`}
           >
             <FiFileText size={13} className={homeTab === 'brief' ? 'text-[var(--accent)]' : 'text-[var(--text-muted)]'} />
@@ -208,7 +205,7 @@ export default function AgentHome() {
           <button
             onClick={() => model && findWork(model.providerId, model.id, true, locale)}
             disabled={busy}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium bg-[var(--glass-card)] text-[var(--text-secondary)] border border-[var(--glass-border)] hover:border-[var(--accent)] hover:text-[var(--accent)] backdrop-blur-md transition-all shadow-2xs disabled:opacity-40 shrink-0"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium bg-[var(--glass-card)] text-[var(--text-secondary)] border border-[var(--glass-border)] hover:border-[var(--accent)] hover:text-[var(--accent)] backdrop-blur-md transition-all shadow-2xs disabled:opacity-40 shrink-0 cursor-pointer"
           >
             <FiRefreshCw size={11} className={busy ? 'animate-spin' : ''} />
             {tasks.length ? t('homeRefindWork') : t('homeFindWorkAction')}
@@ -222,7 +219,7 @@ export default function AgentHome() {
           {!rootPath ? (
             <EmptyCard
               icon={<FiFolder size={18} />}
-              body={t('homeOpenFolderBody')}
+              title={t('homeOpenFolderTitle')}
               action={{ label: t('openFolder'), onClick: openFolder }}
             />
           ) : showSkeletons ? (
@@ -239,7 +236,7 @@ export default function AgentHome() {
               {tasks.length > 4 && (
                 <button
                   onClick={() => setShowAllTasks((v) => !v)}
-                  className="mt-2 text-[12px] text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors font-medium"
+                  className="mt-2 text-[12px] text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors font-medium cursor-pointer"
                 >
                   {showAllTasks ? t('homeShowLess') : `${t('homeShowMore')} (${tasks.length - 4})`}
                 </button>
@@ -249,7 +246,7 @@ export default function AgentHome() {
             <EmptyCard
               icon={<FiZap size={18} />}
               title={error && error !== 'empty' ? t('homeFindFailed') : t('homeIdleTitle')}
-              body={error && error !== 'empty' ? error : t('homeIdleBody')}
+              body={error && error !== 'empty' ? error : undefined}
               action={model ? { label: t('homeFindWorkAction'), onClick: () => findWork(model.providerId, model.id, true, locale) } : undefined}
             />
           )}
@@ -259,7 +256,7 @@ export default function AgentHome() {
       {/* ---- Tab 2: Project Ideas ---- */}
       {homeTab === 'ideas' && (
         <section className="min-w-0 anim-message">
-          <ProjectIdeas />
+          <ProjectIdeas onCompose={() => setHomeTab('brief')} />
         </section>
       )}
 
@@ -282,7 +279,7 @@ function TaskCard({ task, onStart, t }: { task: SuggestedTask; onStart: () => vo
   return (
     <button
       onClick={onStart}
-      className="group text-left rounded-2xl border border-[var(--glass-border)] bg-[var(--glass-card)]/80 hover:bg-[var(--glass-surface)] backdrop-blur-xl p-4 hover:border-[var(--accent)]/50 hover:shadow-[0_8px_24px_rgba(201,100,66,0.08)] hover:-translate-y-0.5 transition-all flex flex-col gap-2 min-h-[110px] min-w-0 overflow-hidden shadow-2xs cursor-pointer"
+      className="group text-left rounded-xl border border-[var(--glass-border)] bg-[var(--glass-card)] hover:bg-[var(--glass-surface)] p-4 hover:border-[color-mix(in_srgb,var(--accent)_50%,transparent)] hover:shadow-[0_4px_16px_rgba(201,100,66,0.06)] transition-colors flex flex-col gap-2 min-h-[80px] min-w-0 overflow-hidden shadow-2xs cursor-pointer"
     >
       <div className="flex items-start gap-2.5 min-w-0">
         <span className={`shrink-0 w-6 h-6 rounded-lg flex items-center justify-center ${style.bg} ${style.color}`}>
@@ -291,10 +288,6 @@ function TaskCard({ task, onStart, t }: { task: SuggestedTask; onStart: () => vo
         <span className="text-[15px] font-bold text-[var(--text-primary)] font-serif leading-snug flex-1 min-w-0 truncate">{task.title}</span>
         <FiArrowRight size={13} className="shrink-0 mt-0.5 text-[var(--text-muted)] opacity-0 group-hover:opacity-100 group-hover:text-[var(--accent)] transition-all" />
       </div>
-
-      {task.rationale && (
-        <p className="text-[13px] text-[var(--text-secondary)] leading-relaxed line-clamp-2">{task.rationale}</p>
-      )}
 
       <div className="mt-auto flex items-center gap-2 text-[11px] text-[var(--text-muted)] pt-1">
         <span className={`px-2 py-0.5 rounded-md font-medium text-[11px] ${style.bg} ${style.color}`}>{t(`taskKind_${task.kind}`)}</span>
@@ -312,7 +305,7 @@ function TaskCard({ task, onStart, t }: { task: SuggestedTask; onStart: () => vo
  * Skeleton while suggestions load.
  */
 function SkeletonCard() {  return (
-    <div className="rounded-2xl border border-[var(--glass-border)] bg-[var(--glass-card)] backdrop-blur-md p-3.5 anim-shimmer shadow-2xs">
+    <div className="rounded-xl border border-[var(--glass-border)] bg-[var(--glass-card)] p-3.5 anim-shimmer shadow-2xs">
       <div className="flex items-center gap-2">
         <div className="w-6 h-6 rounded-lg bg-[var(--bg-3)]" />
         <div className="h-3 rounded bg-[var(--bg-3)] flex-1" />
@@ -327,16 +320,16 @@ function SkeletonCard() {  return (
 function EmptyCard({
   icon, title, body, action,
 }: {
-  icon: JSX.Element; title?: string; body: string; action?: { label: string; onClick: () => void };
+  icon: JSX.Element; title?: string; body?: string; action?: { label: string; onClick: () => void };
 }) {
   return (
-    <div className="rounded-2xl border border-dashed border-[var(--glass-border)] bg-[var(--glass-card)]/60 backdrop-blur-md p-5 flex flex-col items-center text-center gap-2 shadow-2xs">
+    <div className="rounded-xl border border-dashed border-[var(--glass-border)] bg-[var(--glass-card)] p-5 flex flex-col items-center text-center gap-2 shadow-2xs">
       <span className="text-[var(--text-muted)]">{icon}</span>
       {title && <div className="text-[15.5px] font-bold text-[var(--text-primary)] font-serif tracking-tight">{title}</div>}
-      <p className="text-xs text-[var(--text-muted)] max-w-md leading-relaxed">{body}</p>
+      {body && <p className="text-xs text-[var(--text-muted)] max-w-md leading-relaxed">{body}</p>}
       {action && (
         <button onClick={action.onClick}
-          className="mt-1 inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-[var(--accent)] text-white text-xs font-medium hover:bg-[var(--accent-hover)] shadow-xs transition-colors">
+          className="mt-1 inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-[var(--accent)] text-white text-xs font-medium hover:bg-[var(--accent-hover)] shadow-xs transition-colors cursor-pointer">
           {action.label}
         </button>
       )}

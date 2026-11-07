@@ -7,6 +7,7 @@ import { useLanguageStore, useUIStore } from '../../stores';
 interface ModeSwitchProps {
   value: AgentMode;
   onChange: (mode: AgentMode) => void;
+  compact?: boolean;
 }
 
 const MODE_META: Record<AgentMode, { shortKey: string; labelKey: string; hintKey: string; Icon: IconType }> = {
@@ -24,7 +25,7 @@ const ORDER: AgentMode[] = ['standard', 'goal'];
  * row that opens a small upward popup with the four modes. Replaces the old
  * mode rows buried in the + menu — one tap, no menu diving.
  */
-export default function ModeSwitch({ value, onChange }: ModeSwitchProps) {
+export default function ModeSwitch({ value, onChange, compact = false }: ModeSwitchProps) {
   const { t } = useLanguageStore();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -63,18 +64,20 @@ export default function ModeSwitch({ value, onChange }: ModeSwitchProps) {
         aria-label={t('modeMenu')}
         aria-haspopup="dialog"
         aria-expanded={open}
-        className={`flex items-center h-8 pl-1.5 pr-2.5 rounded-full border transition-all backdrop-blur-md shadow-2xs cursor-pointer ${
+        className={`flex items-center h-8 ${compact ? 'w-8 justify-center px-0' : 'pl-1.5 pr-2.5'} rounded-full border transition-all backdrop-blur-md shadow-2xs cursor-pointer ${
           open || active
-            ? 'bg-[var(--accent-soft)] border-[var(--accent)]/50 text-[var(--accent)] font-medium shadow-xs'
+            ? 'bg-[var(--accent-soft)] border-[color-mix(in_srgb,var(--accent)_50%,transparent)] text-[var(--accent)] font-medium shadow-xs'
             : 'bg-[var(--glass-card)] hover:bg-[var(--bg-2)] border-[var(--glass-border)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
         }`}
       >
         {/* keyed remount → the label pops on every mode change */}
-        <span key={effectiveMode} className="flex items-center gap-2 anim-pop">
-          <span className="w-5 h-5 rounded-full bg-[var(--accent-soft)] text-[var(--accent)] flex items-center justify-center shrink-0">
-            <Meta.Icon size={11} />
+        <span key={effectiveMode} className={`flex items-center ${compact ? 'justify-center' : 'gap-2'} anim-pop`}>
+          <span className={`w-5 h-5 rounded-full ${compact ? '' : 'bg-[var(--accent-soft)] text-[var(--accent)]'} flex items-center justify-center shrink-0`}>
+            <Meta.Icon size={compact ? 13 : 11} className={compact ? (active ? 'text-[var(--accent)]' : 'text-[var(--text-secondary)]') : ''} />
           </span>
-          <span className="text-[11px] font-semibold whitespace-nowrap">{t(Meta.shortKey)}</span>
+          {!compact && (
+            <span className="text-[11px] font-semibold whitespace-nowrap">{t(Meta.shortKey)}</span>
+          )}
         </span>
       </button>
 

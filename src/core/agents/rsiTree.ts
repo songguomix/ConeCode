@@ -84,6 +84,7 @@ export interface AppendOutcome {
 }
 
 function validateRecord(rec: ExperimentRecord): string | null {
+  if (!rec || typeof rec !== 'object' || Array.isArray(rec)) return 'record must be an object';
   if (!rec.id || !rec.id.trim()) return 'id must be non-empty';
   if (!rec.baselineId || !rec.baselineId.trim()) return 'baselineId must be non-empty';
   if (!rec.candidateId || !rec.candidateId.trim()) return 'candidateId must be non-empty';
@@ -96,14 +97,14 @@ function validateRecord(rec: ExperimentRecord): string | null {
     if (typeof v !== 'number' || !Number.isFinite(v)) return `metric ${k} must be a finite number`;
   }
   if (typeof rec.reward !== 'number' || !Number.isFinite(rec.reward)) return 'reward must be finite';
-  if (typeof rec.costUsd !== 'number' || !(rec.costUsd >= 0)) return 'costUsd must be >= 0';
+  if (!Number.isFinite(rec.costUsd) || !(rec.costUsd >= 0)) return 'costUsd must be finite and >= 0';
   if (!Number.isInteger(rec.costSteps) || rec.costSteps < 0) return 'costSteps must be a non-negative integer';
-  if (typeof rec.budgetUsd !== 'number' || !(rec.budgetUsd >= 0)) return 'budgetUsd must be >= 0';
+  if (!Number.isFinite(rec.budgetUsd) || !(rec.budgetUsd >= 0)) return 'budgetUsd must be finite and >= 0';
   if (!Number.isInteger(rec.attempts) || rec.attempts < 1) return 'attempts must be a positive integer';
   if (rec.status !== 'accepted' && rec.status !== 'rejected' && rec.status !== 'rolled-back' && rec.status !== 'failed') {
     return `unknown status: ${String(rec.status)}`;
   }
-  if (typeof rec.timestamp !== 'number' || !(rec.timestamp >= 0)) return 'timestamp must be >= 0';
+  if (!Number.isFinite(rec.timestamp) || !(rec.timestamp >= 0)) return 'timestamp must be finite and >= 0';
   return null;
 }
 

@@ -244,7 +244,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     const { useChatStore } = await import('./chat.store');
     const { useModelStore } = await import('./model.store');
     const model = useModelStore.getState().getSelectedModel();
-    await useChatStore.getState().createConversation(model?.providerId || '', model?.id || '');
+    await useChatStore.getState().newConversation(model?.providerId || '', model?.id || '', folderPath);
     if (!await get().openFolderPath(folderPath)) return;
     await useChatStore.getState().setConversationFolder(folderPath);
   },
@@ -595,6 +595,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     if (cached) return cached;
     const roots = get().allRoots();
     if (!roots.length) return [];
+    const filesAtStart = get().files;
 
     // One glob per open folder. Each result is labelled by displayPath, so a
     // file from a second folder completes as "api/src/main.ts" rather than a
@@ -603,6 +604,12 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     const perRoot = await Promise.all(roots.map((root) =>
       window.electronAPI.fs.glob({ pattern: '**/*', dir: root, maxResults: budget }),
     ));
+    // A scan can finish after switching projects or refreshing the tree. Never
+    // publish paths from that old snapshot into the current mention picker.
+    const currentRoots = get().allRoots();
+    if (get().files !== filesAtStart || roots.length !== currentRoots.length || roots.some((root, i) => root !== currentRoots[i])) {
+      return get().fileList ?? [];
+    }
     const rel = perRoot.flatMap((part) => part.files).map((p) => displayPath(p, roots));
     set({ fileList: rel });
     return rel;

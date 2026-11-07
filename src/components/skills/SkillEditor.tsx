@@ -39,7 +39,7 @@ export default function SkillEditor({
   // The gate: nothing can be authored until the risk is acknowledged once.
   if (!acknowledged) {
     return (
-      <div className="rounded-xl border border-[var(--warning)]/50 bg-[var(--warning)]/5 p-4">
+      <div className="rounded-xl border border-[color-mix(in_srgb,var(--warning)_50%,transparent)] bg-[color-mix(in_srgb,var(--warning)_5%,transparent)] p-4">
         <div className="flex items-center gap-2 mb-2">
           <FiAlertTriangle size={14} className="text-[var(--warning)]" />
           <span className="text-sm font-semibold text-[var(--text-primary)]">{t('skillRiskTitle')}</span>
@@ -49,7 +49,7 @@ export default function SkillEditor({
         <div className="mt-3 flex items-center gap-2">
           <button
             onClick={() => updateSettings({ customSkillsAcknowledged: true })}
-            className="px-3 py-1.5 rounded-lg bg-[var(--warning)]/20 border border-[var(--warning)]/40 text-xs font-semibold text-[var(--warning)] hover:bg-[var(--warning)]/30"
+            className="px-3 py-1.5 rounded-lg bg-[color-mix(in_srgb,var(--warning)_20%,transparent)] border border-[color-mix(in_srgb,var(--warning)_40%,transparent)] text-xs font-semibold text-[var(--warning)] hover:bg-[color-mix(in_srgb,var(--warning)_30%,transparent)]"
           >
             {t('skillRiskAccept')}
           </button>
@@ -83,23 +83,23 @@ export default function SkillEditor({
     if (await saveCustom(draft, scope, editingId)) onClose();
   };
 
-  const field = 'w-full px-2.5 py-1.5 rounded-lg bg-[var(--bg-3)] border text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)]';
+  const field = 'w-full min-w-0 px-2.5 py-1.5 rounded-lg bg-[var(--bg-1)] border text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)]';
   const border = (bad?: string) => (touched && bad ? 'border-[var(--error)]' : 'border-[var(--border)]');
 
   return (
-    <div className="rounded-xl border border-[var(--accent)]/40 bg-[var(--bg-2)] p-3 space-y-2">
+    <div className="min-w-0 rounded-xl border border-[color-mix(in_srgb,var(--accent)_40%,transparent)] bg-[var(--bg-2)] p-3 space-y-2">
       <div className="flex items-center gap-2">
         <span className="text-xs font-semibold text-[var(--text-primary)]">
           {editingId ? t('skillEdit') : t('skillNew')}
         </span>
-        <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--warning)]/15 text-[var(--warning)]">
+        <span className="text-[10px] px-1.5 py-0.5 rounded bg-[color-mix(in_srgb,var(--warning)_15%,transparent)] text-[var(--warning)]">
           {t('skillCustomBadge')}
         </span>
         <button onClick={importFile}
           className="ml-auto inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-[var(--bg-3)] text-[10px] text-[var(--text-secondary)] hover:text-[var(--accent)] border border-[var(--border)]">
           <FiUpload size={10} /> {t('skillImport')}
         </button>
-        <button onClick={onClose} className="p-1 rounded text-[var(--text-muted)] hover:text-[var(--text-primary)]">
+        <button onClick={onClose} className="p-1 rounded text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-3)]">
           <FiX size={13} />
         </button>
       </div>

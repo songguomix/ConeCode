@@ -656,7 +656,7 @@ export default function EditorPanel() {
           <button
             onClick={() => selectedFile && clearAiFile(selectedFile)}
             title={t('clearAiMarks')}
-            className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-[var(--success)]/15 text-[var(--success)] text-[10px] font-medium hover:bg-[var(--success)]/25 transition-colors"
+            className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-[color-mix(in_srgb,var(--success)_15%,transparent)] text-[var(--success)] text-[10px] font-medium hover:bg-[color-mix(in_srgb,var(--success)_25%,transparent)] transition-colors"
           >
             <span className="w-1.5 h-1.5 rounded-full bg-[var(--success)]" />
             {t('aiChanges')} · {aiCount} · {t('clear')}
@@ -678,7 +678,7 @@ export default function EditorPanel() {
             }}
             placeholder={t('find')}
             spellCheck={false}
-            className="w-40 bg-[var(--bg-2)] border border-[var(--border)] rounded-lg px-2 py-1 text-[12px] outline-none focus:border-[var(--accent)]"
+            className="search-input w-40 bg-[var(--bg-2)] border border-[var(--border)] rounded-lg px-2 py-1 text-[12px] outline-none focus:border-[var(--accent)]"
           />
           {find.replaceOpen && (
             <input
@@ -686,32 +686,32 @@ export default function EditorPanel() {
               onChange={(e) => setFind((f) => ({ ...f, replace: e.target.value }))}
               placeholder={t('replace')}
               spellCheck={false}
-              className="w-32 bg-[var(--bg-2)] border border-[var(--border)] rounded-lg px-2 py-1 text-[12px] outline-none focus:border-[var(--accent)]"
+              className="search-input w-32 bg-[var(--bg-2)] border border-[var(--border)] rounded-lg px-2 py-1 text-[12px] outline-none focus:border-[var(--accent)]"
             />
           )}
           <span className="text-[11px] text-[var(--text-muted)] min-w-[48px] text-center">
             {find.query ? `${matches.length ? Math.min(find.index + 1, matches.length) : 0}/${matches.length}` : ''}
           </span>
-          <button onClick={() => stepMatch(-1)} title={t('findPrev')} className="p-1 rounded hover:bg-[var(--bg-3)] text-[var(--text-muted)]">
+          <button onClick={() => stepMatch(-1)} title={t('findPrev')} className="p-1 rounded hover:bg-[var(--bg-3)] text-[var(--text-muted)] cursor-pointer">
             <FiChevronUp size={13} />
           </button>
-          <button onClick={() => stepMatch(1)} title={t('findNext')} className="p-1 rounded hover:bg-[var(--bg-3)] text-[var(--text-muted)]">
+          <button onClick={() => stepMatch(1)} title={t('findNext')} className="p-1 rounded hover:bg-[var(--bg-3)] text-[var(--text-muted)] cursor-pointer">
             <FiChevronDown size={13} />
           </button>
           <button onClick={() => setFind((f) => ({ ...f, matchCase: !f.matchCase }))}
             title={t('matchCase')}
-            className={`px-1.5 py-0.5 rounded text-[11px] font-mono ${find.matchCase ? 'bg-[var(--accent-soft)] text-[var(--accent)]' : 'text-[var(--text-muted)] hover:bg-[var(--bg-3)]'}`}>
+            className={`px-1.5 py-0.5 rounded text-[11px] font-mono cursor-pointer transition-colors ${find.matchCase ? 'bg-[var(--accent-soft)] text-[var(--accent)]' : 'text-[var(--text-muted)] hover:bg-[var(--bg-3)]'}`}>
             Aa
           </button>
           {find.replaceOpen && (
             <>
-              <button onClick={replaceCurrent} className="px-2 py-0.5 rounded text-[11px] bg-[var(--bg-3)] hover:bg-[var(--bg-4)]">{t('replaceOne')}</button>
-              <button onClick={replaceAll} className="px-2 py-0.5 rounded text-[11px] bg-[var(--bg-3)] hover:bg-[var(--bg-4)]">{t('replaceAll')}</button>
+              <button onClick={replaceCurrent} className="px-2 py-0.5 rounded text-[11px] bg-[var(--bg-3)] hover:bg-[var(--bg-4)] cursor-pointer transition-colors">{t('replaceOne')}</button>
+              <button onClick={replaceAll} className="px-2 py-0.5 rounded text-[11px] bg-[var(--bg-3)] hover:bg-[var(--bg-4)] cursor-pointer transition-colors">{t('replaceAll')}</button>
             </>
           )}
           <button onClick={() => setFind((f) => ({ ...f, replaceOpen: !f.replaceOpen }))} title={t('toggleReplace')}
-            className="px-1.5 py-0.5 rounded text-[11px] text-[var(--text-muted)] hover:bg-[var(--bg-3)]">.*</button>
-          <button onClick={() => setFind((f) => ({ ...f, open: false }))} className="p-1 rounded hover:bg-[var(--bg-3)] text-[var(--text-muted)]">
+            className="px-1.5 py-0.5 rounded text-[11px] text-[var(--text-muted)] hover:bg-[var(--bg-3)] cursor-pointer transition-colors">.*</button>
+          <button onClick={() => setFind((f) => ({ ...f, open: false }))} className="p-1 rounded hover:bg-[var(--bg-3)] text-[var(--text-muted)] cursor-pointer">
             <FiX size={13} />
           </button>
         </div>
@@ -733,8 +733,8 @@ export default function EditorPanel() {
             spellCheck={false}
             className="w-44 bg-[var(--bg-2)] border border-[var(--border)] rounded-lg px-2 py-1 text-[12px] outline-none focus:border-[var(--accent)]"
           />
-          <button onClick={() => gotoValue && gotoLine(Number(gotoValue))} className="px-2 py-1 rounded text-[11px] bg-[var(--bg-3)] hover:bg-[var(--bg-4)]">{t('goToLine')}</button>
-          <button onClick={() => setGotoOpen(false)} className="p-1 rounded hover:bg-[var(--bg-3)] text-[var(--text-muted)]">
+          <button onClick={() => gotoValue && gotoLine(Number(gotoValue))} className="px-2 py-1 rounded text-[11px] bg-[var(--bg-3)] hover:bg-[var(--bg-4)] cursor-pointer transition-colors">{t('goToLine')}</button>
+          <button onClick={() => setGotoOpen(false)} className="p-1 rounded hover:bg-[var(--bg-3)] text-[var(--text-muted)] cursor-pointer">
             <FiX size={13} />
           </button>
         </div>
@@ -783,7 +783,7 @@ export default function EditorPanel() {
                   const isActive = n === cursorLine;
                   return (
                     <div key={idx} style={{ height: LINE_H }}
-                      className={`${isAi ? 'bg-[var(--success)]/15' : ''} ${isActive ? (isAi ? '' : 'bg-[var(--bg-1)]') : ''}`} />
+                      className={`${isAi ? 'bg-[color-mix(in_srgb,var(--success)_15%,transparent)]' : ''} ${isActive ? (isAi ? '' : 'bg-[var(--bg-1)]') : ''}`} />
                   );
                 })}
               </div>
@@ -846,7 +846,7 @@ export default function EditorPanel() {
                     <button key={`${item.kind}:${item.label}:${i}`} data-idx={i}
                       onClick={() => acceptSuggest(item)}
                       onMouseEnter={() => setSuggest((s) => (s ? { ...s, index: i } : s))}
-                      className={`w-full h-[26px] flex items-center gap-2 px-2.5 text-left text-[12px] ${i === suggest.index ? 'bg-[var(--accent-soft)]' : ''}`}>
+                      className={`w-full h-[26px] flex items-center gap-2 px-2.5 text-left text-[12px] cursor-pointer ${i === suggest.index ? 'bg-[var(--accent-soft)]' : ''}`}>
                       <span className={`w-4 h-4 rounded text-[10px] font-bold flex items-center justify-center shrink-0 ${KIND_BADGE[item.kind]}`}>
                         {item.kind[0].toUpperCase()}
                       </span>
@@ -870,18 +870,18 @@ export default function EditorPanel() {
             <span className="font-medium text-[var(--text-primary)]">{t('problems')} · {problems.length}</span>
             <span className="flex-1" />
             <button onClick={handleFixAll}
-              className="px-2 py-0.5 rounded bg-[var(--bg-3)] hover:bg-[var(--bg-4)] text-[var(--text-secondary)]">
+              className="px-2 py-0.5 rounded bg-[var(--bg-3)] hover:bg-[var(--bg-4)] text-[var(--text-secondary)] cursor-pointer transition-colors">
               {t('fixAll')}
             </button>
             <button onClick={() => setProblemsOpen(false)}
-              className="p-1 rounded hover:bg-[var(--bg-3)] text-[var(--text-muted)]">
+              className="p-1 rounded hover:bg-[var(--bg-3)] text-[var(--text-muted)] cursor-pointer transition-colors">
               <FiX size={13} />
             </button>
           </div>
           <div className="overflow-y-auto px-1 pb-1">
             {problems.slice(0, 100).map((d, i) => (
               <button key={i} onClick={() => jumpToPos(d.line, d.col)}
-                className="w-full flex items-center gap-2 px-2 py-0.5 rounded text-left text-[11px] hover:bg-[var(--bg-3)] text-[var(--text-secondary)]">
+                className="w-full flex items-center gap-2 px-2 py-0.5 rounded text-left text-[11px] hover:bg-[var(--bg-3)] text-[var(--text-secondary)] cursor-pointer transition-colors">
                 <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${d.severity === 'error' ? 'bg-[var(--error)]' : 'bg-[var(--warning)]'}`} />
                 <span className="flex-1 truncate">{d.message}</span>
                 <span className="text-[var(--text-muted)] font-mono shrink-0">Ln {d.line}, Col {d.col}</span>
@@ -902,7 +902,7 @@ export default function EditorPanel() {
           <span className="flex-1" />
           {(errCount > 0 || warnCount > 0) && (
             <button onClick={() => setProblemsOpen((o) => !o)}
-              className="shrink-0 inline-flex items-center gap-2 hover:opacity-80">
+              className="shrink-0 inline-flex items-center gap-2 hover:opacity-80 cursor-pointer">
               {errCount > 0 && (
                 <span className="inline-flex items-center gap-1 text-[var(--error)]">
                   <span className="w-1.5 h-1.5 rounded-full bg-[var(--error)]" />{errCount}
@@ -918,7 +918,7 @@ export default function EditorPanel() {
           {modified && <span className="shrink-0 inline-flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-[var(--warning)]" />{t('unsaved')}</span>}
           {aiCount > 0 && (
             <button onClick={() => selectedFile && clearAiFile(selectedFile)}
-              className="shrink-0 inline-flex items-center gap-1 text-[var(--success)] hover:opacity-80">
+              className="shrink-0 inline-flex items-center gap-1 text-[var(--success)] hover:opacity-80 cursor-pointer">
               <span className="w-1.5 h-1.5 rounded-full bg-[var(--success)]" />
               {aiCount} {t('aiChangesShort')}
             </button>
@@ -942,8 +942,8 @@ function formatSize(bytes: number): string {
 
 const KIND_BADGE: Record<string, string> = {
   snippet: 'bg-[var(--accent)] text-white',
-  keyword: 'bg-[var(--syntax-keyword)]/20 text-[var(--syntax-keyword)]',
-  path: 'bg-[var(--syntax-type)]/20 text-[var(--syntax-type)]',
+  keyword: 'bg-[color-mix(in_srgb,var(--syntax-keyword)_20%,transparent)] text-[var(--syntax-keyword)]',
+  path: 'bg-[color-mix(in_srgb,var(--syntax-type)_20%,transparent)] text-[var(--syntax-type)]',
   word: 'bg-[var(--bg-4)] text-[var(--text-muted)]',
-  property: 'bg-[var(--syntax-property)]/20 text-[var(--syntax-property)]',
+  property: 'bg-[color-mix(in_srgb,var(--syntax-property)_20%,transparent)] text-[var(--syntax-property)]',
 };

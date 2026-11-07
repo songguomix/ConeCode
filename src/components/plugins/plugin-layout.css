@@ -1,0 +1,5 @@
+/* Keep confirmation content accessible in short or narrow windows. */
+.plugin-dialog {
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+}

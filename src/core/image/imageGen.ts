@@ -193,6 +193,20 @@ function toDataUrl(b64: string): string {
   return `data:image/png;base64,${b64}`;
 }
 
+/** Keep streamed errors actionable without exposing upstream messages or keys. */
+function imageStreamError(data: any): Error {
+  const error = data?.error ?? data;
+  const declaredStatus = Number(error?.status ?? error?.status_code);
+  const status = error?.code === 'free_rate_limited' ? 429
+    : error?.code === 'free_request_too_large' ? 413
+      : Number.isInteger(declaredStatus) && declaredStatus >= 400 && declaredStatus <= 599 ? declaredStatus : 502;
+  const message = status === 429 ? '请求过于频繁，请稍后重试。'
+    : status === 413 ? '请求过大，请减少图片或提示词内容后重试。'
+      : status === 401 || status === 403 ? '图像服务验证失败，请检查服务配置。'
+        : '图像生成失败，请稍后重试。';
+  return new Error(`${message} (HTTP ${status})`);
+}
+
 /** Parse the SSE stream of a streaming images request. */
 async function readImageStream(
   res: Response,
@@ -203,9 +217,12 @@ async function readImageStream(
   const decoder = new TextDecoder();
   let pending = '';
   let finalUrl: string | null = null;
+  let eventType = '';
 
   const handle = (line: string) => {
     const trimmed = line.trim();
+    if (!trimmed) { eventType = ''; return; }
+    if (trimmed.startsWith('event:')) { eventType = trimmed.slice(6).trim(); return; }
     if (!trimmed.startsWith('data:')) return;
     const data = trimmed.slice(5).trim();
     if (!data || data === '[DONE]') return;
@@ -213,8 +230,10 @@ async function readImageStream(
     try {
       parsed = JSON.parse(data);
     } catch {
+      if (eventType === 'error') throw imageStreamError(null);
       return;
     }
+    if (parsed?.error || parsed?.type === 'error' || eventType === 'error') throw imageStreamError(parsed);
     const b64 = parsed?.b64_json || parsed?.partial_image?.b64_json || parsed?.image?.b64_json;
     if (!b64) return;
     const type = String(parsed?.type || '');
@@ -237,6 +256,7 @@ async function readImageStream(
     pending += decoder.decode();
     if (pending.trim()) handle(pending);
   } finally {
+    await reader.cancel().catch(() => {});
     try { reader.releaseLock(); } catch { /* already released */ }
   }
   return finalUrl;

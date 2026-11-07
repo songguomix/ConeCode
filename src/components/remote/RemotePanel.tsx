@@ -152,28 +152,28 @@ export default function RemotePanel() {
 
   return (
     <>
-      <div className="fixed inset-0 z-40" onClick={closeRemote} />
-      <div className="fixed left-4 bottom-4 top-[96px] z-50 w-[340px] flex flex-col bg-[var(--bg-1)] border border-[var(--border)] rounded-2xl shadow-2xl overflow-hidden">
+      <div className="fixed inset-0 z-40 bg-black/20 backdrop-blur-xs" onClick={closeRemote} />
+      <div className="fixed left-4 bottom-4 top-[96px] z-50 w-[340px] max-w-[calc(100vw-2rem)] max-h-[calc(100dvh-112px)] flex flex-col bg-[var(--glass-surface)] backdrop-blur-2xl border border-[var(--glass-border)] rounded-2xl shadow-2xl overflow-hidden anim-menu ring-1 ring-black/5 dark:ring-white/10">
         {/* Header */}
-        <div className="flex items-center gap-2 px-4 py-3 shrink-0 border-b border-[var(--border)]">
+        <div className="flex items-center gap-2 px-4 py-3 shrink-0 border-b border-[var(--glass-border)]">
           <FiSmartphone size={16} className="text-[var(--accent)]" />
-          <span className="flex-1 text-[13px] font-medium text-[var(--text-primary)]">{t('remoteControl')}</span>
-          <span className={`flex items-center gap-1.5 text-[11px] ${st.running ? 'text-[var(--accent)]' : 'text-[var(--text-muted)]'}`}>
+          <span className="flex-1 min-w-0 text-[13.5px] font-serif font-bold text-[var(--text-primary)] tracking-tight">{t('remoteControl')}</span>
+          <span className={`shrink-0 flex items-center gap-1.5 text-[11px] ${st.running ? 'text-[var(--accent)]' : 'text-[var(--text-muted)]'}`}>
             <span className="w-1.5 h-1.5 rounded-full" style={{ background: st.running ? 'var(--accent)' : 'var(--text-muted)' }} />
             {st.running ? t('serverOnline') : t('serverOff')}
           </span>
-          <button onClick={closeRemote}
-            className="p-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-3)] transition-colors">
+          <button aria-label={t('close')} onClick={closeRemote}
+            className="p-1 shrink-0 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-3)] transition-colors cursor-pointer">
             <FiX size={16} />
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
+        <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3.5 space-y-4 [overflow-wrap:anywhere]">
           <p className="text-[12px] leading-relaxed text-[var(--text-muted)]">{t('remoteDesc')}</p>
 
           {/* Start / stop */}
           <button onClick={toggleServer} disabled={busy}
-            className={`w-full py-2.5 rounded-xl text-[13px] font-medium transition-colors disabled:opacity-50 ${
+            className={`w-full py-2.5 rounded-xl text-[13px] font-medium transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 ${
               st.running
                 ? 'bg-[var(--bg-3)] text-[var(--text-secondary)] hover:bg-[var(--bg-4)]'
                 : 'bg-[var(--accent)] text-white hover:opacity-90'
@@ -215,7 +215,7 @@ export default function RemotePanel() {
                   <div className="text-[11px] uppercase tracking-wide text-[var(--text-muted)]">{t('lanAddress')}</div>
                   {st.lanUrls.map((url) => (
                     <button key={url} onClick={() => copy(url)}
-                      className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-[var(--bg-2)] hover:bg-[var(--bg-3)] transition-colors text-left">
+                      className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-[var(--bg-2)] hover:bg-[var(--bg-3)] transition-colors text-left cursor-pointer">
                       <span className="flex-1 truncate font-[var(--font-mono)] text-[11px] text-[var(--text-secondary)]">{url}</span>
                       {copied === url ? <FiCheck size={13} className="text-[var(--accent)]" /> : <FiCopy size={13} className="text-[var(--text-muted)]" />}
                     </button>
@@ -239,7 +239,7 @@ export default function RemotePanel() {
                     <>
                       <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">{t('cfdAdaptiveHint')}</p>
                       <button onClick={installCloudflared} disabled={cfdInstalling}
-                        className="w-full flex items-center justify-center gap-2 py-1.5 rounded-lg bg-[var(--bg-3)] hover:bg-[var(--bg-4)] text-[12px] text-[var(--text-secondary)] transition-colors disabled:opacity-50">
+                        className="w-full flex items-center justify-center gap-2 py-1.5 rounded-lg bg-[var(--bg-3)] hover:bg-[var(--bg-4)] text-[12px] text-[var(--text-secondary)] transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-50">
                         {cfdInstalling ? t('cfdInstalling') : t('cfdInstall')}
                       </button>
                       {cfdMsg && <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">{cfdMsg}</p>}
@@ -267,7 +267,7 @@ export default function RemotePanel() {
                       </select>
                       <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">{t('ngrokHint')}</p>
                       <button onClick={installNgrok} disabled={ngrokInstalling}
-                        className="w-full flex items-center justify-center gap-2 py-1.5 rounded-lg bg-[var(--bg-3)] hover:bg-[var(--bg-4)] text-[12px] text-[var(--text-secondary)] transition-colors disabled:opacity-50">
+                        className="w-full flex items-center justify-center gap-2 py-1.5 rounded-lg bg-[var(--bg-3)] hover:bg-[var(--bg-4)] text-[12px] text-[var(--text-secondary)] transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-50">
                         {ngrokInstalling ? t('ngrokInstalling') : t('ngrokInstall')}
                       </button>
                       {ngrokMsg && <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">{ngrokMsg}</p>}
@@ -289,7 +289,7 @@ export default function RemotePanel() {
               {/* Public link / tunnel */}
               {st.tunnelUrl ? (
                 <button onClick={() => copy(st.tunnelUrl!)}
-                  className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg bg-[var(--accent-soft)] border border-[var(--accent)] transition-colors text-left">
+                  className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg bg-[var(--accent-soft)] border border-[var(--accent)] transition-colors text-left cursor-pointer">
                   <FiGlobe size={13} className="text-[var(--accent)] shrink-0" />
                   <span className="flex-1 truncate font-[var(--font-mono)] text-[11px] text-[var(--accent)]">{st.tunnelUrl}</span>
                   {copied === st.tunnelUrl ? <FiCheck size={13} className="text-[var(--accent)]" /> : <FiCopy size={13} className="text-[var(--accent)]" />}
@@ -297,7 +297,7 @@ export default function RemotePanel() {
               ) : (
                 <>
                   <button onClick={openTunnel} disabled={tunnelBusy || !passwordValid(password)}
-                    className="w-full flex items-center justify-center gap-2 py-2 rounded-xl border border-[var(--border)] text-[12px] text-[var(--text-secondary)] hover:bg-[var(--bg-3)] transition-colors disabled:opacity-50">
+                    className="w-full flex items-center justify-center gap-2 py-2 rounded-xl border border-[var(--border)] text-[12px] text-[var(--text-secondary)] hover:bg-[var(--bg-3)] transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-50">
                     <FiGlobe size={13} />
                     {tunnelBusy ? t('tunnelStarting') : t('publicLink')}
                   </button>
@@ -334,7 +334,7 @@ export default function RemotePanel() {
                       <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)] shrink-0" />
                       <span className="flex-1 truncate font-[var(--font-mono)] text-[11px] text-[var(--text-secondary)]">{d.ip}</span>
                       <button onClick={() => kick(d.id)}
-                        className="text-[11px] text-[var(--error)] hover:underline shrink-0">{t('kickDevice')}</button>
+                        className="text-[11px] text-[var(--error)] hover:underline shrink-0 cursor-pointer">{t('kickDevice')}</button>
                     </div>
                   ))
                 ) : (

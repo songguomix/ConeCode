@@ -121,6 +121,52 @@ describe('auto-retry on transient stream failures', () => {
     expect(useChatStore.getState().continuableConvId).toBeNull();
   });
 
+  it('hides the interrupted attempt reasoning while reconnecting', async () => {
+    retryTiming.baseMs = 200;
+    let attempts = 0;
+    window.electronAPI.chat.stream = vi.fn(async (params: any) => {
+      streamCalls.push(params);
+      attempts += 1;
+      if (attempts === 1) {
+        // Simulate reasoning + text that reached the live view before the drop.
+        useChatStore.setState((s) => ({
+          streamingRuns: {
+            ...s.streamingRuns,
+            conv1: {
+              ...s.streamingRuns.conv1!,
+              content: 'partial reply ',
+              reasoningContent: 'reasoning from the dropped attempt',
+              status: 'thinking',
+            },
+          },
+        }));
+        throw new Error('fetch failed: socket hang up');
+      }
+      return {
+        choices: [{
+          message: { role: 'assistant', content: 'recovered', reasoning_content: 'fresh reasoning' },
+          finish_reason: 'stop',
+        }],
+      };
+    });
+
+    const send = useChatStore.getState().sendMessage('hi', 'p1', 'gpt-test');
+
+    // The retry pill is live, but the interrupted attempt's thinking is gone
+    // (the stitched reply text stays so the user keeps watching it arrive).
+    await vi.waitFor(() => expect(useChatStore.getState().streamingRuns.conv1?.retry)
+      .toEqual({ attempt: 1, max: 3 }));
+    expect(useChatStore.getState().streamingRuns.conv1?.reasoningContent).toBe('');
+    expect(useChatStore.getState().streamingRuns.conv1?.content).toBe('partial reply ');
+
+    await send;
+    const reply = assistantReplies()[0];
+    expect(reply?.content).toBe('partial reply recovered');
+    // Only the successful attempt's thinking is kept on the final message.
+    expect(reply?.reasoning_content).toBe('fresh reasoning');
+    expect(useChatStore.getState().streamingRuns.conv1).toBeUndefined();
+  });
+
   it('retries the whole iteration with the turn budget after per-stream retries run out', async () => {
     retryTiming.baseMs = 30;
     // Every per-stream attempt fails: 3 inner attempts per budget round.
@@ -179,51 +225,68 @@ describe('auto-retry on transient stream failures', () => {
     expect(streamCalls).toHaveLength(1);
     expect(useChatStore.getState().error).toBeTruthy();
   });
-});
 
-describe('RSI mode retries until the user stops', () => {
-  it('keeps retrying past the normal 9-attempt budget until the endpoint recovers', async () => {
-    resetStores({ rsi: true });
-    retryTiming.baseMs = 5;
-    let attempts = 0;
+  it.each([429, 500, 502, 503, 504])('retries a sanitized free-relay HTTP %s error across the IPC message boundary', async (status) => {
+    retryTiming.baseMs = 1;
     window.electronAPI.chat.stream = vi.fn(async (params: any) => {
       streamCalls.push(params);
-      attempts += 1;
-      if (attempts <= 12) throw new Error('fetch failed');
-      return textResponse('finally up');
+      if (streamCalls.length === 1) throw new Error(`ConeCode Free 暂时不可用，请稍后重试。 (HTTP ${status})`);
+      return textResponse('recovered');
     });
-
-    const send = useChatStore.getState().sendMessage('hi', 'p1', 'gpt-test');
-    // Open-ended retry: the pill counts attempts with NO max to reach.
-    await vi.waitFor(() => {
-      const retry = useChatStore.getState().streamingRuns.conv1?.retry;
-      expect(retry?.attempt ?? 0).toBeGreaterThanOrEqual(10);
-      expect(retry?.max).toBeNull();
-    });
-
-    await send;
-    expect(streamCalls).toHaveLength(13);
-    const reply = assistantReplies()[0];
-    expect(reply?.content).toBe('finally up');
-    expect(reply?.interrupted).toBeFalsy();
+    await useChatStore.getState().sendMessage('hi', 'p1', 'gpt-test');
+    expect(streamCalls).toHaveLength(2);
+    expect(assistantReplies()[0]?.content).toBe('recovered');
   });
 
-  it('retries even non-transient errors — a fix applied mid-run gets picked up', async () => {
-    resetStores({ rsi: true });
-    retryTiming.baseMs = 5;
-    let attempts = 0;
+  it('falls back to prompt tools when the free relay reports its safe unsupported-tools error', async () => {
     window.electronAPI.chat.stream = vi.fn(async (params: any) => {
       streamCalls.push(params);
-      attempts += 1;
-      if (attempts <= 4) throw new Error('400 bad request');
-      return textResponse('recovered after fix');
+      if (streamCalls.length === 1) throw new Error('ConeCode Free: tools are not supported by this model. (HTTP 400)');
+      return textResponse('done');
+    });
+    await useChatStore.getState().sendMessage('hi', 'p1', 'gpt-test');
+    expect(streamCalls).toHaveLength(2);
+    expect(streamCalls[0].tools?.length).toBeGreaterThan(0);
+    expect(streamCalls[1].tools).toBeUndefined();
+  });
+
+  it('respects the advertised output limit for reasoning models', async () => {
+    useModelStore.setState({ models: new Map([['p1', [{ ...model, supportsReasoning: true, maxOutputTokens: 8192 }]]]) });
+    await useChatStore.getState().sendMessage('hi', 'p1', 'gpt-test');
+    expect(streamCalls[0].maxTokens).toBe(8192);
+  });
+});
+
+describe('RSI mode uses bounded retries', () => {
+  it('stops after nine transient failures and records a failed execution', async () => {
+    resetStores({ rsi: true });
+    retryTiming.baseMs = 1;
+    window.electronAPI.chat.stream = vi.fn(async (params: any) => {
+      streamCalls.push(params);
+      throw new Error('fetch failed');
     });
 
-    await useChatStore.getState().sendMessage('hi', 'p1', 'gpt-test');
+    await useChatStore.getState().sendMessage('run', 'p1', 'gpt-test', { rsiExecution: true });
 
-    // Normal mode gives up on the first non-transient error; RSI does not.
-    expect(streamCalls).toHaveLength(5);
-    expect(assistantReplies()[0]?.content).toBe('recovered after fix');
+    expect(streamCalls).toHaveLength(9);
+    expect(assistantReplies()).toHaveLength(0);
+    expect(useChatStore.getState().conversations[0].rsi?.runs[0].status).toBe('failed');
+    expect(useChatStore.getState().continuableConvId).toBe('conv1');
+  });
+
+  it.each(['400 bad request', '401 Invalid API key'])('does not retry a permanent error: %s', async (error) => {
+    resetStores({ rsi: true });
+    retryTiming.baseMs = 1;
+    window.electronAPI.chat.stream = vi.fn(async (params: any) => {
+      streamCalls.push(params);
+      throw new Error(error);
+    });
+
+    await useChatStore.getState().sendMessage('run', 'p1', 'gpt-test', { rsiExecution: true });
+
+    expect(streamCalls).toHaveLength(1);
+    expect(assistantReplies()).toHaveLength(0);
+    expect(useChatStore.getState().conversations[0].rsi?.runs[0].status).toBe('failed');
   });
 
   it('stops retrying when the user presses stop', async () => {

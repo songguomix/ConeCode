@@ -4,6 +4,27 @@ import type { ProviderConfig } from './provider.types';
 // The preview's shapes are defined next to its logic and shared with main.
 import type { PreviewPlan, PreviewStatus, PreviewLog } from '../core/preview/preview';
 import type { ComputerRequest, DisplayGeometry } from '../core/computer/computer';
+import type { ComputerPreviewAPI, ComputerPreviewAppearance } from '../core/computer/preview';
+import type {
+  CloudUsage, GoogleDriveStatus, Memory2State, MemoryChange, MemoryConflict,
+  MemoryQuery, SearchHit, StorageHealth,
+} from '../core/memory/v2/types';
+import type {
+  CatalogQuery,
+  InstalledPlugin,
+  InvokeResult,
+  LogsResult,
+  MarketEvent,
+  MarketPlugin,
+  MarketProfile,
+  MarketSnapshot,
+  MarketSource,
+  MarketVersion,
+  PluginContributions,
+  PluginDetail,
+  RepositoryInspection,
+  SkillContribution,
+} from '../core/dsh-market/types';
 
 export type { PreviewPlan, PreviewStatus, PreviewLog };
 export type { ComputerRequest, DisplayGeometry };
@@ -57,6 +78,7 @@ export interface IPCChannels {
   'conversation:create': { data: any; result: any };
   'conversation:delete': { id: string; result: boolean };
   'message:list': { conversationId: string; result: any[] };
+  'message:counts': { result: Record<string, number> };
   'message:create': { data: any; result: any };
   'model:list': { providerId?: string; result: any[] };
   'model:upsert': { models: any[]; result: boolean };
@@ -206,6 +228,8 @@ export interface ElectronAPI {
   };
   message: {
     list: (conversationId: string) => Promise<Message[]>;
+    /** Message count per conversation (including never-used ones as absent/0). */
+    counts: () => Promise<Record<string, number>>;
     create: (data: any) => Promise<Message>;
     delete: (messageId: string) => Promise<boolean>;
     editAndTruncate: (conversationId: string, messageId: string, content: string) => Promise<Message>;
@@ -308,6 +332,71 @@ export interface ElectronAPI {
     list: () => Promise<any[]>;
     save: (entries: any[]) => Promise<boolean>;
   };
+  /** Memory 2.0 main-process bridge. Optional so older runtimes keep working. */
+  memory2?: {
+    setRoot: (rootPath: string | null) => Promise<boolean>;
+    load: () => Promise<Memory2State | null>;
+    save: (state: Memory2State) => Promise<boolean>;
+    backup: () => Promise<{ ok: boolean; path?: string; error?: string }>;
+    restore: () => Promise<{ ok: boolean; state?: Memory2State; error?: string }>;
+    putObject: (key: string, content: string) => Promise<boolean>;
+    getObject: (key: string) => Promise<string | null>;
+    deviceId: () => Promise<string>;
+    legacySnapshot: () => Promise<{ entries: any[]; files: { path: string; scope: string; content: string }[] }>;
+    projectId: (rootPath: string) => Promise<string>;
+  };
+  /** Google Drive memory bridge. OAuth tokens stay in the main process. */
+  memoryDrive?: {
+    status: () => Promise<GoogleDriveStatus>;
+    configure: (opts: { clientId?: string; clientSecret?: string }) => Promise<GoogleDriveStatus>;
+    connect: (opts?: { clientId?: string; clientSecret?: string }) => Promise<{ ok: boolean; status?: GoogleDriveStatus; error?: string }>;
+    disconnect: () => Promise<boolean>;
+    health: () => Promise<StorageHealth>;
+    search: (tenantId: string, query: MemoryQuery) => Promise<SearchHit[]>;
+    remoteChanges: (tenantId: string, since: number, limit?: number) => Promise<{ changes: MemoryChange[]; cursor: number; error?: string }>;
+    pushChanges: (tenantId: string, changes: MemoryChange[]) => Promise<{ ok: boolean; acceptedChangeIds: string[]; cursor: number; conflicts: MemoryConflict[]; error?: string }>;
+    backup: (tenantId: string) => Promise<string | null>;
+    restore: (tenantId: string) => Promise<boolean>;
+    restoreSnapshot: (tenantId: string) => Promise<Memory2State | null>;
+    putObject: (tenantId: string, key: string, content: string) => Promise<boolean>;
+    getObject: (tenantId: string, key: string) => Promise<string | null>;
+    usage: (tenantId: string) => Promise<CloudUsage | null>;
+    devices: (tenantId: string) => Promise<{ deviceId: string; lastSeenAt: number }[]>;
+    revokeDevice: (tenantId: string, deviceId: string) => Promise<boolean>;
+    deleteTenantData: (tenantId: string) => Promise<boolean>;
+  };
+  dshMarket: {
+    snapshot: (query?: CatalogQuery) => Promise<MarketSnapshot>;
+    detail: (pluginId: string, version?: string) => Promise<PluginDetail>;
+    versions: (pluginId: string) => Promise<{ latest: string | null; versions: string[] }>;
+    inspectRepository: (input: string, ref?: string, subdir?: string) => Promise<RepositoryInspection>;
+    installRepository: (profileId: string, input: string, ref?: string, subdir?: string, opts?: { acceptRisk?: boolean; allowScripts?: boolean }) => Promise<InstalledPlugin>;
+    refreshSources: (sourceId?: string) => Promise<MarketSource[]>;
+    addRemoteSource: (url: string, title?: string) => Promise<MarketSource>;
+    addLocalSource: () => Promise<MarketSource | null>;
+    removeSource: (sourceId: string) => Promise<boolean>;
+    inspectLocal: () => Promise<{ plugin: MarketPlugin; version: MarketVersion; warnings: string[] } | null>;
+    installLocal: (profileId: string, directory: string, opts?: { acceptRisk?: boolean; allowScripts?: boolean }) => Promise<InstalledPlugin>;
+    install: (profileId: string, pluginId: string, version?: string, opts?: { acceptRisk?: boolean; allowScripts?: boolean }) => Promise<InstalledPlugin>;
+    rollback: (profileId: string, pluginId: string, version?: string) => Promise<InstalledPlugin>;
+    uninstall: (profileId: string, pluginId: string, deleteData?: boolean) => Promise<void>;
+    setEnabled: (profileId: string, pluginId: string, enabled: boolean) => Promise<InstalledPlugin>;
+    saveConfig: (profileId: string, pluginId: string, configs: Record<string, unknown>) => Promise<InstalledPlugin>;
+    cancel: (requestId: string) => Promise<boolean>;
+    logs: (profileId: string, pluginId: string) => Promise<LogsResult>;
+    contributions: (profileId: string, pluginId?: string) => Promise<PluginContributions>;
+    invokeTool: (profileId: string, pluginId: string, tool: string, args: unknown, rowId?: string) => Promise<InvokeResult>;
+    invokeCommand: (profileId: string, pluginId: string, command: string, rawInput: string, rowId?: string) => Promise<InvokeResult>;
+    skills: () => Promise<SkillContribution[]>;
+    skillContent: (pluginId: string, name: string) => Promise<string | null>;
+    switchProfile: (profileId: string) => Promise<void>;
+    createProfile: (profileId: string, name?: string) => Promise<MarketProfile>;
+    restartRuntime: () => Promise<void>;
+    openExternal: (url: string) => Promise<boolean>;
+    revealPath: (target: string) => Promise<boolean>;
+    revealLog: (profileId: string, pluginId: string) => Promise<string>;
+    onEvent: (callback: (event: MarketEvent) => void) => () => void;
+  };
   mcp: {
     list: () => Promise<McpToolSummary[]>;
     call: (server: string, tool: string, args: any) => Promise<string>;
@@ -338,6 +427,11 @@ export interface ElectronAPI {
     onReload: (callback: () => void) => () => void;
   };
   computer: {
+    openPreview: (appearance?: ComputerPreviewAppearance) => Promise<{ ok: boolean; error?: string }>;
+    closePreview: () => Promise<void>;
+    previewStatus: () => Promise<{ visible: boolean }>;
+    onPreviewVisibility: (callback: (status: { visible: boolean }) => void) => () => void;
+    onStatus: (callback: (status: ComputerStatus) => void) => () => void;
     status: () => Promise<ComputerStatus>;
     setEnabled: (on: boolean) => Promise<ComputerStatus>;
     requestPermissions: () => Promise<ComputerStatus>;
@@ -354,11 +448,14 @@ export interface ElectronAPI {
     setShortcut: (accelerator: string | null) => Promise<{ ok: boolean }>;
     begin: () => Promise<{ ok: boolean; error?: string; needsPermission?: string }>;
     getImage: () => Promise<
-      | { dataUrl: string; width: number; height: number }
+      | { dataUrl: string; width: number; height: number; session: number }
       | { error: string; needsPermission?: string }
     >;
+    ready: (session: number) => Promise<{ ok: boolean }>;
     finish: (dataUrl: string) => Promise<{ ok: boolean }>;
     cancel: () => Promise<{ ok: boolean }>;
+    onImage: (callback: (image: { dataUrl: string; width: number; height: number; session: number }) => void) => () => void;
+    onReset: (callback: () => void) => () => void;
     onResult: (callback: (dataUrl: string) => void) => () => void;
     openSettings: () => Promise<{ ok: boolean }>;
     relaunch: () => Promise<{ ok: boolean }>;
@@ -376,5 +473,6 @@ export interface ElectronAPI {
 declare global {
   interface Window {
     electronAPI: ElectronAPI;
+    computerPreviewAPI: ComputerPreviewAPI;
   }
 }

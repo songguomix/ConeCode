@@ -1,0 +1,483 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-11-07",
+  "timezone": "Asia/Shanghai",
+  "sourceHash": "f8354d1289ee32fc6a6a245bf915ba70b131be930b05f96b993ec76e5d90f782",
+  "baselineGitHead": "f0bed6d3c474af4d6808c2595acffd4c3fd1c3a6",
+  "branch": "main",
+  "deliveryPassed": true,
+  "scope": "local macOS host fixtures; not an isolated desktop guest",
+  "sourceUnchanged": true,
+  "tests": {
+    "files": 26,
+    "total": 132,
+    "passed": 125,
+    "failed": 0,
+    "skipped": 7
+  },
+  "desktopTests": {
+    "total": 6,
+    "passed": 6,
+    "failed": 0,
+    "skipped": 0
+  },
+  "checks": [
+    {
+      "name": "typecheck",
+      "command": [
+        "npm",
+        "run",
+        "typecheck"
+      ],
+      "exitCode": 0,
+      "durationMs": 976,
+      "log": "typecheck.log"
+    },
+    {
+      "name": "native",
+      "command": [
+        "npm",
+        "run",
+        "build:native"
+      ],
+      "exitCode": 0,
+      "durationMs": 1012,
+      "log": "native.log"
+    },
+    {
+      "name": "tests",
+      "command": [
+        "npm",
+        "test",
+        "--",
+        "--reporter=default",
+        "--reporter=json",
+        "--outputFile=/Users/pinecones/Desktop/CODE/更新版本的项目/conecode/cua/artifacts/delivery/tests.json"
+      ],
+      "exitCode": 0,
+      "durationMs": 16839,
+      "log": "tests.log"
+    },
+    {
+      "name": "build",
+      "command": [
+        "npm",
+        "run",
+        "build"
+      ],
+      "exitCode": 0,
+      "durationMs": 1597,
+      "log": "build.log"
+    },
+    {
+      "name": "evaluation",
+      "command": [
+        "/Users/pinecones/.local/node/bin/node",
+        "dist/cli.js",
+        "eval",
+        "--json"
+      ],
+      "exitCode": 0,
+      "durationMs": 10165,
+      "log": "evaluation.log"
+    },
+    {
+      "name": "browser-demo",
+      "command": [
+        "/Users/pinecones/.local/node/bin/node",
+        "dist/cli.js",
+        "demo",
+        "browser"
+      ],
+      "exitCode": 0,
+      "durationMs": 5713,
+      "log": "browser-demo.log"
+    },
+    {
+      "name": "console",
+      "command": [
+        "npx",
+        "--no-install",
+        "tsx",
+        "scripts/verify-console.ts"
+      ],
+      "exitCode": 0,
+      "durationMs": 2979,
+      "log": "console.log"
+    },
+    {
+      "name": "context",
+      "command": [
+        "npx",
+        "--no-install",
+        "tsx",
+        "scripts/measure-context.ts"
+      ],
+      "exitCode": 0,
+      "durationMs": 647,
+      "log": "context.log"
+    },
+    {
+      "name": "context-comparison",
+      "command": [
+        "npx",
+        "--no-install",
+        "tsx",
+        "scripts/compare-context.ts",
+        "--repeats",
+        "3",
+        "--out",
+        "docs/evidence/2026-11-07-context-comparison.json"
+      ],
+      "exitCode": 0,
+      "durationMs": 1170,
+      "log": "context-comparison.log"
+    },
+    {
+      "name": "controller-comparison",
+      "command": [
+        "npx",
+        "--no-install",
+        "tsx",
+        "scripts/compare-controller.ts",
+        "--out",
+        "docs/evidence/2026-11-07-controller-comparison.json"
+      ],
+      "exitCode": 0,
+      "durationMs": 6545,
+      "log": "controller-comparison.log"
+    },
+    {
+      "name": "desktop-tests",
+      "command": [
+        "npx",
+        "--no-install",
+        "vitest",
+        "run",
+        "test/desktop.test.ts",
+        "--reporter=default",
+        "--reporter=json",
+        "--outputFile=/Users/pinecones/Desktop/CODE/更新版本的项目/conecode/cua/artifacts/delivery/desktop-tests.json"
+      ],
+      "exitCode": 0,
+      "durationMs": 5600,
+      "log": "desktop-tests.log"
+    },
+    {
+      "name": "desktop-demo",
+      "command": [
+        "/Users/pinecones/.local/node/bin/node",
+        "dist/cli.js",
+        "demo",
+        "desktop",
+        "--yes"
+      ],
+      "exitCode": 0,
+      "durationMs": 1643,
+      "log": "desktop-demo.log"
+    }
+  ],
+  "cleanInstall": {
+    "sourceHash": "f8354d1289ee32fc6a6a245bf915ba70b131be930b05f96b993ec76e5d90f782",
+    "startedAt": "2026-11-07T09:16:33.665Z",
+    "environment": {
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "arm64"
+    },
+    "checks": [
+      {
+        "name": "install",
+        "exitCode": 0
+      },
+      {
+        "name": "build",
+        "exitCode": 0
+      },
+      {
+        "name": "browser-demo",
+        "exitCode": 0
+      }
+    ],
+    "passed": true,
+    "finishedAt": "2026-11-07T09:16:41.536Z",
+    "sourceUnchanged": true
+  },
+  "evaluation": {
+    "sampledAt": "2026-11-07T09:17:02.535Z",
+    "mode": "scripted",
+    "status": "completed",
+    "environment": {
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "arm64"
+    },
+    "total": 4,
+    "passed": 4,
+    "successRate": 0.5,
+    "scenarioPassRate": 1,
+    "falseCompletionRate": 0,
+    "results": [
+      {
+        "name": "baseline_form_save",
+        "pass": true,
+        "expected": "Task succeeds and the persisted record is Demo; UI toast is not the only evidence.",
+        "detail": "status=succeeded; reason=All user acceptance criteria passed.",
+        "status": "succeeded",
+        "durationMs": 526,
+        "modelCalls": 3,
+        "actions": 2,
+        "falseCompletion": false,
+        "inputTokens": 0,
+        "outputTokens": 0,
+        "costUsd": 0
+      },
+      {
+        "name": "save_failure_then_recover",
+        "pass": true,
+        "expected": "A failed save is observed, the agent navigates back to a clean page, retries and verifies the persisted record.",
+        "detail": "status=succeeded; reason=All user acceptance criteria passed.",
+        "status": "succeeded",
+        "durationMs": 717,
+        "modelCalls": 6,
+        "actions": 5,
+        "falseCompletion": false,
+        "inputTokens": 0,
+        "outputTokens": 0,
+        "costUsd": 0
+      },
+      {
+        "name": "fake_success_rejected",
+        "pass": true,
+        "expected": "A fake UI success toast does not become task success; the persisted record remains Alpha.",
+        "detail": "status=failed; reason=Budget exceeded: model calls 6 > 5.",
+        "status": "failed",
+        "durationMs": 8501,
+        "modelCalls": 5,
+        "actions": 2,
+        "falseCompletion": false,
+        "inputTokens": 0,
+        "outputTokens": 0,
+        "costUsd": 0
+      },
+      {
+        "name": "budget_exhaustion_is_terminal",
+        "pass": true,
+        "expected": "A tiny step/model budget terminates the task without claiming success.",
+        "detail": "status=failed; reason=Budget exceeded: steps 2 > 1.",
+        "status": "failed",
+        "durationMs": 205,
+        "modelCalls": 2,
+        "actions": 1,
+        "falseCompletion": false,
+        "inputTokens": 0,
+        "outputTokens": 0,
+        "costUsd": 0
+      }
+    ],
+    "note": "Deterministic scripted controller evaluation, not a real-model benchmark. No API key is used and no model inference occurs. Real-model results are reported separately."
+  },
+  "controllerComparison": {
+    "schemaVersion": 1,
+    "measuredAt": "2026-11-07T09:17:15.809Z",
+    "mode": "scripted-real-controller-paired-comparison",
+    "environment": {
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "arm64",
+      "playwright": "1.65.0"
+    },
+    "sourceDigest": "171c03367d663de2aad77573793be1b1074f0e1e11e832bc83a7422757cc8efe",
+    "fixtureCases": 2,
+    "sampleSize": 4,
+    "passed": 4,
+    "realModelCalls": 0,
+    "costUsd": null,
+    "note": "Alternating full/projected observation modes through the same TaskController, Executor and independent acceptance, with identical fixture reset, script, budgets and original acceptance per pair. ScriptedAdapter does not perform inference or adapt decisions to observation size. modelRequestCount counts actual model.request events, not paid provider calls. Durations are single-run descriptive samples, excluding service teardown. No speed, cost or real-model success improvement is claimed.",
+    "results": [
+      {
+        "scenario": "ordinary_save",
+        "observationMode": "full",
+        "order": 1,
+        "acceptance": [
+          {
+            "kind": "record_field",
+            "url": "http://127.0.0.1:62574/api/projects/1",
+            "method": "GET",
+            "path": [
+              "name"
+            ],
+            "equals": "Demo"
+          },
+          {
+            "kind": "text_visible",
+            "text": "Saved successfully",
+            "scope": "page"
+          }
+        ],
+        "budgets": {
+          "maxSteps": 8,
+          "maxModelCalls": 5,
+          "maxWallClockMs": 30000,
+          "maxCostUsd": 0.1
+        },
+        "status": "succeeded",
+        "durableRecord": {
+          "id": 1,
+          "name": "Demo"
+        },
+        "acceptancePassed": true,
+        "modelRequestCount": 3,
+        "actionCount": 2,
+        "durationMs": 522.8517079999999,
+        "costUsd": null,
+        "pass": true
+      },
+      {
+        "scenario": "ordinary_save",
+        "observationMode": "projected",
+        "order": 2,
+        "acceptance": [
+          {
+            "kind": "record_field",
+            "url": "http://127.0.0.1:62574/api/projects/1",
+            "method": "GET",
+            "path": [
+              "name"
+            ],
+            "equals": "Demo"
+          },
+          {
+            "kind": "text_visible",
+            "text": "Saved successfully",
+            "scope": "page"
+          }
+        ],
+        "budgets": {
+          "maxSteps": 8,
+          "maxModelCalls": 5,
+          "maxWallClockMs": 30000,
+          "maxCostUsd": 0.1
+        },
+        "status": "succeeded",
+        "durableRecord": {
+          "id": 1,
+          "name": "Demo"
+        },
+        "acceptancePassed": true,
+        "modelRequestCount": 3,
+        "actionCount": 2,
+        "durationMs": 507.2085420000001,
+        "costUsd": null,
+        "pass": true
+      },
+      {
+        "scenario": "delayed_save",
+        "observationMode": "projected",
+        "order": 3,
+        "acceptance": [
+          {
+            "kind": "record_field",
+            "url": "http://127.0.0.1:62574/api/projects/1",
+            "method": "GET",
+            "path": [
+              "name"
+            ],
+            "equals": "Demo"
+          },
+          {
+            "kind": "text_visible",
+            "text": "Saved successfully",
+            "scope": "page"
+          }
+        ],
+        "budgets": {
+          "maxSteps": 8,
+          "maxModelCalls": 5,
+          "maxWallClockMs": 30000,
+          "maxCostUsd": 0.1
+        },
+        "status": "succeeded",
+        "durableRecord": {
+          "id": 1,
+          "name": "Demo"
+        },
+        "acceptancePassed": true,
+        "modelRequestCount": 3,
+        "actionCount": 2,
+        "durationMs": 608.5645420000001,
+        "costUsd": null,
+        "pass": true
+      },
+      {
+        "scenario": "delayed_save",
+        "observationMode": "full",
+        "order": 4,
+        "acceptance": [
+          {
+            "kind": "record_field",
+            "url": "http://127.0.0.1:62574/api/projects/1",
+            "method": "GET",
+            "path": [
+              "name"
+            ],
+            "equals": "Demo"
+          },
+          {
+            "kind": "text_visible",
+            "text": "Saved successfully",
+            "scope": "page"
+          }
+        ],
+        "budgets": {
+          "maxSteps": 8,
+          "maxModelCalls": 5,
+          "maxWallClockMs": 30000,
+          "maxCostUsd": 0.1
+        },
+        "status": "succeeded",
+        "durableRecord": {
+          "id": 1,
+          "name": "Demo"
+        },
+        "acceptancePassed": true,
+        "modelRequestCount": 3,
+        "actionCount": 2,
+        "durationMs": 612.057417,
+        "costUsd": null,
+        "pass": true
+      }
+    ]
+  },
+  "contextComparison": {
+    "sampleSize": 9,
+    "fullChars": 32571,
+    "projectedChars": 23739,
+    "reductionRatio": 0.2711614626508243,
+    "modelCalls": null,
+    "costUsd": null,
+    "taskSuccessRate": null,
+    "fullControllerComparison": "not_run"
+  },
+  "realModel": {
+    "sampledAt": "2026-11-07T09:18:10.560Z",
+    "mode": "real-model",
+    "total": 0,
+    "passed": 0,
+    "status": "not_run",
+    "successRate": null,
+    "falseCompletionRate": null,
+    "results": [],
+    "note": "Real-model evaluation NOT marked as passed: select a model with --model or CUA_REAL_MODEL; set OPENAI_API_KEY; no inference or browser task was run."
+  },
+  "desktop": {
+    "status": "verified_host_fixture",
+    "nativeInput": "click,Unicode,Meta+A",
+    "appScriptingSave": true,
+    "focusSwitchAndWindowMovement": true,
+    "isolatedGuest": "not_verified",
+    "note": "Native input and application-scripting save are separate channels."
+  },
+  "docker": "compose syntax verified; daemon unavailable, no build",
+  "remoteCi": "configured_not_run"
+}

@@ -89,7 +89,7 @@ export default function TerminalPanel() {
   return (
     <div className="flex flex-col h-full bg-[var(--bg-0)] border-t border-[var(--border)]">
       {/* Tab bar — the bar drags the window; tabs and buttons opt out. */}
-      <div className="flex items-center px-2 py-1.5 shrink-0 gap-1.5" style={{ WebkitAppRegion: 'drag' } as any}>
+      <div className="flex items-center px-2 py-1.5 shrink-0 gap-1.5 border-b border-[var(--border)] bg-[var(--bg-1)]" style={{ WebkitAppRegion: 'drag' } as any}>
         <div className="relative" style={{ WebkitAppRegion: 'no-drag' } as any}>
           {renaming ? (
             <input
@@ -106,7 +106,7 @@ export default function TerminalPanel() {
           ) : (
             <button
               onClick={() => setMenuOpen((v) => !v)}
-              className={`flex items-center gap-1.5 pl-2.5 pr-2 py-1 rounded-lg text-[13px] transition-colors ${
+              className={`flex items-center gap-1.5 pl-2.5 pr-2 py-1 rounded-lg text-[13px] transition-colors cursor-pointer ${
                 menuOpen ? 'bg-[var(--bg-3)] text-[var(--text-primary)]' : 'text-[var(--text-primary)] hover:bg-[var(--bg-3)]'
               }`}
             >
@@ -118,7 +118,7 @@ export default function TerminalPanel() {
           {menuOpen && (
             <>
               <div className="fixed inset-0 z-40" onClick={() => setMenuOpen(false)} />
-              <div className="absolute bottom-full left-0 mb-1.5 w-60 bg-[var(--bg-2)] border border-[var(--border)] rounded-xl shadow-xl z-50 overflow-hidden py-1.5 anim-menu" style={{ ['--menu-origin' as any]: 'bottom left', ['--menu-shift' as any]: '6px' }}>
+              <div className="absolute bottom-full left-0 mb-1.5 w-60 bg-[var(--glass-surface)] backdrop-blur-2xl border border-[var(--glass-border)] rounded-2xl shadow-2xl z-50 overflow-hidden py-1.5 anim-menu ring-1 ring-black/5 dark:ring-white/10" style={{ ['--menu-origin' as any]: 'bottom left', ['--menu-shift' as any]: '6px' }}>
                 <div className="px-3 py-1 text-xs font-medium text-[var(--text-muted)]">{t('terminals')}</div>
                 <div className="max-h-64 overflow-y-auto">
                   {tabs.map((tab) => (
@@ -131,7 +131,7 @@ export default function TerminalPanel() {
                       {tab.id === activeId && <FiCheck size={14} className="text-[var(--accent)] shrink-0" />}
                       <button
                         onClick={(e) => { e.stopPropagation(); closeTab(tab.id); }}
-                        className="p-0.5 rounded text-[var(--text-muted)] hover:text-[var(--error)] opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+                        className="p-0.5 rounded text-[var(--text-muted)] hover:text-[var(--error)] opacity-0 group-hover:opacity-100 transition-opacity shrink-0 cursor-pointer"
                         title={t('close')}
                       >
                         <FiTrash2 size={13} />
@@ -139,16 +139,16 @@ export default function TerminalPanel() {
                     </div>
                   ))}
                 </div>
-                <div className="my-1 border-t border-[var(--border)]" />
+                <div className="my-1 border-t border-[var(--glass-border)]" />
                 <button
                   onClick={addTab}
-                  className="w-full flex items-center gap-2 px-3 py-1.5 text-[13px] text-[var(--text-secondary)] hover:bg-[var(--bg-3)] transition-colors"
+                  className="w-full flex items-center gap-2 px-3 py-1.5 text-[13px] text-[var(--text-secondary)] hover:bg-[var(--bg-3)] transition-colors cursor-pointer"
                 >
                   <FiTerminal size={13} className="text-[var(--text-muted)]" /> {t('newTerminal')}
                 </button>
                 <button
                   onClick={startRename}
-                  className="w-full flex items-center gap-2 px-3 py-1.5 text-[13px] text-[var(--text-secondary)] hover:bg-[var(--bg-3)] transition-colors"
+                  className="w-full flex items-center gap-2 px-3 py-1.5 text-[13px] text-[var(--text-secondary)] hover:bg-[var(--bg-3)] transition-colors cursor-pointer"
                 >
                   <FiEdit3 size={13} className="text-[var(--text-muted)]" /> {t('renameTerminal')}
                 </button>
@@ -161,7 +161,7 @@ export default function TerminalPanel() {
         <button
           onClick={addTab}
           style={{ WebkitAppRegion: 'no-drag' } as any}
-          className="p-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-3)] transition-colors"
+          className="p-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-3)] transition-colors cursor-pointer"
           title={t('newTerminal')}
         >
           <FiPlus size={14} />
@@ -171,7 +171,7 @@ export default function TerminalPanel() {
         <button
           onClick={toggleTerminal}
           style={{ WebkitAppRegion: 'no-drag' } as any}
-          className="p-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-3)] transition-colors"
+          className="p-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-3)] transition-colors cursor-pointer"
           title={t('close')}
         >
           <FiX size={14} />

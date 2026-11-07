@@ -21,14 +21,14 @@ export default function PerfView() {
   const last = samples[samples.length - 1] ?? null;
 
   return (
-    <div className="px-2 py-1">
+    <div className="px-2 py-1 min-w-0">
       <div className="flex items-center gap-2 px-1 mb-2">
-        <span className="text-[13px] text-[var(--text-secondary)] flex-1">
+        <span className="min-w-0 text-[13px] leading-relaxed text-[var(--text-secondary)] flex-1">
           {enabled ? `${t('monitorHeap')} · ${t('monitorMain')} · ${t('monitorLoad')}` : t('monitorOffHint')}
         </span>
         <button
           onClick={() => setEnabled(!enabled)}
-          className={`px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors shrink-0 ${
+          className={`px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors shrink-0 cursor-pointer ${
             enabled
               ? 'bg-[var(--bg-3)] text-[var(--text-secondary)] hover:bg-[var(--bg-4)]'
               : 'bg-[var(--accent)] text-white hover:bg-[var(--accent-hover)]'
@@ -52,7 +52,7 @@ export default function PerfView() {
       ) : null}
 
       {anomalies.slice(0, 5).map((a) => (
-        <div key={a.id} className="mb-1.5 px-3 py-2 rounded-xl bg-[var(--error)]/10 text-[12px] text-[var(--text-secondary)]">
+        <div key={a.id} className="mb-1.5 px-3 py-2 rounded-xl bg-[color-mix(in_srgb,var(--error)_10%,transparent)] text-[12px] text-[var(--text-secondary)]">
           <span className="text-[var(--text-muted)]">{timeAgo(a.t)} · </span>
           {formatAnomaly(a, t)}
         </div>
@@ -63,13 +63,13 @@ export default function PerfView() {
           {t('monitorErrors')} · {errors.length}
         </span>
         {errors.length > 0 && (
-          <button onClick={clearErrors} className="text-[11px] text-[var(--text-muted)] hover:text-[var(--error)] transition-colors">
+          <button onClick={clearErrors} className="text-[11px] text-[var(--text-muted)] hover:text-[var(--error)] transition-colors cursor-pointer">
             {t('monitorClear')}
           </button>
         )}
       </div>
       {errors.length === 0 ? (
-        <p className="px-1 text-[12px] text-[var(--text-muted)]">{t('monitorNoErrors')}</p>
+        <p className="px-1 text-[12px] leading-relaxed text-[var(--text-muted)]">{t('monitorNoErrors')}</p>
       ) : (
         errors.slice(-10).reverse().map((e, i) => (
           <p key={`${e.t}-${i}`} className="px-1 text-[11px] font-mono text-[var(--text-secondary)] truncate mb-0.5" title={e.message}>

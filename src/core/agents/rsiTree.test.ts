@@ -58,6 +58,10 @@ describe('rsiTree', () => {
     expect(() => appendExperiment(t0, rec({ parentId: 'ghost' }))).toThrow(/unknown parentId/);
     expect(() => appendExperiment(t0, rec({ id: '' }))).toThrow();
     expect(() => appendExperiment(t0, rec({ metrics: { m: NaN } }))).toThrow();
+    expect(() => appendExperiment(t0, rec({ costUsd: Infinity }))).toThrow(/finite/);
+    expect(() => appendExperiment(t0, rec({ budgetUsd: Infinity }))).toThrow(/finite/);
+    expect(() => appendExperiment(t0, rec({ timestamp: Infinity }))).toThrow(/finite/);
+    expect(() => parseTree(JSON.stringify({ episodeId: 'bad', rootPolicyId: 'default', nodes: [null] }))).toThrow(/record must be an object/);
   });
 
   it('tracks lineage and children', () => {

@@ -14,7 +14,8 @@ export default function ChangedFilesPanel() {
 
   // File changes only (drop command/exec), newest first, deduped by path.
   const seen = new Set<string>();
-  const files = changes
+  const files = [...changes]
+    .sort((a, b) => b.createdAt - a.createdAt)
     .filter((c) => c.kind !== 'exec' && c.filePath !== '[Command]')
     .filter((c) => (seen.has(c.filePath) ? false : (seen.add(c.filePath), true)));
 
@@ -36,30 +37,35 @@ export default function ChangedFilesPanel() {
   return (
     <>
       {/* Click-outside backdrop */}
-      <div className="fixed inset-0 z-40" onClick={closeChangedFiles} />
+      <div className="fixed inset-0 z-40 bg-black/20 backdrop-blur-xs" onClick={closeChangedFiles} />
       {/* Floating card */}
-      <div className="fixed left-4 bottom-4 top-[96px] z-50 w-[300px] flex flex-col bg-[var(--bg-1)] border border-[var(--border)] rounded-2xl shadow-2xl overflow-hidden">
-        <div className="flex items-center justify-between px-3.5 py-3 shrink-0">
-          <FiFolder size={16} className="text-[var(--text-secondary)]" />
-          <button onClick={closeChangedFiles}
-            className="p-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-3)] transition-colors">
-            <FiX size={16} />
+      <div className="fixed left-4 bottom-4 top-[96px] z-50 w-[300px] max-w-[calc(100vw-2rem)] flex flex-col bg-[var(--glass-surface)] backdrop-blur-2xl border border-[var(--glass-border)] rounded-2xl shadow-2xl overflow-hidden anim-menu ring-1 ring-black/5 dark:ring-white/10">
+        <div className="flex items-center justify-between px-3.5 py-3 shrink-0 border-b border-[var(--glass-border)]">
+          <div className="flex items-center gap-2 min-w-0">
+            <FiFolder size={15} className="text-[var(--accent)] shrink-0" />
+            <span className="text-[13px] font-serif font-bold text-[var(--text-primary)] truncate tracking-tight">
+              {t('modifiedFiles') || 'Changed Files'}
+            </span>
+          </div>
+          <button aria-label={t('close')} onClick={closeChangedFiles}
+            className="p-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-3)] transition-colors cursor-pointer">
+            <FiX size={15} />
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto px-1.5 pb-2">
+        <div className="flex-1 overflow-y-auto px-1.5 py-2">
           {files.length === 0 ? (
             <div className="h-full flex items-center justify-center text-sm text-[var(--text-muted)]">{t('noChanges')}</div>
           ) : (
             files.map((c) => {
-              const name = c.filePath.split('/').pop() || c.filePath;
+              const name = c.filePath.split(/[/\\]/).pop() || c.filePath;
               const active = selectedFile === c.filePath;
               return (
                 <button
                   key={c.id}
                   onClick={() => selectFile(c.filePath)}
                   title={c.filePath}
-                  className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-[13px] text-left transition-colors ${
-                    active ? 'bg-[var(--bg-3)]' : 'hover:bg-[var(--bg-2)]'
+                  className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-[13px] text-left transition-colors cursor-pointer ${
+                    active ? 'bg-[var(--accent-soft)] text-[var(--accent)]' : 'hover:bg-[var(--bg-2)]'
                   }`}
                 >
                   <span className="shrink-0" style={{ color: statusColor(c.status) }}>{kindIcon(c.kind)}</span>

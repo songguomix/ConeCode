@@ -44,7 +44,7 @@ export default function SyncView() {
   const canPush = !!rootPath && !pushing;
 
   return (
-    <div className="px-2 py-1">
+    <div className="px-2 py-1 min-w-0">
       <label className="block px-1 mb-1 text-[11px] uppercase tracking-wider text-[var(--text-muted)]">
         {t('pluginRepoLabel')}
       </label>
@@ -55,24 +55,24 @@ export default function SyncView() {
           onBlur={() => setRepo(repoDraft)}
           placeholder={t('pluginRepoPh')}
           spellCheck={false}
-          className="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg bg-[var(--bg-2)] border border-[var(--border)] text-[13px] outline-none focus:border-[var(--accent)]/50"
+          className="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg bg-[var(--bg-2)] border border-[var(--border)] text-[13px] outline-none focus:border-[color-mix(in_srgb,var(--accent)_50%,transparent)]"
         />
         <button
           onClick={() => void refresh()}
           disabled={refreshing}
           title={t('pluginRefresh')}
-          className="px-2.5 py-1.5 rounded-lg bg-[var(--bg-3)] text-[var(--text-secondary)] hover:bg-[var(--bg-4)] transition-colors disabled:opacity-50 shrink-0"
+          className="px-2.5 py-1.5 rounded-lg bg-[var(--bg-3)] text-[var(--text-secondary)] hover:bg-[var(--bg-4)] transition-colors disabled:opacity-50 shrink-0 cursor-pointer disabled:cursor-not-allowed"
         >
           <FiRefreshCw size={12} className={refreshing ? 'animate-spin' : ''} />
         </button>
       </div>
-      <p className="px-1 mb-2 text-[11px] text-[var(--text-muted)] break-words [overflow-wrap:anywhere]">{t('pluginRepoHint')}</p>
+      <p className="px-1 mb-2 text-[11px] leading-relaxed text-[var(--text-muted)] break-words [overflow-wrap:anywhere]">{t('pluginRepoHint')}</p>
 
       <label className="block px-1 mb-1 text-[11px] uppercase tracking-wider text-[var(--text-muted)]">
         {t('pluginTokenLabel')}
       </label>
-      <div className="flex gap-1.5 mb-2">
-        <div className="relative flex-1 min-w-0">
+      <div className="flex flex-wrap gap-1.5 mb-2">
+        <div className="relative flex-1 basis-40 min-w-0">
           <FiKey size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-muted)]" />
           <input
             value={tokenDraft}
@@ -81,19 +81,19 @@ export default function SyncView() {
             placeholder={tokenSet ? t('pluginTokenSet') : t('pluginTokenPh')}
             spellCheck={false}
             autoComplete="off"
-            className="w-full pl-8 pr-2.5 py-1.5 rounded-lg bg-[var(--bg-2)] border border-[var(--border)] text-[13px] outline-none focus:border-[var(--accent)]/50"
+            className="w-full pl-8 pr-2.5 py-1.5 rounded-lg bg-[var(--bg-2)] border border-[var(--border)] text-[13px] outline-none focus:border-[color-mix(in_srgb,var(--accent)_50%,transparent)]"
           />
         </div>
         <button
           onClick={() => { setToken(tokenDraft.trim() || null); setTokenDraft(''); }}
-          className="px-3 py-1.5 rounded-lg bg-[var(--bg-3)] text-[12px] text-[var(--text-secondary)] hover:bg-[var(--bg-4)] transition-colors shrink-0"
+          className="px-3 py-1.5 rounded-lg bg-[var(--bg-3)] text-[12px] text-[var(--text-secondary)] hover:bg-[var(--bg-4)] transition-colors shrink-0 cursor-pointer"
         >
           {t('pluginSave')}
         </button>
         {tokenSet && (
           <button
             onClick={() => { setToken(null); setTokenDraft(''); }}
-            className="px-3 py-1.5 rounded-lg text-[12px] text-[var(--text-muted)] hover:text-[var(--error)] transition-colors shrink-0"
+            className="px-3 py-1.5 rounded-lg text-[12px] text-[var(--text-muted)] hover:text-[var(--error)] transition-colors shrink-0 cursor-pointer"
           >
             {t('pluginClearToken')}
           </button>
@@ -136,7 +136,7 @@ export default function SyncView() {
       <button
         onClick={() => { setRepo(repoDraft); void pushRepo(); }}
         disabled={!canPush}
-        className="w-full mb-2 px-3 py-2 rounded-xl bg-[var(--accent)] text-white text-[13px] font-medium hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50 flex items-center justify-center gap-1.5 shrink-0"
+        className="w-full mb-2 px-3 py-2 rounded-xl bg-[var(--accent)] text-white text-[13px] font-medium hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50 flex items-center justify-center gap-1.5 shrink-0 cursor-pointer disabled:cursor-not-allowed"
       >
         <FiUpload size={13} />
         {pushing ? t('pluginPushing') : t('pluginPushProject')}
@@ -145,8 +145,8 @@ export default function SyncView() {
       {result && (
         <p className={`px-3 py-2 mb-2 rounded-xl text-[12px] break-words [overflow-wrap:anywhere] ${
           result.ok
-            ? 'bg-[var(--success)]/10 text-[var(--success)]'
-            : 'bg-[var(--error)]/10 text-[var(--error)]'
+            ? 'bg-[color-mix(in_srgb,var(--success)_10%,transparent)] text-[var(--success)]'
+            : 'bg-[color-mix(in_srgb,var(--error)_10%,transparent)] text-[var(--error)]'
         }`}>
           {result.message}
         </p>

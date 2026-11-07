@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { FiHelpCircle, FiSend, FiLoader, FiAlertCircle } from 'react-icons/fi';
 import { useChatStore, useLanguageStore, useModelStore } from '../../stores';
 import type { Message } from '../../types/chat.types';
+import { isHolding, useInstallGateStore } from '../../stores/installGate.store';
 
 interface QuestionPromptCardProps {
   message: Message;
@@ -16,6 +17,8 @@ interface QuestionPromptCardProps {
  */
 export default function QuestionPromptCard({ message }: QuestionPromptCardProps) {
   const sendMessage = useChatStore((s) => s.sendMessage);
+  const runBlocked = useChatStore((s) => s.activeConversationId !== message.conversationId || !!s.streamingRuns[message.conversationId] || !!s.messageEdits[message.conversationId]);
+  const installHolding = useInstallGateStore((s) => isHolding(s.jobs));
   const { t } = useLanguageStore();
 
   const [customAnswer, setCustomAnswer] = useState('');
@@ -24,6 +27,7 @@ export default function QuestionPromptCard({ message }: QuestionPromptCardProps)
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const composingRef = useRef(false);
   const compositionEndAtRef = useRef(0);
+  const submittingRef = useRef(false);
 
   // Auto-focus and auto-resize textarea
   useEffect(() => {
@@ -43,8 +47,9 @@ export default function QuestionPromptCard({ message }: QuestionPromptCardProps)
 
   const handleAnswer = async (answerText: string) => {
     const trimmed = answerText.trim();
-    if (!trimmed || submitting) return;
+    if (!trimmed || submittingRef.current || runBlocked || installHolding) return;
 
+    submittingRef.current = true;
     setSubmitting(true);
     setError(null);
     try {
@@ -62,6 +67,7 @@ export default function QuestionPromptCard({ message }: QuestionPromptCardProps)
       setError(e?.message || t('sendFailed') || '发送失败，请重试');
       // Keep the user's input on error so they can retry
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
   };
@@ -93,8 +99,8 @@ export default function QuestionPromptCard({ message }: QuestionPromptCardProps)
           <div className="w-7 h-7 rounded-lg bg-[var(--accent-bg)] text-[var(--accent)] flex items-center justify-center shrink-0 shadow-2xs">
             <FiHelpCircle size={14} />
           </div>
-          <h3 className="text-[14.5px] font-bold text-[var(--text-primary)] font-serif tracking-tight truncate">
-            {t('aiAsking') || 'AI 正在提问'}
+          <h3 className="text-[13.5px] font-bold text-[var(--text-primary)] font-serif tracking-tight truncate">
+            {t('aiAsking')}
           </h3>
         </div>
 
@@ -122,8 +128,8 @@ export default function QuestionPromptCard({ message }: QuestionPromptCardProps)
                 <button
                   key={index}
                   onClick={() => void handleAnswer(option)}
-                  disabled={submitting}
-                  className="px-3.5 py-1.5 rounded-xl border border-[var(--border)] bg-[var(--bg-1)] hover:bg-[var(--accent-bg)] hover:border-[var(--accent-border)] text-[var(--text-primary)] hover:text-[var(--accent)] text-[13.5px] font-semibold transition-all shadow-2xs flex items-center gap-1.5 active:scale-[0.98] disabled:opacity-50 cursor-pointer"
+                  disabled={submitting || runBlocked || installHolding}
+                  className="max-w-full px-3.5 py-1.5 rounded-xl border border-[var(--border)] bg-[var(--bg-1)] hover:bg-[var(--accent-bg)] hover:border-[var(--accent-border)] text-[var(--text-primary)] hover:text-[var(--accent)] text-[13.5px] font-semibold transition-all shadow-2xs flex items-center gap-1.5 active:scale-[0.98] disabled:opacity-50 cursor-pointer break-words [overflow-wrap:anywhere] text-left"
                 >
                   <span>{option}</span>
                 </button>
@@ -142,7 +148,7 @@ export default function QuestionPromptCard({ message }: QuestionPromptCardProps)
           
           {/* Error display */}
           {error && (
-            <div className="rounded-xl bg-[var(--error-bg)] border border-[var(--error-border)] px-3 py-2 text-[12px] text-[var(--error)] whitespace-pre-wrap flex items-start gap-2">
+            <div role="alert" className="rounded-xl bg-[var(--error-bg)] border border-[var(--error-border)] px-3 py-2 text-[12px] text-[var(--error)] whitespace-pre-wrap break-words [overflow-wrap:anywhere] flex items-start gap-2">
               <FiAlertCircle size={14} className="mt-0.5 shrink-0" />
               <span>{error}</span>
             </div>
@@ -157,13 +163,14 @@ export default function QuestionPromptCard({ message }: QuestionPromptCardProps)
               onCompositionStart={() => { composingRef.current = true; }}
               onCompositionEnd={() => { composingRef.current = false; compositionEndAtRef.current = Date.now(); }}
               placeholder={t('customAnswerPlaceholder') || '输入自定义回答，Enter 发送，Shift+Enter 换行…'}
+              aria-label={t('customAnswerPlaceholder')}
               disabled={submitting}
               rows={2}
-              className="flex-1 min-w-0 min-h-[56px] max-h-[160px] resize-none overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--bg-1)] text-[13px] text-[var(--text-primary)] placeholder-[var(--text-muted)] outline-none focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/20 transition-all shadow-2xs px-3 py-2"
+              className="flex-1 min-w-0 min-h-[56px] max-h-[160px] resize-none overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--bg-1)] text-[13px] text-[var(--text-primary)] placeholder-[var(--text-muted)] outline-none focus:border-[var(--accent)] focus:ring-2 focus:ring-[color-mix(in_srgb,var(--accent)_20%,transparent)] transition-all shadow-2xs px-3 py-2"
             />
             <button
               onClick={() => void handleAnswer(customAnswer)}
-              disabled={!customAnswer.trim() || submitting}
+              disabled={!customAnswer.trim() || submitting || runBlocked || installHolding}
               className="px-4 py-2 rounded-xl bg-gradient-to-r from-[var(--accent)] to-[#e88a6a] hover:opacity-95 text-white text-[12px] font-medium transition-all disabled:opacity-40 flex items-center gap-1.5 shrink-0 shadow-sm self-start mt-1 cursor-pointer"
             >
               {submitting ? (

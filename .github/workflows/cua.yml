@@ -1,0 +1,31 @@
+name: Computer use runtime
+on:
+  push:
+    paths: ['cua/**', '.github/workflows/cua.yml']
+  pull_request:
+    paths: ['cua/**', '.github/workflows/cua.yml']
+  workflow_dispatch:
+jobs:
+  deterministic:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cua
+    env:
+      CUA_RUN_REAL_MODEL: '0'
+      CUA_RUN_DESKTOP: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: cua/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run verify:delivery
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cua-delivery-evidence
+          path: cua/artifacts/

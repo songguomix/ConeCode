@@ -65,9 +65,9 @@ export default function SecurityView() {
 
   if (isInstalled && !isEnabled && installedSkill) {
     return (
-      <div className="px-3 py-4 text-center">
+      <div className="px-3 py-4 text-center min-w-0">
         <FiShield size={20} className="mx-auto mb-2 text-[var(--text-muted)]" />
-        <p className="text-[13px] text-[var(--text-secondary)] mb-3">{t('skillDisabled')}</p>
+        <p className="text-[13px] leading-relaxed text-[var(--text-secondary)] mb-3">{t('skillDisabled')}</p>
         <button
           onClick={async () => {
             setBusy(true);
@@ -78,7 +78,7 @@ export default function SecurityView() {
             }
           }}
           disabled={busy}
-          className="px-3 py-1.5 rounded-lg bg-[var(--accent)] text-white text-[12px] font-medium hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50 inline-flex items-center gap-1.5"
+          className="px-3 py-1.5 rounded-lg bg-[var(--accent)] text-white text-[12px] font-medium hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50 inline-flex items-center gap-1.5 cursor-pointer disabled:cursor-not-allowed"
         >
           {busy ? <FiLoader size={12} className="animate-spin" /> : null}
           {t('skillEnable')}
@@ -89,9 +89,9 @@ export default function SecurityView() {
 
   if (!skillBody) {
     return (
-      <div className="px-3 py-4 text-center">
+      <div className="px-3 py-4 text-center min-w-0">
         <FiShield size={20} className="mx-auto mb-2 text-[var(--text-muted)]" />
-        <p className="text-[13px] text-[var(--text-secondary)] mb-3">{t('pluginNeedInstall')}</p>
+        <p className="text-[13px] leading-relaxed text-[var(--text-secondary)] mb-3">{t('pluginNeedInstall')}</p>
         {catalog && (
           <button
             onClick={async () => {
@@ -103,7 +103,7 @@ export default function SecurityView() {
               }
             }}
             disabled={busy}
-            className="px-3 py-1.5 rounded-lg bg-[var(--accent)] text-white text-[12px] font-medium hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50 inline-flex items-center gap-1.5"
+            className="px-3 py-1.5 rounded-lg bg-[var(--accent)] text-white text-[12px] font-medium hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50 inline-flex items-center gap-1.5 cursor-pointer disabled:cursor-not-allowed"
           >
             {busy ? <FiLoader size={12} className="animate-spin" /> : null}
             {t('pluginInstall')}
@@ -114,14 +114,14 @@ export default function SecurityView() {
   }
 
   return (
-    <div className="px-2 py-1">
-      <div className="flex gap-1.5 mb-2">
+    <div className="px-2 py-1 min-w-0">
+      <div className="flex flex-wrap gap-1.5 mb-2">
         {(['project', 'files'] as const).map((m) => (
           <button
             key={m}
             onClick={() => setMode(m)}
             disabled={m === 'files' && files.length === 0}
-            className={`flex-1 px-2 py-1.5 rounded-lg text-[12px] font-medium transition-colors disabled:opacity-40 ${
+            className={`flex-1 px-2 py-1.5 rounded-lg text-[12px] font-medium transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-40 ${
               mode === m
                 ? 'bg-[var(--accent-soft)] text-[var(--accent)]'
                 : 'bg-[var(--bg-2)] text-[var(--text-secondary)] hover:bg-[var(--bg-3)]'
@@ -142,7 +142,7 @@ export default function SecurityView() {
                 <button
                   key={f}
                   onClick={() => setSelected((s) => (on ? s.filter((x) => x !== f) : [...s, f]))}
-                  className={`w-full text-left px-2.5 py-1.5 rounded-lg text-[12px] font-mono truncate transition-colors ${
+                  className={`w-full text-left px-2.5 py-1.5 rounded-lg text-[12px] font-mono truncate transition-colors cursor-pointer ${
                     on ? 'bg-[var(--accent-soft)] text-[var(--accent)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-3)]'
                   }`}
                 >
@@ -156,7 +156,7 @@ export default function SecurityView() {
       <button
         onClick={() => void run()}
         disabled={busy}
-        className="w-full px-3 py-2 rounded-xl bg-[var(--accent)] text-white text-[13px] font-medium hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50 mb-2"
+        className="w-full px-3 py-2 rounded-xl bg-[var(--accent)] text-white text-[13px] font-medium hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50 mb-2 cursor-pointer disabled:cursor-not-allowed"
       >
         {t('pluginRun')}
       </button>
@@ -166,7 +166,7 @@ export default function SecurityView() {
             {t('pluginRecentRuns')}
           </p>
           {runs.slice(0, 5).map((task) => (
-            <div key={task.conversationId} className="flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-[var(--bg-2)] transition-colors">
+            <div key={task.conversationId} className="flex items-center gap-2 px-3 py-1.5 rounded-xl hover:bg-[var(--bg-2)] transition-colors">
               {task.status === 'running' ? (
                 <FiLoader size={12} className="text-[var(--accent)] animate-spin shrink-0" />
               ) : (
@@ -176,7 +176,7 @@ export default function SecurityView() {
                 {new Date(task.startedAt).toLocaleTimeString()} · {t(task.status === 'running' ? 'backgroundRunning' : 'backgroundDone')}
               </span>
               <button onClick={() => jump(task.conversationId)} title={t('backgroundJump')}
-                className="w-7 h-7 rounded-lg flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-3)] transition-colors shrink-0">
+                className="w-7 h-7 rounded-lg flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-3)] transition-colors shrink-0 cursor-pointer">
                 <FiChevronRight size={14} />
               </button>
             </div>

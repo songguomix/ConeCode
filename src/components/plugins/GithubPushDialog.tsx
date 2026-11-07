@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useGithubPushStore } from '../../stores/githubPush.store';
 import { normalizeRepo } from '../../stores/market.store';
 import { useLanguageStore } from '../../stores';
+import './plugin-layout.css';
 
 export default function GithubPushDialog() {
   const pending = useGithubPushStore((s) => s.pending);
@@ -18,9 +19,9 @@ export default function GithubPushDialog() {
   }, [pending]);
   return (
     <dialog ref={dialogRef} onCancel={cancel} aria-labelledby="github-push-title"
-      className="m-auto w-[min(440px,calc(100vw-32px)) rounded-2xl border border-[var(--border)] bg-[var(--bg-2)] p-5 text-[var(--text-primary)] shadow-xl backdrop:bg-black/50">
+      className="plugin-dialog m-auto w-[min(440px,calc(100vw-32px))] rounded-2xl border border-[var(--glass-border)] bg-[var(--glass-surface)] backdrop-blur-2xl p-5 text-[var(--text-primary)] shadow-2xl backdrop:bg-black/50 backdrop:backdrop-blur-sm ring-1 ring-black/5 dark:ring-white/10">
       <form onSubmit={(event) => { event.preventDefault(); confirm(repo); }}>
-        <h2 id="github-push-title" className="text-base font-semibold">{t('githubPushDestination')}</h2>
+        <h2 id="github-push-title" className="font-serif text-base font-bold tracking-tight">{t('githubPushDestination')}</h2>
         <p className="mt-2 text-xs text-[var(--text-secondary)]">{t('githubPushSource')}</p>
         <p className="mt-1 break-all font-mono text-xs">{pending?.root}</p>
         <label className="mt-4 block text-sm" htmlFor="github-push-repo">{t('pluginRepoLabel')}</label>
@@ -28,9 +29,9 @@ export default function GithubPushDialog() {
           placeholder="owner/repo" autoComplete="off" spellCheck={false}
           className="mt-2 w-full rounded-lg border border-[var(--border)] bg-[var(--bg-0)] px-3 py-2 text-sm outline-none focus:border-[var(--accent)]" />
         <p className="mt-2 text-xs text-[var(--text-secondary)]">{t('githubPushConfirmHint')}</p>
-        <div className="mt-5 flex justify-end gap-2">
-          <button type="button" onClick={cancel} className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm">{t('cancel')}</button>
-          <button type="submit" disabled={!normalizeRepo(repo)} className="rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white disabled:opacity-40">{t('pluginPushProject')}</button>
+        <div className="mt-5 flex flex-wrap justify-end gap-2">
+          <button type="button" onClick={cancel} className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm cursor-pointer hover:bg-[var(--bg-1)] transition-colors">{t('cancel')}</button>
+          <button type="submit" disabled={!normalizeRepo(repo)} className="rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed transition-all">{t('pluginPushProject')}</button>
         </div>
       </form>
     </dialog>

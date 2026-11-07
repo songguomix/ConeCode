@@ -1,0 +1,32 @@
+html.computer-preview-document,
+html.computer-preview-document body,
+html.computer-preview-document #root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: transparent !important;
+}
+.computer-preview-surface {
+  width: 100%;
+  height: 100dvh;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  user-select: none;
+  -webkit-app-region: drag;
+}
+.computer-preview-surface img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+}
+.computer-preview-placeholder {
+  color: #aaa69f;
+  font: 12px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  pointer-events: none;
+}

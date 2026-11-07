@@ -27,28 +27,28 @@ export default function BackgroundPanel() {
 
   return (
     <>
-      <div className="fixed inset-0 z-40 bg-black/20" onClick={closeBackground} />
-      <div className="fixed left-4 bottom-4 top-[96px] z-50 w-[420px] max-w-[calc(100vw-2rem)] flex flex-col bg-[var(--bg-1)] border border-[var(--border)] rounded-2xl shadow-2xl overflow-hidden anim-menu">
-        <div className="flex items-center gap-2 px-4 py-3 border-b border-[var(--border)] shrink-0">
+      <div className="fixed inset-0 z-40 bg-black/20 backdrop-blur-xs" onClick={closeBackground} />
+      <div className="fixed left-4 bottom-4 top-[96px] z-50 w-[420px] max-w-[calc(100vw-2rem)] max-h-[calc(100dvh-112px)] flex flex-col bg-[var(--glass-surface)] backdrop-blur-2xl border border-[var(--glass-border)] rounded-2xl shadow-2xl overflow-hidden anim-menu ring-1 ring-black/5 dark:ring-white/10">
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-[var(--glass-border)] shrink-0">
           <FiClock size={14} className="text-[var(--accent)] shrink-0" />
-          <span className="text-sm font-medium text-[var(--text-primary)] flex-1 truncate">
+          <span className="text-[13.5px] font-serif font-bold text-[var(--text-primary)] flex-1 truncate tracking-tight">
             {t('backgroundTasks')}
           </span>
           <span className="text-[11px] text-[var(--text-muted)]">{list.length}</span>
           <button onClick={closeBackground} aria-label={t('screenshotCancel')}
-            className="w-7 h-7 rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:bg-[var(--bg-3)] transition-colors">
+            className="w-7 h-7 rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:bg-[var(--bg-3)] transition-colors cursor-pointer">
             <FiX size={14} />
           </button>
         </div>
         <div className="flex-1 overflow-y-auto p-2 min-h-0">
           {list.length === 0 && (
-            <p className="px-3 py-6 text-center text-xs text-[var(--text-muted)]">
+            <p className="rounded-xl border border-dashed border-[var(--border)] bg-[color-mix(in_srgb,var(--bg-1)_50%,transparent)] px-4 py-5 text-center text-xs leading-relaxed text-[var(--text-muted)]">
               {t('backgroundEmpty')}
             </p>
           )}
           {list.map((task) => (
             <div key={task.conversationId}
-              className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl transition-colors ${
+              className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl border border-transparent transition-colors ${
                 task.unseen ? 'bg-[var(--accent-soft)]' : 'hover:bg-[var(--bg-2)]'
               }`}>
               {task.status === 'running' ? (
@@ -68,7 +68,7 @@ export default function BackgroundPanel() {
               <button
                 onClick={() => jump(task.conversationId)}
                 title={t('backgroundJump')}
-                className="w-7 h-7 rounded-lg flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-3)] hover:text-[var(--text-primary)] transition-colors shrink-0"
+                className="w-7 h-7 rounded-lg flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-3)] hover:text-[var(--text-primary)] transition-colors shrink-0 cursor-pointer"
               >
                 <FiChevronRight size={14} />
               </button>
@@ -78,7 +78,7 @@ export default function BackgroundPanel() {
                   remove(task.conversationId);
                 }}
                 title={t('screenshotCancel')}
-                className="w-7 h-7 rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--error)] hover:bg-[var(--bg-3)] transition-colors shrink-0"
+                className="w-7 h-7 rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--error)] hover:bg-[var(--bg-3)] transition-colors shrink-0 cursor-pointer"
               >
                 <FiX size={13} />
               </button>

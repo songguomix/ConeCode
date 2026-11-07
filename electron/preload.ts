@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import type { ComputerPreviewAppearance } from '../src/core/computer/preview';
 
 contextBridge.exposeInMainWorld('electronAPI', {
   free: {
@@ -38,6 +39,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   message: {
     list: (conversationId: string) => ipcRenderer.invoke('message:list', conversationId),
+    counts: () => ipcRenderer.invoke('message:counts'),
     create: (data: any) => ipcRenderer.invoke('message:create', data),
     delete: (messageId: string) => ipcRenderer.invoke('message:delete', messageId),
     editAndTruncate: (convId: string, messageId: string, content: string) => ipcRenderer.invoke('message:editAndTruncate', convId, messageId, content),
@@ -139,6 +141,73 @@ contextBridge.exposeInMainWorld('electronAPI', {
     list: () => ipcRenderer.invoke('memory:list'),
     save: (entries: any[]) => ipcRenderer.invoke('memory:save', entries),
   },
+  memory2: {
+    setRoot: (rootPath: string | null) => ipcRenderer.invoke('memory2:setRoot', rootPath),
+    load: () => ipcRenderer.invoke('memory2:load'),
+    save: (state: any) => ipcRenderer.invoke('memory2:save', state),
+    backup: () => ipcRenderer.invoke('memory2:backup'),
+    restore: () => ipcRenderer.invoke('memory2:restore'),
+    putObject: (key: string, content: string) => ipcRenderer.invoke('memory2:putObject', key, content),
+    getObject: (key: string) => ipcRenderer.invoke('memory2:getObject', key),
+    deviceId: () => ipcRenderer.invoke('memory2:deviceId'),
+    legacySnapshot: () => ipcRenderer.invoke('memory2:legacySnapshot'),
+    projectId: (rootPath: string) => ipcRenderer.invoke('memory2:projectId', rootPath),
+  },
+  memoryDrive: {
+    status: () => ipcRenderer.invoke('memory-drive:status'),
+    configure: (opts: any) => ipcRenderer.invoke('memory-drive:configure', opts),
+    connect: (opts?: any) => ipcRenderer.invoke('memory-drive:connect', opts),
+    disconnect: () => ipcRenderer.invoke('memory-drive:disconnect'),
+    health: () => ipcRenderer.invoke('memory-drive:health'),
+    search: (tenantId: string, query: any) => ipcRenderer.invoke('memory-drive:search', tenantId, query),
+    remoteChanges: (tenantId: string, since: number, limit?: number) => ipcRenderer.invoke('memory-drive:remoteChanges', tenantId, since, limit),
+    pushChanges: (tenantId: string, changes: any[]) => ipcRenderer.invoke('memory-drive:pushChanges', tenantId, changes),
+    backup: (tenantId: string) => ipcRenderer.invoke('memory-drive:backup', tenantId),
+    restore: (tenantId: string) => ipcRenderer.invoke('memory-drive:restore', tenantId),
+    restoreSnapshot: (tenantId: string) => ipcRenderer.invoke('memory-drive:restoreSnapshot', tenantId),
+    putObject: (tenantId: string, key: string, content: string) => ipcRenderer.invoke('memory-drive:putObject', tenantId, key, content),
+    getObject: (tenantId: string, key: string) => ipcRenderer.invoke('memory-drive:getObject', tenantId, key),
+    usage: (tenantId: string) => ipcRenderer.invoke('memory-drive:usage', tenantId),
+    devices: (tenantId: string) => ipcRenderer.invoke('memory-drive:devices', tenantId),
+    revokeDevice: (tenantId: string, deviceId: string) => ipcRenderer.invoke('memory-drive:revokeDevice', tenantId, deviceId),
+    deleteTenantData: (tenantId: string) => ipcRenderer.invoke('memory-drive:deleteTenantData', tenantId),
+  },
+  dshMarket: {
+    snapshot: (query?: any) => ipcRenderer.invoke('dsh-market:snapshot', query),
+    detail: (pluginId: string, version?: string) => ipcRenderer.invoke('dsh-market:detail', pluginId, version),
+    versions: (pluginId: string) => ipcRenderer.invoke('dsh-market:versions', pluginId),
+    inspectRepository: (input: string, ref?: string, subdir?: string) => ipcRenderer.invoke('dsh-market:inspect-repository', input, ref, subdir),
+    installRepository: (profileId: string, input: string, ref?: string, subdir?: string, opts?: any) => ipcRenderer.invoke('dsh-market:install-repository', profileId, input, ref, subdir, opts),
+    refreshSources: (sourceId?: string) => ipcRenderer.invoke('dsh-market:refresh-sources', sourceId),
+    addRemoteSource: (url: string, title?: string) => ipcRenderer.invoke('dsh-market:add-remote-source', url, title),
+    addLocalSource: () => ipcRenderer.invoke('dsh-market:add-local-source'),
+    removeSource: (sourceId: string) => ipcRenderer.invoke('dsh-market:remove-source', sourceId),
+    inspectLocal: () => ipcRenderer.invoke('dsh-market:inspect-local'),
+    installLocal: (profileId: string, directory: string, opts?: any) => ipcRenderer.invoke('dsh-market:install-local', profileId, directory, opts),
+    install: (profileId: string, pluginId: string, version?: string, opts?: any) => ipcRenderer.invoke('dsh-market:install', profileId, pluginId, version, opts),
+    rollback: (profileId: string, pluginId: string, version?: string) => ipcRenderer.invoke('dsh-market:rollback', profileId, pluginId, version),
+    uninstall: (profileId: string, pluginId: string, deleteData?: boolean) => ipcRenderer.invoke('dsh-market:uninstall', profileId, pluginId, deleteData),
+    setEnabled: (profileId: string, pluginId: string, enabled: boolean) => ipcRenderer.invoke('dsh-market:set-enabled', profileId, pluginId, enabled),
+    saveConfig: (profileId: string, pluginId: string, configs: Record<string, unknown>) => ipcRenderer.invoke('dsh-market:save-config', profileId, pluginId, configs),
+    cancel: (requestId: string) => ipcRenderer.invoke('dsh-market:cancel', requestId),
+    logs: (profileId: string, pluginId: string) => ipcRenderer.invoke('dsh-market:logs', profileId, pluginId),
+    contributions: (profileId: string, pluginId?: string) => ipcRenderer.invoke('dsh-market:contributions', profileId, pluginId),
+    invokeTool: (profileId: string, pluginId: string, tool: string, args: unknown, rowId?: string) => ipcRenderer.invoke('dsh-market:invoke-tool', profileId, pluginId, tool, args, rowId),
+    invokeCommand: (profileId: string, pluginId: string, command: string, rawInput: string, rowId?: string) => ipcRenderer.invoke('dsh-market:invoke-command', profileId, pluginId, command, rawInput, rowId),
+    skills: () => ipcRenderer.invoke('dsh-market:skills'),
+    skillContent: (pluginId: string, name: string) => ipcRenderer.invoke('dsh-market:skill-content', pluginId, name),
+    switchProfile: (profileId: string) => ipcRenderer.invoke('dsh-market:switch-profile', profileId),
+    createProfile: (profileId: string, name?: string) => ipcRenderer.invoke('dsh-market:create-profile', profileId, name),
+    restartRuntime: () => ipcRenderer.invoke('dsh-market:restart-runtime'),
+    openExternal: (url: string) => ipcRenderer.invoke('dsh-market:open-external', url),
+    revealPath: (target: string) => ipcRenderer.invoke('dsh-market:reveal-path', target),
+    revealLog: (profileId: string, pluginId: string) => ipcRenderer.invoke('dsh-market:reveal-log', profileId, pluginId),
+    onEvent: (callback: (event: any) => void) => {
+      const listener = (_: any, event: any) => callback(event);
+      ipcRenderer.on('dsh-market:event', listener);
+      return () => ipcRenderer.removeListener('dsh-market:event', listener);
+    },
+  },
   mcp: {
     list: () => ipcRenderer.invoke('mcp:list'),
     call: (server: string, tool: string, args: any) => ipcRenderer.invoke('mcp:call', server, tool, args),
@@ -195,6 +264,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
   },
   computer: {
+    openPreview: (appearance?: ComputerPreviewAppearance) => ipcRenderer.invoke('computer-preview:open', appearance),
+    closePreview: () => ipcRenderer.invoke('computer-preview:close'),
+    previewStatus: () => ipcRenderer.invoke('computer-preview:get-visibility'),
+    onPreviewVisibility: (callback: (status: { visible: boolean }) => void) => {
+      const listener = (_event: unknown, status: { visible: boolean }) => callback(status);
+      ipcRenderer.on('computer-preview:visibility-changed', listener);
+      return () => ipcRenderer.removeListener('computer-preview:visibility-changed', listener);
+    },
+    onStatus: (callback: (status: unknown) => void) => {
+      const listener = (_event: unknown, status: unknown) => callback(status);
+      ipcRenderer.on('computer:status-changed', listener);
+      return () => ipcRenderer.removeListener('computer:status-changed', listener);
+    },
     status: () => ipcRenderer.invoke('computer:status'),
     setEnabled: (on: boolean) => ipcRenderer.invoke('computer:setEnabled', on),
     requestPermissions: () => ipcRenderer.invoke('computer:requestPermissions'),
@@ -206,8 +288,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
     capture: () => ipcRenderer.invoke('screenshot:capture'),
     begin: () => ipcRenderer.invoke('screenshot:begin'),
     getImage: () => ipcRenderer.invoke('screenshot:get-image'),
+    ready: (session: number) => ipcRenderer.invoke('screenshot:ready', session),
     finish: (dataUrl: string) => ipcRenderer.invoke('screenshot:finish', dataUrl),
     cancel: () => ipcRenderer.invoke('screenshot:cancel'),
+    onImage: (callback: (image: { dataUrl: string; width: number; height: number; session: number }) => void) => {
+      const listener = (_: unknown, image: any) => callback(image);
+      ipcRenderer.on('screenshot:image', listener);
+      return () => ipcRenderer.removeListener('screenshot:image', listener);
+    },
+    onReset: (callback: () => void) => {
+      const listener = () => callback();
+      ipcRenderer.on('screenshot:reset', listener);
+      return () => ipcRenderer.removeListener('screenshot:reset', listener);
+    },
     onResult: (callback: (dataUrl: string) => void) => {
       const listener = (_: unknown, dataUrl: string) => callback(dataUrl);
       ipcRenderer.on('screenshot:result', listener);

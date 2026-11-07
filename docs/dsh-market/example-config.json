@@ -1,0 +1,8 @@
+{
+  "$comment": "Example row config for dsh-plugin-error-radar@0.2.0. Paste into Installed → Configure. dataDir is a real directory containing tool-trace-YYYY-MM.jsonl files.",
+  "error-radar": {
+    "enabled": true,
+    "dataDir": "~/dsh-tool-trace",
+    "errorRateAlert": 20
+  }
+}

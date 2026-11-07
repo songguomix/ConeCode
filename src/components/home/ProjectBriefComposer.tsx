@@ -37,11 +37,11 @@ export default function ProjectBriefComposer() {
   };
 
   return (
-    <section className="mb-5 rounded-2xl border border-[var(--glass-border)] bg-[var(--glass-card)]/80 backdrop-blur-xl p-5 min-w-0 shadow-2xs" aria-label={t('briefTitle')}>
-      <div className="flex items-center gap-2 mb-3 min-w-0">
+    <section className="mb-5 rounded-xl border border-[var(--glass-border)] bg-[var(--glass-card)] p-4 min-w-0 shadow-2xs" aria-label={t('briefTitle')}>
+      <div className="flex flex-wrap items-center gap-2 mb-3 min-w-0">
         <FiMessageSquare size={15} className="text-[var(--accent)] shrink-0" />
         <h2 className="text-[16px] font-bold text-[var(--text-primary)] font-serif tracking-tight truncate">{t('briefTitle')}</h2>
-        <div className="ml-auto flex items-center gap-1.5 text-[10px] font-medium shrink-0" aria-hidden={!brief}>
+        <div className="ml-auto flex flex-wrap items-center gap-1.5 text-[10px] font-medium shrink-0" aria-hidden={!brief}>
           <Step label={t('briefStep1')} active={!brief} done={!!brief} />
           <span className="text-[var(--text-muted)]">→</span>
           <Step label={t('briefStep2')} active={!!brief && !starting} done={false} />
@@ -49,7 +49,7 @@ export default function ProjectBriefComposer() {
           <Step label={t('briefStep3')} active={starting} done={false} />
         </div>
       </div>
-      <div className="rounded-xl bg-[var(--glass-surface)]/80 border border-[var(--glass-border)] p-3 focus-within:ring-2 focus-within:ring-[var(--accent)]/30 focus-within:border-[var(--accent)]/60 transition-all">
+      <div className="rounded-xl bg-[color-mix(in_srgb,var(--glass-surface)_80%,transparent)] border border-[var(--glass-border)] p-3 focus-within:ring-2 focus-within:ring-[color-mix(in_srgb,var(--accent)_30%,transparent)] focus-within:border-[color-mix(in_srgb,var(--accent)_60%,transparent)] transition-all">
         <textarea
           id="conecode-project-idea"
           aria-label={t('briefIdeaLabel')}
@@ -63,12 +63,11 @@ export default function ProjectBriefComposer() {
           className="block w-full resize-y min-h-[56px] max-h-64 bg-transparent text-[15px] font-[450] leading-relaxed text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)] disabled:opacity-60"
         />
         <div className="mt-2 flex items-center gap-2 flex-wrap">
-          <span className="flex-1 min-w-[140px] text-[11px] text-[var(--text-muted)]">{model ? t('briefInputHint') : t('selectModelHint')}</span>
           {generating ? (
-            <button onClick={cancel} className="px-3 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--bg-2)] text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]">{t('cancel')}</button>
+            <button onClick={cancel} className="ml-auto px-3 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--bg-2)] text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] cursor-pointer transition-colors">{t('cancel')}</button>
           ) : (
             <button onClick={generateBrief} disabled={!idea.trim() || !model || busy}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-[var(--accent)] text-white text-xs font-medium hover:bg-[var(--accent-hover)] shadow-xs disabled:opacity-40 transition-all">
+              className="ml-auto inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-[var(--accent)] text-white text-xs font-medium hover:bg-[var(--accent-hover)] shadow-xs disabled:opacity-40 transition-all cursor-pointer">
               <FiArrowUp size={12} /> {t(brief ? 'briefRegenerate' : 'briefGenerate')}
             </button>
           )}
@@ -95,7 +94,7 @@ export default function ProjectBriefComposer() {
             {...compositionProps}
             disabled={starting}
             rows={11}
-            className="block w-full resize-y min-h-[180px] max-h-[480px] rounded-xl border border-[var(--glass-border)] bg-[var(--glass-surface)]/70 backdrop-blur-md p-3 text-sm leading-relaxed text-[var(--text-primary)] outline-none focus:border-[var(--accent)] disabled:opacity-60"
+            className="block w-full resize-y min-h-[180px] max-h-[480px] rounded-xl border border-[var(--glass-border)] bg-[color-mix(in_srgb,var(--glass-surface)_70%,transparent)] backdrop-blur-md p-3 text-sm leading-relaxed text-[var(--text-primary)] outline-none focus:border-[var(--accent)] disabled:opacity-60"
           />
           <div className="mt-2 flex items-center gap-1.5 text-[11px] text-[var(--text-muted)] min-w-0">
             <FiFolder size={12} className="shrink-0" />
@@ -104,14 +103,13 @@ export default function ProjectBriefComposer() {
             </span>
           </div>
           <div className="mt-3 flex items-center justify-end gap-2 flex-wrap">
-            <span className="mr-auto text-[11px] text-[var(--text-muted)]">{t('briefOutputHint')}</span>
             <button onClick={copy} disabled={!prompt.trim()}
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg-2)] text-xs text-[var(--text-secondary)] hover:text-[var(--accent)] disabled:opacity-40">
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg-2)] text-xs text-[var(--text-secondary)] hover:text-[var(--accent)] disabled:opacity-40 cursor-pointer transition-colors">
               {copied ? <FiCheck size={12} /> : <FiCopy size={12} />}{t(copied ? 'briefCopied' : 'briefCopy')}
             </button>
             <button onClick={startProject} disabled={!prompt.trim() || !model || busy}
               title={willReuseFolder ? t('briefStartInCurrent') : t('briefStartInNew')}
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[var(--accent)] text-white text-xs font-medium hover:bg-[var(--accent-hover)] disabled:opacity-40">
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[var(--accent)] text-white text-xs font-medium hover:bg-[var(--accent-hover)] disabled:opacity-40 cursor-pointer transition-colors">
               {starting ? <FiLoader size={12} className="animate-spin" /> : <FiCornerDownLeft size={12} />}{t(starting ? 'briefStarting' : willReuseFolder ? 'briefStartInCurrent' : 'briefStartInNew')}
             </button>
           </div>
@@ -132,7 +130,7 @@ export default function ProjectBriefComposer() {
 function Step({ label, active, done }: { label: string; active: boolean; done: boolean }) {
   return (
     <span className={`px-1.5 py-0.5 rounded-md whitespace-nowrap ${
-      done ? 'bg-[var(--success)]/15 text-[var(--success)]'
+      done ? 'bg-[color-mix(in_srgb,var(--success)_15%,transparent)] text-[var(--success)]'
       : active ? 'bg-[var(--accent-soft)] text-[var(--accent)]'
       : 'bg-[var(--bg-3)] text-[var(--text-muted)]'
     }`}>{label}</span>

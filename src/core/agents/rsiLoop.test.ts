@@ -60,6 +60,7 @@ describe('rsiLoop executable closed loop', () => {
     expect(o.status).toBe('accepted');
     expect(o.state.best.id).toBe('rsi-001');
     expect(o.state.acceptedCount).toBe(1);
+    expect(o.state.archive).toEqual([{ id: 'rsi-001', metrics: { 'test.failures': 1 } }]);
   });
 
   it('rejects external failures and demands rollback (no residue)', () => {
@@ -217,6 +218,31 @@ describe('rsiLoop executable closed loop', () => {
     expect(validateCandidate(
       cand({ successCriteria: [{ metric: 'vibes', threshold: 'looks good', external: false }] }), goal, '/ws',
     ).join(';')).toMatch(/external:true/);
+  });
+
+  it('normalizes relative paths and checks workspace boundaries on every platform', () => {
+    const paths = (touch: string[]) => cand({ blastRadius: { touch, doNotTouch: [] } });
+    expect(validateCandidate(paths(['src/../a.ts']), goal, '/ws')).toEqual([]);
+    expect(validateCandidate(paths(['/ws/../ws-other/a.ts']), goal, '/ws').join(';')).toMatch(/escapes workspace/);
+    expect(validateCandidate(paths(['../ws-other/a.ts']), goal, '/ws').join(';')).toMatch(/escapes workspace/);
+    expect(validateCandidate(paths(['C:\\other\\a.ts']), goal, 'C:\\workspace').join(';')).toMatch(/escapes workspace/);
+    expect(validateCandidate(paths(['src\\..\\a.ts']), goal, 'C:\\workspace')).toEqual([]);
+    expect(validateCandidate(paths(['.conecode/rsi/x/../GOAL_VECTOR.md']), goal, '/ws').join(';')).toMatch(/frozen eval region/);
+    expect(validateCandidate(paths(['.conecode/rsi/conversations/session/GOAL_VECTOR.md']), goal, '/ws').join(';')).toMatch(/frozen eval region/);
+    expect(validateCandidate(paths(['.conecode/rsi/conversations/session/GOAL_VECTOR.md']), goal, 'C:\\workspace').join(';')).toMatch(/frozen eval region/);
+    expect(validateCandidate(paths(['.conecode/rsi/conversations/session']), goal, 'C:\\workspace').join(';')).toMatch(/frozen eval region/);
+    expect(validateCandidate(paths(['.conecode/rsi/conversations']), goal, '/ws').join(';')).toMatch(/frozen eval region/);
+    expect(validateCandidate(paths(['.conecode/rsi/conversations/session/iterations/one.md']), goal, '/ws')).toEqual([]);
+    expect(validateCandidate(cand({ blastRadius: { touch: ['src/secret.ts'], doNotTouch: ['src'] } }), goal, '/ws').join(';')).toMatch(/doNotTouch/);
+  });
+
+  it('clears consecutive failure history after an accepted improvement', () => {
+    const previous = { ...createLoopState(goal, '/ws'), recentFailures: ['no-improvement', 'no-improvement'] as const };
+    const outcome = recordEpisodeOutcome({ ...previous, recentFailures: [...previous.recentFailures] }, {
+      candidate: cand(), result: goodResult(), costUsd: 0.1,
+      parentId: null, baselineId: 'base-0', strategyId: 'default',
+    });
+    expect(outcome.state.recentFailures).toEqual([]);
   });
 
   it('slow registration refuses single-win lore', () => {

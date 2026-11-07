@@ -16,13 +16,17 @@ const SANDBOX_MODES = [
 type ApprovalMode = (typeof APPROVAL_MODES)[number]['value'];
 type SandboxMode = (typeof SANDBOX_MODES)[number]['value'];
 
+interface GovernanceIslandProps {
+  compact?: boolean;
+}
+
 /**
  * One compact "island" pill in the model row that carries the two runtime
  * safety decisions — operation approval and the command sandbox — which used
  * to live in Settings. The pill opens a small popup built like the model /
  * mode popups so they stay one visual family.
  */
-export default function GovernanceIsland() {
+export default function GovernanceIsland({ compact = false }: GovernanceIslandProps = {}) {
   const { t } = useLanguageStore();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -75,17 +79,16 @@ export default function GovernanceIsland() {
         title={`${t('securityPolicy')} · ${t(approvalMeta.labelKey)} · ${t('sandbox')} ${sandboxOn ? t('sandboxOn') : t('sandboxOff')}`}
         aria-haspopup="dialog"
         aria-expanded={open}
-        className={`flex items-center gap-1.5 h-8 px-2.5 rounded-full border transition-all backdrop-blur-md shadow-2xs ${
+        className={`flex items-center gap-1.5 h-8 ${compact ? 'w-8 justify-center px-0' : 'px-2.5'} rounded-full border transition-all backdrop-blur-md shadow-2xs cursor-pointer ${
           open
-            ? 'bg-[var(--accent-soft)] border-[var(--accent)]/50 text-[var(--accent)] shadow-xs'
+            ? 'bg-[var(--accent-soft)] border-[color-mix(in_srgb,var(--accent)_50%,transparent)] text-[var(--accent)] shadow-xs'
             : cautious
               ? 'bg-red-500/10 border-red-500/40 text-red-500 hover:bg-red-500/15'
               : 'bg-[var(--glass-card)] hover:bg-[var(--bg-2)] border-[var(--glass-border)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
         }`}
       >
-        <FiShield size={12} className={cautious ? 'shrink-0' : sandboxOn ? 'text-[var(--success)] shrink-0' : 'text-[var(--warning)] shrink-0'} />
-        <span className="text-[11px] font-semibold whitespace-nowrap">{t('securityPolicy')}</span>
-        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${sandboxOn ? 'bg-[var(--success)]' : 'bg-[var(--warning)]'}`} />
+        <FiShield size={compact ? 13 : 12} className={cautious ? 'shrink-0' : sandboxOn ? 'text-[var(--success)] shrink-0' : 'text-[var(--warning)] shrink-0'} />
+        {!compact && <span className="text-[11px] font-semibold whitespace-nowrap">{t('securityPolicy')}</span>}
       </button>
 
       {open && (
@@ -170,7 +173,7 @@ export default function GovernanceIsland() {
                   {t(sandboxOn ? 'sandboxOnDesc' : 'sandboxOffDesc')}
                 </p>
                 {sandboxOn && (
-                  <label className="flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg bg-[var(--bg-3)]/70 border border-[var(--glass-border)] text-[11px] text-[var(--text-secondary)] cursor-pointer">
+                  <label className="flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg bg-[color-mix(in_srgb,var(--bg-3)_70%,transparent)] border border-[var(--glass-border)] text-[11px] text-[var(--text-secondary)] cursor-pointer">
                     <span>{t('sandboxNetwork')}</span>
                     <input
                       type="checkbox"

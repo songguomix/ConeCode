@@ -227,6 +227,31 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
     promptExample: '{"action": "remember", "kind": "workflow", "text": "Run the tests and report real output before calling a task done", "why": "asked twice after a claim that turned out untested"}',
   },
   {
+    name: 'memory_search',
+    description:
+      'Search ConeCode long-term memory (global facts, project knowledge, past episodes, reusable lessons) before re-solving a problem. ' +
+      'Returns ranked memories with source, version and status. Read-only. Use it when the user refers to earlier work, when a bug looks familiar, or before making a decision that may already have been made.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: str('What to look for, in natural language or keywords'),
+        scope: {
+          type: 'string',
+          description: 'all = global + current project (default); project = current project only; global = cross-project user preferences/facts',
+          enum: ['all', 'project', 'global'],
+        },
+        layers: {
+          type: 'array',
+          description: 'Optional layer filter: global, project, episodic, semantic, working',
+          items: { type: 'string', enum: ['global', 'project', 'episodic', 'semantic', 'working'] },
+        },
+        limit: { type: 'integer', description: 'Maximum results, 1–20 (default 8)' },
+      },
+      required: ['query'],
+    },
+    promptExample: '{"action": "memory_search", "query": "network module timeout bug", "scope": "all", "limit": 8}',
+  },
+  {
     name: 'page_navigate',
     description:
       'Open a page in the built-in browser. Any https URL works with no project open (driven headless: snapshot/click/fill keep working on it). ' +
@@ -574,7 +599,7 @@ export const MUTATING_TOOLS = new Set(BUILTIN_TOOLS.filter((tl) => tl.mutating).
 /** Exact Plan Mode allowlist, shared by schema filtering and the executor gate. */
 export const PLAN_MODE_TOOLS = new Set([
   'read_file', 'list_dir', 'search', 'glob', 'system_info', 'perf_snapshot', 'perf_monitor', 'perf_inspect', 'cost_snapshot', 'background_status', 'git_status', 'git_diff',
-  'web_fetch', 'web_search', 'use_skill', 'spawn_agent', 'ask_user', 'generate_image',
+  'web_fetch', 'web_search', 'use_skill', 'spawn_agent', 'ask_user', 'generate_image', 'memory_search',
 ]);
 
 // ---------------------------------------------------------------------------

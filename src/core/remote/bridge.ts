@@ -217,7 +217,11 @@ async function handleCommand(cmd: any) {
       break;
     case 'newConversation': {
       const model = useModelStore.getState().getSelectedModel();
-      await chat.createConversation(model?.providerId || '', model?.id || '');
+      if (chat.agentMode === 'rsi') {
+        await chat.newRsiConversation(model?.providerId || '', model?.id || '');
+      } else {
+        await chat.newConversation(model?.providerId || '', model?.id || '');
+      }
       break;
     }
     case 'deleteConversation':

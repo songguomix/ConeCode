@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { v4 as uuidv4 } from 'uuid';
 import { useWorkspaceStore } from './workspace.store';
 import type { Message } from '../types';
+import type { RsiToolEvidence } from '../core/agents/rsiRuntime';
 
 // The operation a change performs. Set explicitly at the proposal site — never
 // inferred from the free-text description (which mis-fires when an edit's
@@ -34,7 +35,7 @@ export interface CodeChange {
 // Keyed by conversation: a single global list let one chat's pending card block
 // another chat's flush, and sent the results to whichever conversation happened
 // to own the first change in the list.
-const batchResults = new Map<string, string[]>();
+const batchResults = new Map<string, { text: string; evidence?: RsiToolEvidence }[]>();
 
 /** Locate the real user turn that owns an assistant change proposal. */
 export function checkpointRewindIndex(messages: Message[], messageId: string): number {
@@ -47,11 +48,11 @@ export function checkpointRewindIndex(messages: Message[], messageId: string): n
   return idx;
 }
 
-function recordOutcome(change: CodeChange, text: string) {
+function recordOutcome(change: CodeChange, text: string, evidence?: RsiToolEvidence) {
   const convId = change.conversationId;
   if (!convId) return;
   const list = batchResults.get(convId) || [];
-  list.push(text);
+  list.push({ text, evidence });
   batchResults.set(convId, list);
 }
 
@@ -73,7 +74,8 @@ async function flushIfResolved(convId: string | undefined) {
     convId,
     ctx.providerId!,
     ctx.modelId!,
-    results.join('\n\n'),
+    results.map((result) => result.text).join('\n\n'),
+    results.flatMap((result) => result.evidence ? [result.evidence] : []),
   );
 }
 
@@ -372,7 +374,13 @@ export const useCodeChangesStore = create<CodeChangesStore>((set, get) => ({
     const label = changeLabel(change);
     recordOutcome(change, success
       ? `User approved ${label}.\n${result}`
-      : `User approved ${label}, but the action failed.\n${result}`);
+      : `User approved ${label}, but the action failed.\n${result}`, {
+        action: change.kind === 'create' ? 'create_file' : change.kind,
+        path: change.filePath,
+        command: change.kind === 'exec' ? change.newCode : undefined,
+        succeeded: success,
+        detail: result,
+      });
     await flushIfResolved(change.conversationId);
 
     return { success, result };
@@ -438,6 +446,7 @@ export const useCodeChangesStore = create<CodeChangesStore>((set, get) => ({
       recordOutcome(
         change,
         `User undid the previously applied change to ${label}. The conversation remains, but the workspace no longer includes that change.`,
+        { action: 'edit', path: change.filePath, succeeded: true },
       );
       await flushIfResolved(change.conversationId);
     }

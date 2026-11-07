@@ -23,14 +23,14 @@ import {
   type SnapshotHandle, type StopOutcome,
 } from './rsiLoop';
 import {
-  appendEvolutionLog, hashContent, loadBaseline,
+  appendEvolutionLog, hashContent, loadBaseline, RSI_EVOLUTION_LOG,
 } from './rsiPersistence';
 import { appendExperiment, createDiscoveryTree, parseTree, serializeTree, type RsiFs } from './rsiTree';
 import {
   buildMetricDeltas, runVerifyCascade,
   type CascadeStage, type CommandRunner, type MetricBinding,
 } from './rsiVerify';
-import type { EpisodeResult, JudgeScores } from './rsiReward';
+import { scaledDelta, type EpisodeResult, type JudgeScores } from './rsiReward';
 
 // ---------------------------------------------------------------------------
 // Async FS over the Electron IPC bridge (renderer-safe: no node:fs).
@@ -38,6 +38,8 @@ import type { EpisodeResult, JudgeScores } from './rsiReward';
 
 export interface AsyncRsiFs {
   readFile(path: string): Promise<string | null>;
+  /** false must prove absence; null means the bridge cannot determine it. */
+  pathExists?(path: string): Promise<boolean | null>;
   /** Must ensure parent dirs (fs:writeFile does NOT mkdir — main.ts:933). */
   writeFile(path: string, content: string): Promise<void>;
   mkdir(path: string): Promise<void>;
@@ -48,6 +50,7 @@ export interface AsyncRsiFs {
 
 interface ElectronFsApi {
   readFile(p: string): Promise<string | null>;
+  stat?(p: string): Promise<{ isFile: boolean; isDirectory: boolean } | null>;
   writeFile(p: string, c: string): Promise<boolean>;
   createDir(p: string): Promise<boolean>;
   readDir(p: string): Promise<Array<{ name: string; path: string; isDirectory: boolean }> | null>;
@@ -71,12 +74,19 @@ export function electronAsyncFs(): AsyncRsiFs | null {
   };
   return {
     readFile: async (p) => {
-      try {
-        const c = await api.readFile(p);
-        return typeof c === 'string' ? c : null;
-      } catch {
-        return null;
-      }
+      const c = await api.readFile(p);
+      return typeof c === 'string' ? c : null;
+    },
+    pathExists: async (p) => {
+      if (api.stat && await api.stat(p)) return true;
+      // Both stat/readFile hide filesystem errors as null. readDir hides
+      // errors as [] and omits dotfiles. Only a non-empty successful listing
+      // can establish absence of a visible child; all other cases are unknown.
+      const name = p.replace(/\\/g, '/').split('/').pop() ?? '';
+      const entries = await api.readDir(parentDir(p));
+      if (!Array.isArray(entries) || entries.length === 0 || name.startsWith('.')) return null;
+      const windows = /^[a-z]:[\\/]/i.test(p) || p.startsWith('\\\\');
+      return entries.some((entry) => windows ? entry.name.toLowerCase() === name.toLowerCase() : entry.name === name);
     },
     writeFile: async (p, c) => {
       await api.createDir(parentDir(p));
@@ -89,18 +99,17 @@ export function electronAsyncFs(): AsyncRsiFs | null {
     listFiles: async (dir) => {
       try {
         const entries = await api.readDir(dir);
-        if (!Array.isArray(entries)) return null;
+        // The IPC returns [] for read failures, too: an empty response cannot
+        // serve as evidence that files observed later were newly created.
+        if (!Array.isArray(entries) || entries.length === 0) return null;
         return entries.filter((e) => e && !e.isDirectory && typeof e.path === 'string').map((e) => e.path);
       } catch {
         return null;
       }
     },
     deleteFile: async (p) => {
-      try {
-        await api.deleteFile(p);
-      } catch {
-        // Best-effort rollback: failures are collected by the caller.
-      }
+      const ok = await api.deleteFile(p);
+      if (!ok) throw new Error(`deleteFile failed: ${p}`);
     },
   };
 }
@@ -132,6 +141,8 @@ export function electronExecRunner(): CommandRunner | null {
 // ---------------------------------------------------------------------------
 
 export interface WorkspaceSnapshot extends SnapshotHandle {
+  /** Only paths whose absence was positively established before mutation. */
+  absentPaths?: string[];
   /** dir → files present when snapshotted (undeclared-creation detection). */
   scanned: Record<string, string[]>;
 }
@@ -145,9 +156,12 @@ function parentDirOf(p: string): string {
 /** Snapshot declared touch contents + parent-dir listings. */
 export async function snapshotWorkspace(fs: AsyncRsiFs, touchPaths: string[]): Promise<WorkspaceSnapshot> {
   const files: Record<string, string> = {};
+  const absentPaths: string[] = [];
   for (const p of touchPaths) {
     const c = await fs.readFile(p);
     if (c != null) files[p] = c;
+    else if (await fs.pathExists?.(p) === false) absentPaths.push(p);
+    else throw new Error(`Cannot snapshot ${p}: file contents are unreadable or absence is unconfirmed`);
   }
   const scanned: Record<string, string[]> = {};
   const dirs = [...new Set(touchPaths.map(parentDirOf))];
@@ -155,7 +169,10 @@ export async function snapshotWorkspace(fs: AsyncRsiFs, touchPaths: string[]): P
     const list = await fs.listFiles(d);
     if (list) scanned[d] = [...list].sort();
   }
-  return { id: touchPaths.join(','), files, takenAt: Date.now(), scanned };
+  const listed = new Set(Object.values(scanned).flat());
+  const appeared = absentPaths.find((path) => listed.has(path));
+  if (appeared) throw new Error(`Cannot snapshot ${appeared}: file appeared while collecting the snapshot`);
+  return { id: touchPaths.join(','), files, absentPaths, takenAt: Date.now(), scanned };
 }
 
 export interface RollbackReport {
@@ -174,12 +191,16 @@ export interface RollbackReport {
  */
 export async function rollbackWorkspace(
   fs: AsyncRsiFs,
-  snapshot: SnapshotHandle & { scanned?: Record<string, string[]> },
+  snapshot: SnapshotHandle & { scanned?: Record<string, string[]>; absentPaths?: string[]; declaredPaths?: string[] },
   readCurrent: (path: string) => Promise<string | null>,
 ): Promise<RollbackReport> {
   const errors: string[] = [];
   const current: Record<string, string> = {};
-  for (const p of Object.keys(snapshot.files)) {
+  const scanned = snapshot.scanned ?? {};
+  const previouslyListed = new Set(Object.values(scanned).flat());
+  // Positive evidence of an original always wins, including older snapshots.
+  const absentPaths = (snapshot.absentPaths ?? []).filter((path) => !previouslyListed.has(path));
+  for (const p of new Set([...Object.keys(snapshot.files), ...absentPaths])) {
     const c = await readCurrent(p);
     if (c != null) current[p] = c;
   }
@@ -207,11 +228,10 @@ export async function rollbackWorkspace(
   deleted.sort();
   // Undeclared creations: present in re-scanned dirs but absent before.
   const undeclaredCreated: string[] = [];
-  const scanned = (snapshot as { scanned?: Record<string, string[]> }).scanned ?? {};
   for (const [dir, before] of Object.entries(scanned)) {
     const after = await fs.listFiles(dir);
     if (!after) continue;
-    const known = new Set([...before, ...Object.keys(snapshot.files)]);
+    const known = new Set([...before, ...Object.keys(snapshot.files), ...(snapshot.declaredPaths ?? [])]);
     for (const f of after) {
       if (!known.has(f) && !undeclaredCreated.includes(f)) undeclaredCreated.push(f);
     }
@@ -314,8 +334,10 @@ export async function verifyAndAdjudicate(prev: LoopState, deps: AdjudicateDeps)
 
   // 1. Goal freeze + candidate validation — before spending verification budget.
   const rawGoal = await deps.afs.readFile(`${deps.rsiDir.replace(/\/+$/, '')}/GOAL_VECTOR.md`);
-  if (rawGoal != null && hashContent(rawGoal) !== deps.goalHash) {
-    const st: LoopState = { ...prev, stopped: true, stopReasons: [...prev.stopReasons, 'goal-vector-mutated'] };
+  if (rawGoal == null || hashContent(rawGoal) !== deps.goalHash) {
+    const reason = rawGoal == null ? 'goal-vector-missing' : 'goal-vector-mutated';
+    const rollback = await rollbackWorkspace(deps.afs, deps.snapshot, (p) => deps.afs.readFile(p));
+    const st: LoopState = { ...prev, stopped: true, stopReasons: [...prev.stopReasons, reason] };
     await deps.afs.writeFile(
       `${deps.rsiDir.replace(/\/+$/, '')}/LOOP_STATE.json`,
       JSON.stringify({ version: 1, state: st }, null, 2),
@@ -324,11 +346,11 @@ export async function verifyAndAdjudicate(prev: LoopState, deps: AdjudicateDeps)
       outcome: {
         state: st, reward: NaN,
         verdict: { action: 'reject', reason: 'external-fail' },
-        mustRollback: false, status: 'failed', failureReason: 'goal-vector-mutated', duplicate: false,
+        mustRollback: true, status: 'failed', failureReason: reason, duplicate: false,
       },
       state: st, iterationPath: null, evolutionAppended: false,
       stop: evaluateStop({ ...stopInput(st), cannotVerify: true }),
-      preempted: 'goal-vector-mutated', rollback: null, cascadeStages: 0, missingMetrics: [],
+      preempted: reason, rollback, cascadeStages: 0, missingMetrics: [],
     };
   }
   const errors = validateCandidate(deps.candidate, deps.goal, deps.workspaceRoot);
@@ -339,6 +361,10 @@ export async function verifyAndAdjudicate(prev: LoopState, deps: AdjudicateDeps)
   // 2. Run the declared cascade on the real exec bridge.
   const cascade = await runVerifyCascade(deps.runner, deps.workspaceRoot, deps.stages);
   const { deltas, missing } = buildMetricDeltas(deps.bindings, deps.baseline, cascade.stages);
+  const missingRequiredMetrics = deps.goal.metrics.filter((metric) => !deltas.some((delta) => delta.id === metric.id));
+  for (const metric of missingRequiredMetrics) {
+    if (!missing.some((message) => message.startsWith(`${metric.id}:`))) missing.push(`${metric.id}: no measured delta for frozen metric`);
+  }
   const extraDiags = [
     cascade.stoppedAt ? `cascade stopped at ${cascade.stoppedAt} (${cascade.costSteps}/${deps.stages.length} stages)` : null,
     missing.length ? `missing metrics: ${missing.join('; ')}` : null,
@@ -346,7 +372,7 @@ export async function verifyAndAdjudicate(prev: LoopState, deps: AdjudicateDeps)
   ].filter(Boolean).join('\n');
 
   const result: EpisodeResult = {
-    externalPass: cascade.passedAll,
+    externalPass: cascade.passedAll && missingRequiredMetrics.length === 0,
     metrics: deltas.map((d) => ({ id: d.id, delta: d.delta, ...(d.scale != null ? { scale: d.scale } : {}), ...(d.minDelta != null ? { minDelta: d.minDelta } : {}) })),
     judges: deps.judges,
     filesTouched: deps.filesTouched,
@@ -375,7 +401,7 @@ export async function verifyAndAdjudicate(prev: LoopState, deps: AdjudicateDeps)
   const appended = appendExperiment(tree, {
     id: deps.candidate.id, parentId: deps.parentId, baselineId: deps.baselineId,
     candidateId: deps.candidate.id, module: deps.candidate.module, strategyId: deps.strategyId,
-    externalPass: result.externalPass, metrics: Object.fromEntries(deltas.map((d) => [d.id, d.delta])),
+    externalPass: result.externalPass, metrics: Object.fromEntries(deltas.map((d) => [d.id, scaledDelta(d)])),
     reward: outcome.reward, costUsd: Math.max(0, deps.costUsd), costSteps: cascade.costSteps,
     budgetUsd: deps.candidate.costBudgetUsd, attempts: 1, status: outcome.status,
     ...(outcome.failureReason ? { failureReason: outcome.failureReason } : {}),
@@ -431,14 +457,18 @@ export async function verifyAndAdjudicate(prev: LoopState, deps: AdjudicateDeps)
   };
 }
 
-// Write-through helper for the sync serializers: stage writes in a scratch
-// list, then flush them through the async bridge in order.
+// Cache the existing log for its sync append serializer, then await writes.
 interface PendingWrite { path: string; content: string }
 
-async function writeThrough(afs: AsyncRsiFs, _rsiDir: string, fn: (fs: RsiFs) => void): Promise<void> {
+async function writeThrough(afs: AsyncRsiFs, rsiDir: string, fn: (fs: RsiFs) => void): Promise<void> {
   const pending: PendingWrite[] = [];
+  const logPath = `${rsiDir.replace(/\/+$/, '')}/${RSI_EVOLUTION_LOG}`;
+  const existingLog = await afs.readFile(logPath);
   const capturing: RsiFs = {
-    readFile: () => { throw new Error('writeThrough is write-only'); },
+    readFile: (path) => {
+      if (path !== logPath) throw new Error(`uncached RSI serializer read: ${path}`);
+      return existingLog;
+    },
     writeFile: (p, c) => { pending.push({ path: p, content: c }); },
     mkdir: () => {},
     listDir: () => [],

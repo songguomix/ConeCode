@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react';
+import type { ReactNode } from 'react';
 import {
   FiPlus,
   FiRotateCcw,
@@ -10,18 +11,13 @@ import {
   FiX,
   FiFileText,
   FiChevronDown,
-  FiChevronUp,
-  FiCheckCircle,
+  FiChevronRight,
   FiTag,
   FiLayers,
 } from 'react-icons/fi';
 import { usePromptStore, type CustomUserPrompt } from '../../stores/prompt.store';
 import { useLanguageStore } from '../../stores/language.store';
-import {
-  type BuiltinPromptKey,
-  BUILTIN_PROMPTS_META,
-  type PromptMeta,
-} from '../../core/prompt/defaultPrompts';
+import { BUILTIN_PROMPTS_META } from '../../core/prompt/defaultPrompts';
 
 const CATEGORIES = [
   { id: 'all', labelKey: 'promptFilterAll', defaultLabel: '全部' },
@@ -31,9 +27,31 @@ const CATEGORIES = [
   { id: 'utility', labelKey: 'promptFilterUtility', defaultLabel: '辅助功能' },
 ] as const;
 
+function IconAction({ label, onClick, children, danger = false }: {
+  label: string;
+  onClick: () => void;
+  children: ReactNode;
+  danger?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+      className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+        danger
+          ? 'text-[var(--text-secondary)] hover:text-[var(--error)] hover:bg-[color-mix(in_srgb,var(--error)_10%,transparent)]'
+          : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-3)]'
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
 export default function PromptsSettingsPanel() {
   const { t } = useLanguageStore();
-  const overrides = usePromptStore((s) => s.overrides);
   const customUserPrompts = usePromptStore((s) => s.customUserPrompts);
   const getPrompt = usePromptStore((s) => s.getPrompt);
   const setPrompt = usePromptStore((s) => s.setPrompt);
@@ -49,7 +67,14 @@ export default function PromptsSettingsPanel() {
   const [activeCategory, setActiveCategory] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const [collapsedKeys, setCollapsedKeys] = useState<Set<string>>(() => new Set());
+  // Built-ins and existing custom prompts start collapsed so the catalog reads
+  // as a list first and an editor second.
+  const [collapsedKeys, setCollapsedKeys] = useState<Set<string>>(
+    () => new Set([
+      ...BUILTIN_PROMPTS_META.map((meta) => meta.key),
+      ...customUserPrompts.map((prompt) => prompt.id),
+    ]),
+  );
 
   // Modal state for creating / editing custom prompts
   const [modalOpen, setModalOpen] = useState(false);
@@ -80,7 +105,7 @@ export default function PromptsSettingsPanel() {
   };
 
   const handleResetAll = () => {
-    if (window.confirm(t('promptResetAllConfirm') || '确定要将所有已修改的内置提示词一键恢复为系统默认吗？此操作不影响自定义提示词。')) {
+    if (window.confirm(t('promptResetAllConfirm'))) {
       resetAllPrompts();
     }
   };
@@ -162,238 +187,286 @@ export default function PromptsSettingsPanel() {
   }, [activeCategory, searchQuery, customUserPrompts]);
 
   const anyModified = hasAnyModified();
+  const allBuiltinsCollapsed = filteredBuiltin.length > 0
+    && filteredBuiltin.every((meta) => collapsedKeys.has(meta.key));
+
+  // Built-in prompt keys may not exist in every locale; fall back to the
+  // authored Chinese title/description instead of rendering the raw key.
+  const translate = (key: string, fallback: string) => {
+    const value = t(key);
+    return value && value !== key ? value : fallback;
+  };
+
+  const toggleAllBuiltins = () => {
+    setCollapsedKeys((prev) => {
+      const next = new Set(prev);
+      if (allBuiltinsCollapsed) filteredBuiltin.forEach((meta) => next.delete(meta.key));
+      else filteredBuiltin.forEach((meta) => next.add(meta.key));
+      return next;
+    });
+  };
 
   return (
-    <div className="flex flex-col h-full overflow-hidden">
-      {/* Top Header & Actions Toolbar */}
-      <div className="p-4 border-b border-[var(--border)]/70 bg-[var(--bg-1)]/50 shrink-0 space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h4 className="text-[14px] font-bold text-[var(--text-primary)] font-serif">
-              {t('promptSettingsTitle') || '提示词管理与自定义'}
-            </h4>
-            <p className="text-[11.5px] text-[var(--text-muted)] mt-0.5">
-              {t('promptSettingsSubtitle') ||
-                '所有系统提示词均已整理成独立编辑框，可自行微调优化，也可一键恢复默认或新建专属提示词。'}
-            </p>
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            {/* New custom prompt button */}
-            <button
-              onClick={handleOpenNewModal}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-[var(--accent)] to-[#e88a6a] text-white text-xs font-semibold hover:opacity-95 shadow-2xs transition-all cursor-pointer"
-            >
-              <FiPlus size={13} />
-              <span>{t('promptNewButton') || '新建提示词'}</span>
-            </button>
-
-            {/* Reset all prompts button */}
-            <button
-              onClick={handleResetAll}
-              disabled={!anyModified}
-              title={anyModified ? (t('promptResetAllHint') || '将所有已修改的内置提示词重置为初始默认') : (t('promptAllDefaultHint') || '当前所有内置提示词均为默认状态')}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border transition-all ${
-                anyModified
-                  ? 'bg-[var(--bg-2)] text-amber-500 hover:text-amber-600 hover:bg-[var(--bg-3)] border-amber-500/30 cursor-pointer shadow-2xs'
-                  : 'bg-[var(--bg-2)]/50 text-[var(--text-muted)] border-transparent opacity-50 cursor-not-allowed'
-              }`}
-            >
-              <FiRotateCcw size={12} />
-              <span>{t('promptResetAll') || '一键恢复所有默认'}</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Search bar & Category filters */}
-        <div className="flex flex-wrap items-center gap-2 pt-1">
-          <div className="relative flex-1 min-w-[200px]">
+    <div className="flex flex-col h-full min-h-0 min-w-0 overflow-hidden">
+      {/* Compact toolbar: search, create, reset, then category filters. */}
+      <div className="shrink-0 px-3 sm:px-4 py-2.5 space-y-2 border-b border-[color-mix(in_srgb,var(--border)_70%,transparent)] bg-[color-mix(in_srgb,var(--bg-1)_55%,transparent)]">
+        <div className="flex items-center gap-2">
+          <div className="relative flex-1 min-w-0">
             <FiSearch size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)]" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder={t('promptSearchPlaceholder') || '搜索提示词名称、描述或正文关键词...'}
-              className="w-full bg-[var(--bg-2)] border border-[var(--border)] rounded-xl pl-8 pr-7 py-1.5 text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] outline-none focus:border-[var(--accent)] transition-all"
+              placeholder={t('promptSearchPlaceholder')}
+              aria-label={t('promptSearchPlaceholder')}
+              className="search-input w-full h-8 bg-[var(--bg-2)] border border-[var(--border)] rounded-xl pl-8 pr-8 text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] outline-none focus:border-[var(--accent)] transition-all"
             />
             {searchQuery && (
               <button
+                type="button"
                 onClick={() => setSearchQuery('')}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                aria-label={t('clear')}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 p-0.5 rounded text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors cursor-pointer"
               >
                 <FiX size={12} />
               </button>
             )}
           </div>
 
-          <div className="flex items-center gap-1 shrink-0 overflow-x-auto py-0.5">
-            {CATEGORIES.map((cat) => (
-              <button
-                key={cat.id}
-                onClick={() => setActiveCategory(cat.id)}
-                className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all cursor-pointer ${
-                  activeCategory === cat.id
-                    ? 'bg-[var(--accent)] text-white shadow-2xs font-semibold'
-                    : 'bg-[var(--bg-2)] text-[var(--text-secondary)] hover:bg-[var(--bg-3)] hover:text-[var(--text-primary)] border border-[var(--border)]/70'
-                }`}
-              >
-                {t(cat.labelKey) || cat.defaultLabel}
-                {cat.id === 'custom' && customUserPrompts.length > 0 && (
-                  <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-white/20 text-white">
-                    {customUserPrompts.length}
-                  </span>
-                )}
-              </button>
-            ))}
+          <button
+            type="button"
+            onClick={handleOpenNewModal}
+            className="inline-flex items-center gap-1.5 h-8 px-2.5 sm:px-3 rounded-xl bg-[var(--accent)] text-white text-[11.5px] font-semibold hover:bg-[var(--accent-hover)] shadow-2xs transition-colors shrink-0 cursor-pointer"
+          >
+            <FiPlus size={13} />
+            <span className="hidden sm:inline">{t('promptNewButton')}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleResetAll}
+            disabled={!anyModified}
+            title={anyModified ? t('promptResetAllHint') : t('promptAllDefaultHint')}
+            className={`inline-flex items-center gap-1.5 h-8 px-2.5 rounded-xl text-[11.5px] font-medium border transition-colors shrink-0 ${
+              anyModified
+                ? 'bg-[var(--bg-2)] text-amber-500 hover:bg-[var(--bg-3)] border-amber-500/30 shadow-2xs cursor-pointer'
+                : 'bg-[color-mix(in_srgb,var(--bg-2)_50%,transparent)] text-[var(--text-muted)] border-transparent opacity-50 cursor-not-allowed'
+            }`}
+          >
+            <FiRotateCcw size={12} />
+            <span className="hidden lg:inline">{t('promptResetAll')}</span>
+          </button>
+        </div>
+
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="flex min-w-0 items-center gap-0.5 overflow-x-auto p-0.5 rounded-xl bg-[var(--bg-1)] border border-[var(--border)]">
+            {CATEGORIES.map((cat) => {
+              const active = activeCategory === cat.id;
+              return (
+                <button
+                  key={cat.id}
+                  type="button"
+                  onClick={() => setActiveCategory(cat.id)}
+                  aria-pressed={active}
+                  className={`shrink-0 inline-flex items-center whitespace-nowrap px-2.5 py-1 rounded-lg text-[11.5px] font-medium transition-all cursor-pointer ${
+                    active
+                      ? 'bg-[var(--bg-2)] text-[var(--accent)] shadow-xs font-semibold border border-[color-mix(in_srgb,var(--border)_70%,transparent)]'
+                      : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[color-mix(in_srgb,var(--bg-2)_50%,transparent)] border border-transparent'
+                  }`}
+                >
+                  {t(cat.labelKey) || cat.defaultLabel}
+                  {cat.id === 'custom' && customUserPrompts.length > 0 && (
+                    <span className={`ml-1 rounded-full px-1.5 text-[9.5px] font-semibold ${
+                      active ? 'bg-[var(--accent-soft)] text-[var(--accent)]' : 'bg-[var(--bg-3)] text-[var(--text-muted)]'
+                    }`}>
+                      {customUserPrompts.length}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
           </div>
         </div>
       </div>
 
       {/* Main Prompts Content Area (Scrollable) */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-6">
+      <div className="flex-1 min-h-0 overflow-y-auto px-3 sm:px-4 py-3.5 space-y-5">
         {/* Section A: Custom User Prompts */}
         {(activeCategory === 'all' || activeCategory === 'custom') && (
-          <div className="space-y-3">
-            <div className="flex items-center justify-between px-1">
-              <div className="flex items-center gap-2">
-                <FiLayers size={14} className="text-[var(--accent)]" />
-                <h5 className="text-[13px] font-bold text-[var(--text-primary)]">
-                  {t('promptCustomSectionTitle') || '我的自定义提示词'}
+          <section className="space-y-2.5" aria-labelledby="custom-prompts-heading">
+            <div className="flex items-center justify-between gap-2 px-0.5">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="w-6 h-6 rounded-lg flex items-center justify-center bg-[var(--accent-soft)] text-[var(--accent)] shrink-0">
+                  <FiLayers size={12} />
+                </span>
+                <h5 id="custom-prompts-heading" className="text-[12.5px] font-bold text-[var(--text-primary)] truncate">
+                  {t('promptCustomSectionTitle')}
                 </h5>
-                <span className="text-[11px] px-2 py-0.5 rounded-full bg-[var(--accent-soft)] text-[var(--accent)] font-semibold border border-[var(--accent)]/30">
+                <span className="text-[10.5px] px-1.5 py-0.5 rounded-md bg-[var(--bg-3)] text-[var(--text-secondary)] font-semibold border border-[var(--border)]">
                   {customUserPrompts.length}
                 </span>
               </div>
               <button
+                type="button"
                 onClick={handleOpenNewModal}
-                className="text-xs text-[var(--accent)] hover:underline flex items-center gap-1 font-medium cursor-pointer"
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium text-[var(--accent)] hover:bg-[var(--accent-soft)] transition-colors shrink-0 cursor-pointer"
               >
                 <FiPlus size={12} />
-                <span>{t('promptNewCustom') || '添加一条'}</span>
+                <span>{t('promptNewCustom')}</span>
               </button>
             </div>
 
             {filteredCustom.length === 0 ? (
-              <div className="border border-dashed border-[var(--border)] rounded-2xl p-5 text-center bg-[var(--bg-1)]/40">
-                <p className="text-xs text-[var(--text-muted)]">
-                  {customUserPrompts.length === 0
-                    ? (t('promptCustomEmptyTip') || '暂无自定义提示词。点击“新建提示词”创建专属的人设角色、项目编码规范或指令模版。')
-                    : (t('promptNoSearchMatch') || '没有找到匹配的自定义提示词。')}
+              <div className="flex items-center gap-3 rounded-2xl border border-dashed border-[var(--border)] bg-[color-mix(in_srgb,var(--bg-1)_45%,transparent)] px-4 py-4">
+                <div className="w-9 h-9 rounded-xl bg-[var(--bg-2)] text-[var(--text-muted)] flex items-center justify-center shrink-0">
+                  <FiLayers size={15} />
+                </div>
+                <p className="min-w-0 flex-1 text-[11.5px] text-[var(--text-muted)] leading-relaxed">
+                  {customUserPrompts.length === 0 ? t('promptCustomEmptyTip') : t('promptNoSearchMatch')}
                 </p>
                 {customUserPrompts.length === 0 && (
                   <button
+                    type="button"
                     onClick={handleOpenNewModal}
-                    className="mt-2.5 inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-[var(--bg-2)] hover:bg-[var(--bg-3)] border border-[var(--border)] text-xs text-[var(--accent)] font-medium transition-all cursor-pointer"
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-[var(--bg-2)] hover:bg-[var(--bg-3)] border border-[var(--border)] text-[11px] text-[var(--accent)] font-medium transition-colors shrink-0 cursor-pointer"
                   >
                     <FiPlus size={12} />
-                    <span>{t('promptCreateFirst') || '立即创建第一条'}</span>
+                    <span>{t('promptCreateFirst')}</span>
                   </button>
                 )}
               </div>
             ) : (
-              <div className="grid grid-cols-1 gap-3.5">
-                {filteredCustom.map((cp) => (
-                  <div
-                    key={cp.id}
-                    className="border border-[var(--border)] rounded-2xl p-3.5 bg-[var(--bg-2)] shadow-2xs hover:border-[var(--border)]/80 transition-all space-y-2.5"
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2 min-w-0">
-                        {/* Enabled switch pill */}
+              <div className="space-y-2">
+                {filteredCustom.map((cp) => {
+                  const isCollapsed = collapsedKeys.has(cp.id);
+                  return (
+                    <div
+                      key={cp.id}
+                      className="group overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg-2)] shadow-2xs transition-colors hover:border-[color-mix(in_srgb,var(--accent)_35%,var(--border))]"
+                    >
+                      <div className="flex items-start gap-2 p-3">
                         <button
-                          onClick={() => toggleCustomPrompt(cp.id)}
-                          title={cp.enabled ? '已启用（将注入智能体上下文）' : '已停用'}
-                          className={`px-2 py-0.5 rounded-full text-[10.5px] font-semibold border transition-all cursor-pointer ${
-                            cp.enabled
-                              ? 'bg-[var(--success)]/15 text-[var(--success)] border-[var(--success)]/30'
-                              : 'bg-[var(--bg-3)] text-[var(--text-muted)] border-[var(--border)]'
-                          }`}
+                          type="button"
+                          onClick={() => toggleCollapse(cp.id)}
+                          aria-expanded={!isCollapsed}
+                          aria-label={isCollapsed ? t('promptExpand') : t('promptCollapse')}
+                          className="mt-0.5 p-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-3)] transition-colors shrink-0 cursor-pointer"
                         >
-                          {cp.enabled ? (t('enabled') || '已启用') : (t('disabled') || '已停用')}
+                          {isCollapsed ? <FiChevronRight size={14} /> : <FiChevronDown size={14} />}
                         </button>
-                        <span className="font-bold text-[13px] text-[var(--text-primary)] truncate font-serif">
-                          {cp.title}
-                        </span>
-                        <span className="text-[10px] px-2 py-0.5 rounded-md bg-[var(--bg-3)] text-[var(--text-secondary)] border border-[var(--border)] shrink-0">
-                          {cp.category}
-                        </span>
+
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+                            <span className="max-w-full truncate text-[13px] font-bold text-[var(--text-primary)] font-serif" title={cp.title}>
+                              {cp.title}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => toggleCustomPrompt(cp.id)}
+                              title={cp.enabled ? t('promptCustomEnableDesc') : t('promptCustomEnableLabel')}
+                              className={`px-1.5 py-0.5 rounded-full text-[9.5px] font-semibold border transition-colors cursor-pointer ${
+                                cp.enabled
+                                  ? 'bg-[color-mix(in_srgb,var(--success)_10%,transparent)] text-[var(--success)] border-[color-mix(in_srgb,var(--success)_30%,transparent)]'
+                                  : 'bg-[var(--bg-3)] text-[var(--text-muted)] border-[var(--border)]'
+                              }`}
+                            >
+                              {cp.enabled ? t('enabled') : t('disabled')}
+                            </button>
+                            {cp.category && (
+                              <span className="max-w-full truncate text-[9.5px] px-1.5 py-0.5 rounded-md bg-[var(--bg-3)] text-[var(--text-secondary)] border border-[var(--border)]">
+                                {cp.category}
+                              </span>
+                            )}
+                          </div>
+                          {cp.description && (
+                            <p className="mt-1 text-[11px] text-[var(--text-muted)] leading-relaxed line-clamp-1">{cp.description}</p>
+                          )}
+                          {isCollapsed && (
+                            <p className="mt-1.5 font-mono text-[11px] text-[var(--text-muted)] leading-relaxed line-clamp-2 whitespace-pre-wrap">
+                              {cp.content.trim() || '—'}
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-0.5 shrink-0">
+                          <IconAction label={t('promptCopy')} onClick={() => handleCopy(cp.id, cp.content)}>
+                            {copiedKey === cp.id ? <FiCheck size={13} className="text-[var(--success)]" /> : <FiCopy size={13} />}
+                          </IconAction>
+                          <IconAction label={t('promptEditCustomTitle')} onClick={() => handleOpenEditModal(cp)}>
+                            <FiEdit3 size={13} />
+                          </IconAction>
+                          <IconAction
+                            label={t('delete')}
+                            danger
+                            onClick={() => {
+                              if (window.confirm(t('promptDeleteCustomConfirm').replace('{title}', cp.title))) {
+                                deleteCustomPrompt(cp.id);
+                              }
+                            }}
+                          >
+                            <FiTrash2 size={13} />
+                          </IconAction>
+                        </div>
                       </div>
 
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        <button
-                          onClick={() => handleCopy(cp.id, cp.content)}
-                          title="复制提示词正文"
-                          className="p-1.5 rounded-lg text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-3)] transition-colors cursor-pointer"
-                        >
-                          {copiedKey === cp.id ? <FiCheck size={13} className="text-[var(--success)]" /> : <FiCopy size={13} />}
-                        </button>
-                        <button
-                          onClick={() => handleOpenEditModal(cp)}
-                          title="编辑提示词"
-                          className="p-1.5 rounded-lg text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-3)] transition-colors cursor-pointer"
-                        >
-                          <FiEdit3 size={13} />
-                        </button>
-                        <button
-                          onClick={() => {
-                            if (window.confirm(`确定要删除自定义提示词“${cp.title}”吗？`)) {
-                              deleteCustomPrompt(cp.id);
-                            }
-                          }}
-                          title="删除"
-                          className="p-1.5 rounded-lg text-[var(--text-secondary)] hover:text-[var(--error)] hover:bg-[var(--bg-3)] transition-colors cursor-pointer"
-                        >
-                          <FiTrash2 size={13} />
-                        </button>
-                      </div>
+                      {!isCollapsed && (
+                        <div className="px-3 pb-3 pt-2.5 space-y-1.5 border-t border-[color-mix(in_srgb,var(--border)_60%,transparent)]">
+                          <textarea
+                            value={cp.content}
+                            onChange={(e) => updateCustomPrompt(cp.id, { content: e.target.value })}
+                            placeholder={t('promptCustomContentPlaceholder')}
+                            spellCheck={false}
+                            rows={5}
+                            className="w-full bg-[var(--bg-1)] border border-[var(--border)] rounded-xl p-2.5 text-xs font-mono text-[var(--text-primary)] placeholder-[var(--text-muted)] outline-none focus:border-[var(--accent)] focus:ring-1 focus:ring-[color-mix(in_srgb,var(--accent)_30%,transparent)] resize-y leading-relaxed"
+                          />
+                          <div className="flex items-center justify-between gap-2 px-1 text-[10.5px] text-[var(--text-muted)]">
+                            <span>{cp.content.length} {t('promptChars')}</span>
+                            <span>{t('promptAutoSaveHint')}</span>
+                          </div>
+                        </div>
+                      )}
                     </div>
-
-                    {cp.description && (
-                      <p className="text-[11.5px] text-[var(--text-muted)] leading-relaxed">
-                        {cp.description}
-                      </p>
-                    )}
-
-                    <textarea
-                      value={cp.content}
-                      onChange={(e) => updateCustomPrompt(cp.id, { content: e.target.value })}
-                      placeholder="在此输入自定义提示词正文..."
-                      spellCheck={false}
-                      rows={4}
-                      className="w-full bg-[var(--bg-1)] border border-[var(--border)] rounded-xl p-2.5 text-xs font-mono text-[var(--text-primary)] placeholder-[var(--text-muted)] outline-none focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)]/30 resize-y leading-relaxed shadow-inner"
-                    />
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
-          </div>
+          </section>
         )}
 
         {/* Section B: Built-in System Prompts */}
         {activeCategory !== 'custom' && (
-          <div className="space-y-4">
-            <div className="flex items-center justify-between px-1 border-t border-[var(--border)]/60 pt-4">
-              <div className="flex items-center gap-2">
-                <FiFileText size={14} className="text-[var(--text-muted)]" />
-                <h5 className="text-[13px] font-bold text-[var(--text-primary)]">
-                  {t('promptBuiltinSectionTitle') || '内置系统提示词'}
+          <section className="space-y-2.5" aria-labelledby="builtin-prompts-heading">
+            <div className="flex items-center justify-between gap-2 px-0.5">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="w-6 h-6 rounded-lg flex items-center justify-center bg-[var(--bg-3)] text-[var(--text-secondary)] shrink-0">
+                  <FiFileText size={12} />
+                </span>
+                <h5 id="builtin-prompts-heading" className="text-[12.5px] font-bold text-[var(--text-primary)] truncate">
+                  {t('promptBuiltinSectionTitle')}
                 </h5>
-                <span className="text-[11px] text-[var(--text-muted)]">
-                  ({filteredBuiltin.length} 项)
+                <span className="text-[10.5px] px-1.5 py-0.5 rounded-md bg-[var(--bg-3)] text-[var(--text-secondary)] font-semibold border border-[var(--border)]">
+                  {filteredBuiltin.length}
                 </span>
               </div>
-              <span className="text-[11px] text-[var(--text-muted)]">
-                {t('promptAutoSaveHint') || '修改后即时自动保存并全局生效'}
-              </span>
+              {filteredBuiltin.length > 0 && (
+                <button
+                  type="button"
+                  onClick={toggleAllBuiltins}
+                  className="px-2 py-1 rounded-lg text-[11px] font-medium text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-3)] transition-colors shrink-0 cursor-pointer"
+                >
+                  {allBuiltinsCollapsed ? t('promptExpandAll') : t('promptCollapseAll')}
+                </button>
+              )}
             </div>
 
             {filteredBuiltin.length === 0 ? (
-              <div className="border border-dashed border-[var(--border)] rounded-2xl p-5 text-center bg-[var(--bg-1)]/40">
-                <p className="text-xs text-[var(--text-muted)]">
-                  {t('promptNoSearchMatch') || '没有找到匹配的内置提示词。'}
-                </p>
+              <div className="rounded-2xl border border-dashed border-[var(--border)] bg-[color-mix(in_srgb,var(--bg-1)_45%,transparent)] px-4 py-6 text-center">
+                <FiSearch size={18} className="mx-auto mb-2 text-[var(--text-muted)]" />
+                <p className="text-xs font-semibold text-[var(--text-secondary)]">{t('promptEmptyTitle')}</p>
+                <p className="mt-1 text-[11px] text-[var(--text-muted)]">{t('promptEmptyDesc')}</p>
               </div>
             ) : (
-              <div className="space-y-4">
+              <div className="space-y-2">
                 {filteredBuiltin.map((meta) => {
                   const content = getPrompt(meta.key);
                   const modified = isModified(meta.key);
@@ -401,77 +474,78 @@ export default function PromptsSettingsPanel() {
                   return (
                     <div
                       key={meta.key}
-                      className={`border rounded-2xl p-4 transition-all shadow-2xs space-y-3 ${
+                      className={`overflow-hidden rounded-2xl border bg-[var(--bg-2)] shadow-2xs transition-colors ${
                         modified
-                          ? 'bg-[var(--bg-2)] border-amber-500/40 shadow-xs'
-                          : 'bg-[var(--bg-2)] border-[var(--border)] hover:border-[var(--border)]/90'
+                          ? 'border-amber-500/40'
+                          : 'border-[var(--border)] hover:border-[color-mix(in_srgb,var(--accent)_30%,var(--border))]'
                       }`}
                     >
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          <button
-                            onClick={() => toggleCollapse(meta.key)}
-                            className="p-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-3)] cursor-pointer"
-                            title={isCollapsed ? '展开编辑框' : '折叠'}
-                          >
-                            {isCollapsed ? <FiChevronDown size={14} /> : <FiChevronUp size={14} />}
-                          </button>
-                          <span className="font-bold text-[13.5px] text-[var(--text-primary)] truncate font-serif">
-                            {t(meta.titleKey) || meta.defaultTitle}
-                          </span>
-                          <span
-                            className={`text-[10.5px] px-2 py-0.5 rounded-full font-semibold border ${
-                              modified
-                                ? 'bg-amber-500/15 text-amber-500 border-amber-500/30'
-                                : 'bg-[var(--bg-3)] text-[var(--text-muted)] border-[var(--border)]'
-                            }`}
-                          >
-                            {modified ? (t('promptModifiedBadge') || '已自定义') : (t('promptDefaultBadge') || '系统默认')}
-                          </span>
+                      <div className="flex items-start gap-2 p-3">
+                        <button
+                          type="button"
+                          onClick={() => toggleCollapse(meta.key)}
+                          aria-expanded={!isCollapsed}
+                          aria-label={isCollapsed ? t('promptExpand') : t('promptCollapse')}
+                          className="mt-0.5 p-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-3)] transition-colors shrink-0 cursor-pointer"
+                        >
+                          {isCollapsed ? <FiChevronRight size={14} /> : <FiChevronDown size={14} />}
+                        </button>
+
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="max-w-full truncate text-[13px] font-bold text-[var(--text-primary)] font-serif" title={translate(meta.titleKey, meta.defaultTitle)}>
+                              {translate(meta.titleKey, meta.defaultTitle)}
+                            </span>
+                            <span
+                              className={`text-[9.5px] px-1.5 py-0.5 rounded-full font-semibold border ${
+                                modified
+                                  ? 'bg-amber-500/10 text-amber-500 border-amber-500/30'
+                                  : 'bg-[var(--bg-3)] text-[var(--text-muted)] border-[var(--border)]'
+                              }`}
+                            >
+                              {modified ? t('promptModifiedBadge') : t('promptDefaultBadge')}
+                            </span>
+                          </div>
+                          <p className="mt-0.5 text-[11px] text-[var(--text-muted)] leading-relaxed line-clamp-1">
+                            {translate(meta.descKey, meta.defaultDesc)}
+                          </p>
                         </div>
 
-                        <div className="flex items-center gap-2 shrink-0">
+                        <div className="flex items-center gap-0.5 shrink-0">
                           {modified && (
                             <button
+                              type="button"
                               onClick={() => resetPrompt(meta.key)}
-                              title={t('promptResetThisHint') || '将此提示词恢复为系统初始默认'}
-                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium bg-amber-500/10 text-amber-500 hover:bg-amber-500/20 border border-amber-500/30 transition-all cursor-pointer"
+                              title={t('promptResetThisHint')}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10.5px] font-medium bg-amber-500/10 text-amber-500 hover:bg-amber-500/15 border border-amber-500/25 transition-colors cursor-pointer"
                             >
-                              <FiRotateCcw size={11} />
-                              <span>{t('promptResetThis') || '恢复默认'}</span>
+                              <FiRotateCcw size={10} />
+                              <span className="hidden md:inline">{t('promptResetThis')}</span>
                             </button>
                           )}
-                          <button
-                            onClick={() => handleCopy(meta.key, content)}
-                            title="复制提示词正文"
-                            className="p-1.5 rounded-lg text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-3)] transition-colors cursor-pointer"
-                          >
+                          <IconAction label={t('promptCopy')} onClick={() => handleCopy(meta.key, content)}>
                             {copiedKey === meta.key ? <FiCheck size={13} className="text-[var(--success)]" /> : <FiCopy size={13} />}
-                          </button>
+                          </IconAction>
                         </div>
                       </div>
 
-                      <p className="text-[12px] text-[var(--text-muted)] leading-relaxed">
-                        {t(meta.descKey) || meta.defaultDesc}
-                      </p>
-
                       {!isCollapsed && (
-                        <div className="space-y-1.5">
+                        <div className="px-3 pb-3 pt-2.5 space-y-1.5 border-t border-[color-mix(in_srgb,var(--border)_60%,transparent)]">
                           <textarea
                             value={content}
                             onChange={(e) => setPrompt(meta.key, e.target.value)}
                             spellCheck={false}
-                            rows={8}
-                            className="w-full bg-[var(--bg-1)] border border-[var(--border)] rounded-xl p-3 text-xs font-mono text-[var(--text-primary)] placeholder-[var(--text-muted)] outline-none focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)]/30 resize-y leading-relaxed shadow-inner"
+                            rows={7}
+                            className="w-full bg-[var(--bg-1)] border border-[var(--border)] rounded-xl p-3 text-xs font-mono text-[var(--text-primary)] placeholder-[var(--text-muted)] outline-none focus:border-[var(--accent)] focus:ring-1 focus:ring-[color-mix(in_srgb,var(--accent)_30%,transparent)] resize-y leading-relaxed"
                           />
-                          <div className="flex items-center justify-between text-[11px] text-[var(--text-muted)] px-1">
+                          <div className="flex items-center justify-between gap-2 px-1 text-[10.5px] text-[var(--text-muted)]">
                             <span>
-                              {content.length} {t('promptChars') || '字符'} · {content.split('\n').length} {t('promptLines') || '行'}
+                              {content.length} {t('promptChars')} · {content.split('\n').length} {t('promptLines')}
                             </span>
-                            {modified && (
-                              <span className="text-amber-500 font-medium">
-                                ✓ {t('promptLiveEffective') || '已保存并实时生效'}
-                              </span>
+                            {modified ? (
+                              <span className="text-amber-500 font-medium">✓ {t('promptLiveEffective')}</span>
+                            ) : (
+                              <span>{t('promptAutoSaveHint')}</span>
                             )}
                           </div>
                         </div>
@@ -481,7 +555,7 @@ export default function PromptsSettingsPanel() {
                 })}
               </div>
             )}
-          </div>
+          </section>
         )}
       </div>
 
@@ -493,91 +567,107 @@ export default function PromptsSettingsPanel() {
           }}
           className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 anim-scrim"
         >
-          <div className="w-[540px] max-w-[calc(100vw-32px)] bg-[var(--bg-0)] border border-[var(--border)] rounded-2xl shadow-2xl p-5 space-y-4 anim-modal ring-1 ring-black/10">
-            <div className="flex items-center justify-between border-b border-[var(--border)] pb-3">
-              <div className="flex items-center gap-2">
-                <FiTag className="text-[var(--accent)]" size={16} />
-                <h4 className="text-[15px] font-bold text-[var(--text-primary)] font-serif">
-                  {editingCustomId ? (t('promptEditModalTitle') || '编辑提示词') : (t('promptNewModalTitle') || '新建提示词')}
-                </h4>
+          <div className="w-[560px] max-w-[calc(100vw-32px)] max-h-[calc(100dvh-32px)] overflow-y-auto bg-[var(--bg-0)] border border-[var(--border)] rounded-2xl shadow-2xl p-4 sm:p-5 space-y-4 anim-modal ring-1 ring-black/10">
+            <div className="flex items-center justify-between gap-3 border-b border-[var(--border)] pb-3">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="w-8 h-8 rounded-xl bg-[var(--accent-soft)] text-[var(--accent)] flex items-center justify-center shrink-0">
+                  <FiTag size={15} />
+                </span>
+                <div className="min-w-0">
+                  <h4 className="text-[15px] font-bold text-[var(--text-primary)] font-serif truncate">
+                    {editingCustomId ? t('promptEditModalTitle') : t('promptNewModalTitle')}
+                  </h4>
+                  <p className="text-[11px] text-[var(--text-muted)] truncate">{t('promptAutoSaveHint')}</p>
+                </div>
               </div>
               <button
+                type="button"
                 onClick={() => setModalOpen(false)}
-                className="p-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-2)]"
+                title={t('close')}
+                aria-label={t('close')}
+                className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-2)] transition-colors shrink-0 cursor-pointer"
               >
                 <FiX size={15} />
               </button>
             </div>
 
-            <div className="space-y-3 text-xs">
-              <div>
-                <label className="block text-[11px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1">
-                  {t('promptNameLabel') || '提示词名称 *'}
-                </label>
-                <input
-                  type="text"
-                  value={customForm.title}
-                  onChange={(e) => setCustomForm((f) => ({ ...f, title: e.target.value }))}
-                  placeholder="例如：React 19 & Tailwind 规范、极端防御性编程..."
-                  className="w-full bg-[var(--bg-1)] border border-[var(--border)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-3.5 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-[11px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1">
-                    {t('promptCategoryLabel') || '分类类别'}
+                  <label className="block text-[11px] font-semibold text-[var(--text-secondary)] mb-1">
+                    {t('promptNameLabel')}
+                  </label>
+                  <input
+                    type="text"
+                    value={customForm.title}
+                    onChange={(e) => setCustomForm((f) => ({ ...f, title: e.target.value }))}
+                    placeholder={t('promptCustomTitlePlaceholder')}
+                    className="w-full h-9 bg-[var(--bg-1)] border border-[var(--border)] rounded-xl px-3 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)] transition-colors"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-semibold text-[var(--text-secondary)] mb-1">
+                    {t('promptCategoryLabel')}
                   </label>
                   <input
                     type="text"
                     value={customForm.category}
                     onChange={(e) => setCustomForm((f) => ({ ...f, category: e.target.value }))}
-                    placeholder="代码规范 / 系统人设 / 任务指令..."
-                    className="w-full bg-[var(--bg-1)] border border-[var(--border)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
+                    placeholder={t('promptCustomCategoryPlaceholder')}
+                    className="w-full h-9 bg-[var(--bg-1)] border border-[var(--border)] rounded-xl px-3 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)] transition-colors"
                   />
-                </div>
-                <div>
-                  <label className="block text-[11px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1">
-                    {t('promptEnabledStatus') || '默认启用状态'}
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => setCustomForm((f) => ({ ...f, enabled: !f.enabled }))}
-                    className={`w-full py-2 px-3 rounded-xl border text-xs font-semibold text-center transition-all cursor-pointer ${
-                      customForm.enabled
-                        ? 'bg-[var(--success)]/15 text-[var(--success)] border-[var(--success)]/40'
-                        : 'bg-[var(--bg-2)] text-[var(--text-muted)] border-[var(--border)]'
-                    }`}
-                  >
-                    {customForm.enabled ? '✓ 已启用（生效）' : '✕ 已停用（草稿）'}
-                  </button>
                 </div>
               </div>
 
               <div>
-                <label className="block text-[11px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1">
-                  {t('promptDescLabel') || '功能描述与适用场景 (选填)'}
+                <label className="block text-[11px] font-semibold text-[var(--text-secondary)] mb-1">
+                  {t('promptDescLabel')}
                 </label>
                 <input
                   type="text"
                   value={customForm.description}
                   onChange={(e) => setCustomForm((f) => ({ ...f, description: e.target.value }))}
-                  placeholder="说明此提示词的适用范围或作用..."
-                  className="w-full bg-[var(--bg-1)] border border-[var(--border)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
+                  placeholder={t('promptCustomDescPlaceholder')}
+                  className="w-full h-9 bg-[var(--bg-1)] border border-[var(--border)] rounded-xl px-3 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)] transition-colors"
                 />
               </div>
 
               <div>
-                <label className="block text-[11px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1">
-                  {t('promptContentLabel') || '提示词正文内容 *'}
-                </label>
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <label className="block text-[11px] font-semibold text-[var(--text-secondary)]">
+                    {t('promptContentLabel')}
+                  </label>
+                  <span className="text-[10.5px] text-[var(--text-muted)]">{customForm.content.length} {t('promptChars')}</span>
+                </div>
                 <textarea
                   value={customForm.content}
                   onChange={(e) => setCustomForm((f) => ({ ...f, content: e.target.value }))}
-                  placeholder="在此写入完整的提示词指令内容..."
+                  placeholder={t('promptCustomContentPlaceholder')}
                   rows={7}
-                  className="w-full bg-[var(--bg-1)] border border-[var(--border)] rounded-xl p-3 text-xs font-mono text-[var(--text-primary)] outline-none focus:border-[var(--accent)] resize-y leading-relaxed"
+                  className="w-full bg-[var(--bg-1)] border border-[var(--border)] rounded-xl p-3 text-xs font-mono text-[var(--text-primary)] outline-none focus:border-[var(--accent)] focus:ring-1 focus:ring-[color-mix(in_srgb,var(--accent)_30%,transparent)] resize-y leading-relaxed"
                 />
+              </div>
+
+              <div className="flex items-center justify-between gap-3 px-3 py-2.5 rounded-xl bg-[var(--bg-1)] border border-[var(--border)]">
+                <span className="min-w-0">
+                  <span className="block text-[11.5px] font-semibold text-[var(--text-primary)]">{t('promptCustomEnableLabel')}</span>
+                  <span className="block mt-0.5 text-[10.5px] text-[var(--text-muted)] leading-relaxed">{t('promptCustomEnableDesc')}</span>
+                </span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={customForm.enabled}
+                  aria-label={t('promptCustomEnableLabel')}
+                  onClick={() => setCustomForm((f) => ({ ...f, enabled: !f.enabled }))}
+                  className={`relative w-9 h-5 rounded-full transition-colors shrink-0 cursor-pointer ${
+                    customForm.enabled ? 'bg-[var(--accent)]' : 'bg-[var(--bg-4)]'
+                  }`}
+                >
+                  <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${
+                    customForm.enabled ? 'left-[18px]' : 'left-0.5'
+                  }`} />
+                </button>
               </div>
             </div>
 
@@ -587,15 +677,15 @@ export default function PromptsSettingsPanel() {
                 onClick={() => setModalOpen(false)}
                 className="px-4 py-2 rounded-xl text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-2)] transition-all cursor-pointer"
               >
-                {t('cancel') || '取消'}
+                {t('cancel')}
               </button>
               <button
                 type="button"
                 disabled={!customForm.title.trim()}
                 onClick={handleSaveModal}
-                className="px-4 py-2 rounded-xl bg-gradient-to-r from-[var(--accent)] to-[#e88a6a] text-white text-xs font-semibold hover:opacity-95 disabled:opacity-50 transition-all cursor-pointer shadow-2xs"
+                className="px-4 py-2 rounded-xl bg-[var(--accent)] text-white text-xs font-semibold hover:bg-[var(--accent-hover)] disabled:opacity-50 disabled:cursor-not-allowed transition-all cursor-pointer shadow-2xs"
               >
-                {t('save') || '保存'}
+                {t('save')}
               </button>
             </div>
           </div>

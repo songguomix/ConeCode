@@ -19,6 +19,10 @@ export interface ComputerActivity {
 
 const MAX_ACTIVITY = 100;
 let activitySeq = 0;
+let statusEpoch = 0;
+let statusRequest = 0;
+let visibilityEpoch = 0;
+let visibilityRequest = 0;
 
 interface ComputerStore {
   enabled: boolean;
@@ -30,8 +34,11 @@ interface ComputerStore {
   activity: ComputerActivity[];
   /** Most recent screenshot, so the panel can show what the agent is looking at. */
   lastShot: string | null;
+  previewVisible: boolean;
 
   refresh: () => Promise<void>;
+  subscribeStatus: () => () => void;
+  refreshPreview: () => Promise<void>;
   setEnabled: (on: boolean) => Promise<void>;
   requestPermissions: () => Promise<void>;
   panic: () => Promise<void>;
@@ -51,26 +58,53 @@ export const useComputerStore = create<ComputerStore>((set, get) => ({
   geometry: null,
   activity: [],
   lastShot: null,
+  previewVisible: false,
 
   refresh: async () => {
+    const request = ++statusRequest;
+    const epoch = statusEpoch;
     const status: ComputerStatus | undefined = await api()?.status();
-    if (status) set({ ...status });
+    if (status && epoch === statusEpoch && request === statusRequest) set({ ...status, ...(!status.enabled ? { lastShot: null } : {}) });
+  },
+
+  subscribeStatus: () => {
+    const offStatus = api()?.onStatus?.((status: ComputerStatus) => {
+      statusEpoch += 1;
+      set({ ...status, ...(!status.enabled ? { lastShot: null } : {}) });
+    });
+    const offVisibility = api()?.onPreviewVisibility?.(({ visible }: { visible: boolean }) => {
+      visibilityEpoch += 1;
+      set({ previewVisible: visible });
+    });
+    return () => { offStatus?.(); offVisibility?.(); };
+  },
+
+  refreshPreview: async () => {
+    const request = ++visibilityRequest;
+    const epoch = visibilityEpoch;
+    const result = await api()?.previewStatus?.();
+    if (result && epoch === visibilityEpoch && request === visibilityRequest) set({ previewVisible: result.visible });
   },
 
   setEnabled: async (on: boolean) => {
+    const request = ++statusRequest;
+    const epoch = statusEpoch;
     const status: ComputerStatus | undefined = await api()?.setEnabled(on);
-    if (status) set({ ...status });
-    if (!on) set({ lastShot: null });
+    if (status && epoch === statusEpoch && request === statusRequest) set({ ...status, ...(!status.enabled ? { lastShot: null } : {}) });
   },
 
   requestPermissions: async () => {
+    const request = ++statusRequest;
+    const epoch = statusEpoch;
     const status: ComputerStatus | undefined = await api()?.requestPermissions();
-    if (status) set({ ...status });
+    if (status && epoch === statusEpoch && request === statusRequest) set({ ...status });
   },
 
   panic: async () => {
+    const request = ++statusRequest;
+    const epoch = statusEpoch;
     const status: ComputerStatus | undefined = await api()?.panic();
-    if (status) set({ ...status, lastShot: null });
+    if (status && epoch === statusEpoch && request === statusRequest) set({ ...status, lastShot: null });
   },
 
   note: (req, ok, detail) => set((s) => ({
@@ -80,6 +114,6 @@ export const useComputerStore = create<ComputerStore>((set, get) => ({
     ].slice(-MAX_ACTIVITY),
   })),
 
-  setLastShot: (dataUrl) => set({ lastShot: dataUrl }),
+  setLastShot: (dataUrl) => set({ lastShot: get().enabled ? dataUrl : null }),
   clearActivity: () => set({ activity: [] }),
 }));

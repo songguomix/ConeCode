@@ -92,37 +92,37 @@ export default function HandoffPanel({ onClose }: { onClose: () => void }) {
   // `fixed` positioning inside the 260px column instead of the viewport.
   return createPortal(
     <>
-      <div className="fixed inset-0 z-50 bg-black/30" onClick={() => phase !== 'busy' && onClose()} />
+      <div className="fixed inset-0 z-50 bg-black/30 backdrop-blur-xs" onClick={() => phase !== 'busy' && onClose()} />
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none">
-        <div className="pointer-events-auto w-[480px] max-w-full max-h-[calc(100vh-6rem)] flex flex-col rounded-2xl bg-[var(--bg-2)] border border-[var(--border)] shadow-2xl overflow-hidden anim-menu">
-          <div className="flex items-center gap-2.5 px-4 py-3 border-b border-[var(--border)] shrink-0">
+        <div className="pointer-events-auto w-[480px] max-w-full max-h-[calc(100dvh-2rem)] flex flex-col rounded-2xl bg-[var(--glass-surface)] backdrop-blur-2xl border border-[var(--glass-border)] shadow-2xl overflow-hidden anim-modal ring-1 ring-black/5 dark:ring-white/10">
+          <div className="flex items-center gap-2.5 px-4 py-3 border-b border-[var(--glass-border)] shrink-0">
             <div className="w-7 h-7 rounded-xl bg-[var(--accent-soft)] text-[var(--accent)] flex items-center justify-center shrink-0">
               <FiShare2 size={14} />
             </div>
-            <div className="flex-1 min-w-0 text-[14px] font-medium truncate">{t('handoffButton')}</div>
+            <div className="flex-1 min-w-0 text-[13.5px] font-serif font-bold text-[var(--text-primary)] tracking-tight truncate">{t('handoffButton')}</div>
             <button onClick={onClose} disabled={phase === 'busy'}
-              className="p-1.5 rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-3)] transition-colors disabled:opacity-50">
+              className="p-1.5 rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-3)] transition-colors disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed">
               <FiX size={15} />
             </button>
           </div>
 
           {phase === 'done' ? (
-            <div className="p-5 text-center">
-              <div className="w-11 h-11 rounded-2xl bg-[var(--success)]/15 text-[var(--success)] flex items-center justify-center mx-auto mb-3">
+            <div className="p-5 text-center overflow-y-auto min-h-0">
+              <div className="w-11 h-11 rounded-2xl bg-[color-mix(in_srgb,var(--success)_15%,transparent)] text-[var(--success)] flex items-center justify-center mx-auto mb-3">
                 <FiCheck size={20} />
               </div>
               <p className="text-[14px] font-medium text-[var(--text-primary)] mb-1">{t('handoffDoneTitle')}</p>
-              <p className="text-[12px] font-mono text-[var(--text-muted)] truncate mb-1" title={savedPath}>{savedPath}</p>
+              <p className="text-[12px] leading-relaxed font-mono text-[var(--text-muted)] break-words [overflow-wrap:anywhere] mb-1" title={savedPath}>{savedPath}</p>
               <p className="text-[12.5px] text-[var(--text-secondary)] mb-4">{t('handoffHow')}</p>
               <div className="flex gap-2 justify-center">
                 <button
                   onClick={() => void (window as any).electronAPI?.app?.openPath?.(savedPath).catch(() => {})}
-                  className="px-3.5 py-1.5 rounded-lg bg-[var(--bg-3)] text-[12.5px] text-[var(--text-secondary)] hover:bg-[var(--bg-4)] transition-colors flex items-center gap-1.5"
+                  className="px-3.5 py-1.5 rounded-lg bg-[var(--bg-3)] text-[12.5px] text-[var(--text-secondary)] hover:bg-[var(--bg-4)] transition-colors flex items-center gap-1.5 cursor-pointer"
                 >
                   <FiFolder size={12} /> {t('handoffReveal')}
                 </button>
                 <button onClick={onClose}
-                  className="px-3.5 py-1.5 rounded-lg bg-[var(--accent)] text-white text-[12.5px] font-medium hover:bg-[var(--accent-hover)] transition-colors">
+                  className="px-3.5 py-1.5 rounded-lg bg-[var(--accent)] text-white text-[12.5px] font-medium hover:bg-[var(--accent-hover)] transition-colors cursor-pointer">
                   {t('dismiss')}
                 </button>
               </div>
@@ -132,10 +132,10 @@ export default function HandoffPanel({ onClose }: { onClose: () => void }) {
               {messages === null ? (
                 <p className="text-[12.5px] text-[var(--text-muted)]">…</p>
               ) : turns.length === 0 ? (
-                <p className="text-[13px] text-[var(--text-secondary)]">{t('handoffEmpty')}</p>
+                <p className="rounded-xl border border-dashed border-[var(--border)] bg-[color-mix(in_srgb,var(--bg-1)_50%,transparent)] px-3 py-3 text-xs leading-relaxed text-[var(--text-secondary)]">{t('handoffEmpty')}</p>
               ) : (
                 <>
-                  <div className="px-3 py-2.5 rounded-xl bg-[var(--bg-0)] border border-[var(--border)] text-[12.5px] text-[var(--text-secondary)]">
+                  <div className="px-3 py-2.5 rounded-xl bg-[var(--bg-0)] border border-[var(--border)] text-[12.5px] leading-relaxed text-[var(--text-secondary)] [overflow-wrap:anywhere]">
                     {turns.length} {t('handoffTurnsUnit')} · {sizeKb} KB · {conv?.title}
                   </div>
                   <div>
@@ -146,7 +146,7 @@ export default function HandoffPanel({ onClose }: { onClose: () => void }) {
                       value={fileName}
                       onChange={(e) => setFileName(e.target.value)}
                       spellCheck={false}
-                      className="w-full px-2.5 py-1.5 rounded-lg bg-[var(--bg-0)] border border-[var(--border)] text-[13px] font-mono outline-none focus:border-[var(--accent)]/50"
+                      className="w-full px-2.5 py-1.5 rounded-lg bg-[var(--bg-0)] border border-[var(--border)] text-[13px] font-mono outline-none focus:border-[color-mix(in_srgb,var(--accent)_50%,transparent)]"
                     />
                   </div>
                   <div>
@@ -163,8 +163,8 @@ export default function HandoffPanel({ onClose }: { onClose: () => void }) {
                       [includeResults, setIncludeResults, 'handoffIncludeResults'],
                     ] as const).map(([on, set, key]) => (
                       <button key={key} onClick={() => set(!on)}
-                        className={`flex-1 flex items-center gap-2 px-3 py-2 rounded-xl border text-[12.5px] transition-colors ${
-                          on ? 'border-[var(--accent)]/40 bg-[var(--accent-soft)] text-[var(--accent)]'
+                        className={`flex-1 min-w-0 flex items-center gap-2 px-3 py-2 rounded-xl border text-left text-[12.5px] transition-colors cursor-pointer ${
+                          on ? 'border-[color-mix(in_srgb,var(--accent)_40%,transparent)] bg-[var(--accent-soft)] text-[var(--accent)]'
                             : 'border-[var(--border)] text-[var(--text-muted)] hover:bg-[var(--bg-3)]'
                         }`}>
                         <span className={`w-4 h-4 rounded-md border flex items-center justify-center shrink-0 ${on ? 'bg-[var(--accent)] border-[var(--accent)] text-white' : 'border-[var(--border)]'}`}>
@@ -177,7 +177,7 @@ export default function HandoffPanel({ onClose }: { onClose: () => void }) {
                   <button
                     onClick={() => void exportNow()}
                     disabled={phase === 'busy'}
-                    className="w-full px-3 py-2.5 rounded-xl bg-[var(--accent)] text-white text-[13px] font-medium hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50"
+                    className="w-full px-3 py-2.5 rounded-xl bg-[var(--accent)] text-white text-[13px] font-medium hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
                   >
                     {t('handoffExport')}
                   </button>

@@ -47,7 +47,7 @@ export default function GoalProgressRow() {
 
   return (
     <div className="max-w-[900px] mx-auto w-full px-4 mb-1.5">
-      <div className="flex items-center gap-2.5 px-3.5 py-2 rounded-2xl border border-[var(--accent)]/30 bg-[var(--glass-surface)]/85 backdrop-blur-xl shadow-xs">
+      <div className="flex items-center gap-2.5 px-3.5 py-2 rounded-2xl border border-[color-mix(in_srgb,var(--accent)_30%,transparent)] bg-[color-mix(in_srgb,var(--glass-surface)_85%,transparent)] backdrop-blur-xl shadow-xs">
         <FiTarget size={14} className="text-[var(--accent)] shrink-0" />
         {editing ? (
           <input
@@ -70,24 +70,24 @@ export default function GoalProgressRow() {
         )}
         <div className="flex items-center gap-0.5 shrink-0">
           {editing ? (
-            <button onClick={() => void save()} className="p-1.5 rounded-lg text-[var(--accent)] hover:bg-[var(--bg-3)]" title={t('save')}>
+            <button onClick={() => void save()} className="p-1.5 rounded-lg text-[var(--accent)] hover:bg-[var(--bg-3)] cursor-pointer transition-colors" title={t('save')}>
               <FiCheck size={12} />
             </button>
           ) : (
-            <button onClick={() => { setDraft(goal.text); setEditing(true); }} className="p-1.5 rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-3)]" title={t('editGoal')}>
+            <button onClick={() => { setDraft(goal.text); setEditing(true); }} className="p-1.5 rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-3)] cursor-pointer transition-colors" title={t('editGoal')}>
               <FiEdit3 size={12} />
             </button>
           )}
           {goal.status === 'running' ? (
-            <button onClick={pause} className="p-1.5 rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-3)]" title={t('pauseGoal')}>
+            <button onClick={pause} className="p-1.5 rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-3)] cursor-pointer transition-colors" title={t('pauseGoal')}>
               <FiPause size={12} />
             </button>
           ) : (
-            <button onClick={() => void resume()} className="p-1.5 rounded-lg text-[var(--accent)] hover:bg-[var(--bg-3)]" title={t('resumeGoal')}>
+            <button onClick={() => void resume()} className="p-1.5 rounded-lg text-[var(--accent)] hover:bg-[var(--bg-3)] cursor-pointer transition-colors" title={t('resumeGoal')}>
               <FiPlay size={12} />
             </button>
           )}
-          <button onClick={clear} className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--error)] hover:bg-[var(--bg-3)]" title={t('clearGoal')}>
+          <button onClick={clear} className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--error)] hover:bg-[var(--bg-3)] cursor-pointer transition-colors" title={t('clearGoal')}>
             <FiX size={12} />
           </button>
         </div>

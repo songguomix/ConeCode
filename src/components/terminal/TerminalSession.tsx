@@ -88,7 +88,7 @@ export default function TerminalSession({ id, active }: { id: string; active: bo
         <span key={i} style={seg.style}>{seg.text}</span>
       ))}
       {alive ? (
-        <form onSubmit={handleSubmit} className="flex items-center gap-1.5">
+        <form onSubmit={handleSubmit} className="terminal-prompt flex items-center gap-1.5 rounded px-1 -mx-1">
           <span className="text-[var(--accent)] shrink-0">$</span>
           <input
             ref={inputRef}
@@ -103,7 +103,7 @@ export default function TerminalSession({ id, active }: { id: string; active: bo
       ) : (
         <button
           onClick={spawnShell}
-          className="mt-1 text-[13px] text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors"
+          className="mt-1 text-[13px] text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors cursor-pointer"
         >
           Press to restart shell...
         </button>

@@ -81,8 +81,8 @@ function IconButton({ title, onClick, disabled, active, children }: {
         disabled
           ? 'text-[var(--text-muted)] opacity-40 cursor-default'
           : active
-            ? 'text-[var(--accent)] bg-[var(--accent-soft)]'
-            : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-3)]'
+            ? 'text-[var(--accent)] bg-[var(--accent-soft)] cursor-pointer'
+            : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-3)] cursor-pointer'
       }`}
     >
       {children}
@@ -332,10 +332,8 @@ export default function PreviewPanel() {
 
   // ---- render --------------------------------------------------------------
 
-  const statusColor = state === 'running' ? 'bg-[var(--success)]'
-    : state === 'starting' ? 'bg-[var(--warning)] animate-pulse'
-    : state === 'error' ? 'bg-[var(--error)]'
-    : 'bg-[var(--text-muted)]';
+  const statusColor = state === 'starting' ? 'bg-[var(--warning)] animate-pulse'
+    : 'bg-[var(--error)]';
 
   // Click-to-annotate: pin a coordinate on the preview and hand it to the chat
   // composer (auto-filled) for a precise second pass.
@@ -378,7 +376,7 @@ export default function PreviewPanel() {
   );
 
   return (
-    <div className="flex flex-col h-full bg-[var(--bg-0)]">
+    <div className="preview-panel flex flex-col h-full min-w-0 bg-[var(--bg-0)]">
       <WorkbenchTabs active="preview" subtitle={plan?.command || undefined} actions={actions} />
 
       {/* Browser tabs */}
@@ -404,7 +402,7 @@ export default function PreviewPanel() {
       </div>
 
       {/* Address + tools */}
-      <div className="flex items-center gap-1 px-2 py-1.5 shrink-0">
+      <div className="preview-toolbar flex flex-wrap items-center gap-1 px-2 py-1.5 shrink-0 border-b border-[var(--border)]">
         <IconButton title={t('previewBack')} onClick={() => activeWebview()?.goBack()} disabled={!canBack}>
           <FiArrowLeft size={14} />
         </IconButton>
@@ -425,7 +423,9 @@ export default function PreviewPanel() {
           (e.currentTarget.querySelector('input') as HTMLInputElement | null)?.blur();
         }}>
           <div className="flex items-center gap-2 h-7 px-3 rounded-full bg-[var(--bg-2)] border border-[var(--border)] focus-within:border-[var(--accent)] transition-colors">
-            {activeTab?.url && <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${statusColor}`} title={statusLabel} />}
+            {activeTab?.url && (state === 'starting' || state === 'error') && (
+              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${statusColor}`} title={statusLabel} />
+            )}
             <input
               value={address}
               onChange={(e) => setAddress(e.target.value)}
@@ -647,7 +647,7 @@ function TabChip({ tab, active, onSelect, onClose, newTabLabel, closeLabel }: {
   return (
     <div
       className={`group flex items-center gap-1.5 pl-2.5 pr-1 h-7 rounded-lg shrink-0 max-w-[180px] transition-colors ${
-        active ? 'bg-[var(--bg-3)] text-[var(--text-primary)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-3)]/60'
+        active ? 'bg-[var(--bg-3)] text-[var(--text-primary)]' : 'text-[var(--text-secondary)] hover:bg-[color-mix(in_srgb,var(--bg-3)_60%,transparent)]'
       }`}
     >
       <button onClick={onSelect} title={tab.url || newTabLabel} className="flex items-center gap-1.5 min-w-0 text-[12.5px] outline-none">
@@ -711,7 +711,7 @@ function NewTabPage({ rootPath, state, error, plan, serverUrl, onStart, onOpenSe
       {/* The project's own server, one click away — the reason this page exists. */}
       {!undetected && (
         <div className="w-full max-w-[440px] flex items-center gap-3 px-4 py-3 rounded-2xl bg-[var(--bg-2)] border border-[var(--border)]">
-          <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${running ? 'bg-[var(--success)]/10' : 'bg-[var(--accent-soft)]'}`}>
+          <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${running ? 'bg-[color-mix(in_srgb,var(--success)_10%,transparent)]' : 'bg-[var(--accent-soft)]'}`}>
             {plan?.mode === 'static'
               ? <FiCode size={15} className={running ? 'text-[var(--success)]' : 'text-[var(--accent)]'} />
               : <FiTerminal size={15} className={running ? 'text-[var(--success)]' : 'text-[var(--accent)]'} />}

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   FiX, FiMonitor, FiAlertTriangle, FiCheck, FiExternalLink, FiSlash, FiTrash2, FiCrosshair,
 } from 'react-icons/fi';
@@ -15,7 +15,7 @@ function PermissionRow({ granted, label, hint, action }: {
   return (
     <div className="flex items-start gap-2.5 px-3 py-2.5 rounded-xl bg-[var(--bg-0)] border border-[var(--border)]">
       <div className={`w-5 h-5 rounded-lg flex items-center justify-center shrink-0 mt-0.5 ${
-        granted ? 'bg-[var(--success)]/15 text-[var(--success)]' : 'bg-[var(--warning)]/15 text-[var(--warning)]'
+        granted ? 'bg-[color-mix(in_srgb,var(--success)_15%,transparent)] text-[var(--success)]' : 'bg-[color-mix(in_srgb,var(--warning)_15%,transparent)] text-[var(--warning)]'
       }`}>
         {granted ? <FiCheck size={12} /> : <FiAlertTriangle size={11} />}
       </div>
@@ -30,44 +30,71 @@ function PermissionRow({ granted, label, hint, action }: {
 
 export default function ComputerPanel() {
   const closeComputer = useUIStore((s) => s.closeComputer);
-  const { t } = useLanguageStore();
+  const { t, locale } = useLanguageStore();
   const approvalMode = useSettingsStore((s) => s.approvalOverride ?? s.approvalMode);
   const {
     enabled, supported, platform, accessibility, screenRecording, geometry,
-    activity, lastShot, refresh, setEnabled, requestPermissions, panic, clearActivity,
+    activity, lastShot, refresh, setEnabled, requestPermissions, panic, clearActivity, previewVisible, refreshPreview,
   } = useComputerStore();
   const bottomRef = useRef<HTMLDivElement>(null);
+  const [openingPreview, setOpeningPreview] = useState(false);
+  const [previewError, setPreviewError] = useState<string>();
 
   useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => { void refreshPreview().catch(() => undefined); }, [refreshPreview]);
   useEffect(() => { bottomRef.current?.scrollIntoView({ block: 'end' }); }, [activity.length]);
 
   const isMac = platform === 'darwin';
   const ready = accessibility && screenRecording;
+  const openPreview = async () => {
+    setOpeningPreview(true);
+    setPreviewError(undefined);
+    try {
+      if (previewVisible) {
+        await window.electronAPI.computer.closePreview();
+      } else {
+        const result = await window.electronAPI?.computer?.openPreview?.({
+          locale,
+          theme: document.documentElement.classList.contains('dark') ? 'dark' : 'light',
+        });
+        if (!result?.ok) throw new Error(result?.error || 'Unavailable');
+      }
+      await refreshPreview();
+      if (!previewVisible) closeComputer();
+    } catch { setPreviewError(t('computerPreviewOpenFailed')); }
+    finally { setOpeningPreview(false); }
+  };
 
   return (
     <>
-      <div className="fixed inset-0 z-40 bg-black/20" onClick={closeComputer} />
-      <div className="fixed right-4 top-16 z-50 w-[420px] max-h-[calc(100vh-6rem)] flex flex-col rounded-2xl bg-[var(--bg-2)] border border-[var(--border)] shadow-2xl overflow-hidden">
+      <div className="fixed inset-0 z-40 bg-black/20 backdrop-blur-xs" onClick={closeComputer} />
+      <div className="fixed right-4 top-16 z-50 w-[420px] max-w-[calc(100vw-2rem)] max-h-[calc(100vh-6rem)] flex flex-col rounded-2xl bg-[var(--glass-surface)] backdrop-blur-2xl border border-[var(--glass-border)] shadow-2xl overflow-hidden anim-menu ring-1 ring-black/5 dark:ring-white/10">
         {/* Header */}
-        <div className="flex items-center gap-2.5 px-4 py-3 border-b border-[var(--border)] shrink-0">
+        <div className="flex items-center gap-2.5 px-4 py-3 border-b border-[var(--glass-border)] shrink-0">
           <div className={`w-7 h-7 rounded-xl flex items-center justify-center ${
-            enabled ? 'bg-[var(--error)]/15 text-[var(--error)]' : 'bg-[var(--accent-soft)] text-[var(--accent)]'
+            enabled ? 'bg-[color-mix(in_srgb,var(--error)_15%,transparent)] text-[var(--error)]' : 'bg-[var(--accent-soft)] text-[var(--accent)]'
           }`}>
             <FiMonitor size={14} />
           </div>
           <div className="flex-1 min-w-0">
-            <div className="text-[14px] font-medium">{t('computerControl')}</div>
+            <div className="text-[13.5px] font-serif font-bold text-[var(--text-primary)] tracking-tight">{t('computerControl')}</div>
             <div className="text-[11.5px] text-[var(--text-muted)]">
               {enabled ? t('computerActive') : t('computerInactive')}
             </div>
           </div>
-          <button onClick={closeComputer}
-            className="p-1.5 rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-3)] transition-colors">
+          <button type="button" onClick={() => void openPreview()} disabled={openingPreview}
+            title={t(previewVisible ? 'computerPreviewHide' : 'computerPreviewOpen')} aria-label={t(previewVisible ? 'computerPreviewHide' : 'computerPreviewOpen')}
+            className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-[11.5px] text-[var(--accent)] hover:bg-[var(--accent-soft)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-wait">
+            <FiExternalLink size={12} /><span>{t(previewVisible ? 'computerPreviewHide' : 'computerPreviewOpen')}</span>
+          </button>
+          <button aria-label={t('close')} onClick={closeComputer}
+            className="p-1.5 rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-3)] transition-colors cursor-pointer">
             <FiX size={15} />
           </button>
         </div>
 
         <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3">
+          {previewError && <p role="alert" className="text-[12px] text-[var(--error)]">{previewError}</p>}
           {!supported ? (
             <div className="px-3 py-4 rounded-xl bg-[var(--bg-0)] border border-[var(--border)] text-[13px] text-[var(--text-secondary)]">
               {t('computerUnsupported')}
@@ -75,7 +102,7 @@ export default function ComputerPanel() {
           ) : (
             <>
               {/* What this actually grants */}
-              <div className="px-3 py-2.5 rounded-xl bg-[var(--warning)]/10 border border-[var(--warning)]/25">
+              <div className="px-3 py-2.5 rounded-xl bg-[color-mix(in_srgb,var(--warning)_10%,transparent)] border border-[color-mix(in_srgb,var(--warning)_25%,transparent)]">
                 <div className="flex items-center gap-1.5 text-[12.5px] font-medium text-[var(--warning)] mb-1">
                   <FiAlertTriangle size={12} /> {t('computerWarnTitle')}
                 </div>
@@ -85,9 +112,9 @@ export default function ComputerPanel() {
               {/* Master switch */}
               <button
                 onClick={() => setEnabled(!enabled)}
-                className={`w-full flex items-center gap-3 px-3.5 py-3 rounded-xl border transition-colors ${
+                className={`w-full flex items-center gap-3 px-3.5 py-3 rounded-xl border transition-colors cursor-pointer ${
                   enabled
-                    ? 'bg-[var(--error)]/10 border-[var(--error)]/30 hover:bg-[var(--error)]/15'
+                    ? 'bg-[color-mix(in_srgb,var(--error)_10%,transparent)] border-[color-mix(in_srgb,var(--error)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--error)_15%,transparent)]'
                     : 'bg-[var(--bg-0)] border-[var(--border)] hover:bg-[var(--bg-3)]'
                 }`}
               >
@@ -107,7 +134,7 @@ export default function ComputerPanel() {
               {enabled && (
                 <button
                   onClick={panic}
-                  className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-[var(--error)] text-white text-[13px] font-medium hover:opacity-90 transition-opacity"
+                  className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-[var(--error)] text-white text-[13px] font-medium hover:opacity-90 transition-opacity cursor-pointer"
                 >
                   <FiSlash size={13} /> {t('computerStopNow')}
                 </button>
@@ -123,7 +150,7 @@ export default function ComputerPanel() {
                     hint={accessibility ? t('computerGranted') : t('computerAccessibilityHint')}
                     action={
                       <button onClick={requestPermissions}
-                        className="shrink-0 flex items-center gap-1 px-2 py-1 rounded-lg text-[12px] text-[var(--accent)] hover:bg-[var(--accent-soft)] transition-colors">
+                        className="shrink-0 flex items-center gap-1 px-2 py-1 rounded-lg text-[12px] text-[var(--accent)] hover:bg-[var(--accent-soft)] transition-colors cursor-pointer">
                         {t('computerOpenSettings')} <FiExternalLink size={11} />
                       </button>
                     }
@@ -176,7 +203,7 @@ export default function ComputerPanel() {
                   <div className="flex-1" />
                   {activity.length > 0 && (
                     <button onClick={clearActivity} title={t('previewClearLogs')}
-                      className="p-1 rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-3)] transition-colors">
+                      className="p-1 rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-3)] transition-colors cursor-pointer">
                       <FiTrash2 size={12} />
                     </button>
                   )}

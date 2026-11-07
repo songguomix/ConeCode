@@ -51,8 +51,8 @@ export function applyRecordedUsage(
 }
 
 /**
- * Zero the counter when the server reports a reset NEWER than the one we know.
- * Returns the (possibly unchanged) record and whether a reset was applied.
+ * Roll the counter into the current week, then apply a newer server reset.
+ * Returns the current record and whether either kind of reset was applied.
  */
 export function applyServerResetTo(
   record: FreeWeeklyUsageRecord | null,
@@ -60,13 +60,15 @@ export function applyServerResetTo(
   now: number = Date.now(),
 ): { record: FreeWeeklyUsageRecord; changed: boolean } {
   const weekStart = currentWeekStart(now);
+  const current = applyRecordedUsage(record, 0, now);
+  const rolledOver = record !== null && record.weekStart !== weekStart;
   const serverTime = serverResetAt ? new Date(serverResetAt).getTime() : NaN;
   if (!Number.isFinite(serverTime)) {
-    return { record: record ?? { weekStart, used: 0, resetAt: null }, changed: false };
+    return { record: current, changed: rolledOver };
   }
   const localTime = record?.resetAt ? new Date(record.resetAt).getTime() : null;
   if (localTime !== null && !(serverTime > localTime)) {
-    return { record: record ?? { weekStart, used: 0, resetAt: null }, changed: false };
+    return { record: current, changed: rolledOver };
   }
   return {
     record: { weekStart, used: 0, resetAt: new Date(serverTime).toISOString() },

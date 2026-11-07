@@ -125,6 +125,7 @@ This makes RSI a disciplined improvement loop for a project—not a claim of ope
   | Repo Tour | newcomer map: boot chain, module list, which three files to read first |
   | AI Image Generation | in-chat image generation with gallery and studio |
 
+- **Plugin Market (DSH compatible).** Open the puzzle-piece button in the sidebar. Discover, install and verify real DeepSeek Harness community plugins alongside ConeCode-native ones: pinned npm/Git/local sources, a Cordis-based host runtime for tools, commands and skills, per-plugin config and logs, enable/disable, update/rollback and uninstall. The market shows author-declared DSH ranges separately from recorded ConeCode verification, including partial and incompatible results. Web client halves of DSH plugins are detected but not mounted. See [`docs/dsh-market/`](docs/dsh-market/README.md) for the pinned DSH baseline, compatibility matrix and developer guide.
 - **Skills.** Install and run skills through dedicated run views; the skill editor keeps custom skills editable, and your approval mode and command sandbox still govern whatever a skill actually executes.
 - **Memory.** Standalone memory panel; `/memory` opens it. Long tasks also keep goals, TODO checklists, and context compaction so work survives across sessions.
 
@@ -183,10 +184,10 @@ Available packaging targets:
 npm run dist        # macOS package
 npm run dist:win    # Windows x64 package
 npm run dist:linux  # Linux AppImage (x64)
-npm run dist:all    # macOS + Windows in one run
+npm run dist:all    # macOS arm64 + Windows x64 + Linux x64 in one run
 ```
 
-Packaging requires the matching electron-builder tooling; signing and notarization need your own credentials and nothing is committed. Cloudflared is optional and not committed to this repository. Bundled tunnel support expects `resources/bin/cloudflared-darwin-arm64` on macOS Apple Silicon or `resources/bin/cloudflared-win-x64.exe` on Windows x64. Obtain binaries from the [official Cloudflare releases](https://github.com/cloudflare/cloudflared/releases), or remove the matching `extraResources` entry.
+Packaging requires the matching electron-builder tooling; signing and notarization need your own credentials and nothing is committed. Cloudflared is optional and not committed to this repository. Bundled tunnel support expects `resources/bin/cloudflared-darwin-arm64` on macOS Apple Silicon, `resources/bin/cloudflared-win-x64.exe` on Windows x64, or `resources/bin/cloudflared-linux-x64` on Linux x64. Obtain binaries from the [official Cloudflare releases](https://github.com/cloudflare/cloudflared/releases), or remove the matching `extraResources` entry.
 
 ## Privacy and execution boundaries
 

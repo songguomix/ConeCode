@@ -19,23 +19,22 @@ export default function FreeProviderCard() {
     void refresh();
   }, [refresh]);
   return (
-    <section aria-label="ConeCode Free" className="bg-[var(--bg-2)] border border-[var(--accent)]/40 rounded-2xl p-4 shadow-2xs space-y-3">
+    <section aria-label="ConeCode Free" className="min-w-0 bg-[var(--bg-2)] border border-[color-mix(in_srgb,var(--accent)_40%,transparent)] rounded-2xl p-3.5 sm:p-4 shadow-2xs space-y-3 [overflow-wrap:anywhere]">
       <div className="flex items-center gap-3">
         <FiGift className="text-[var(--accent)] shrink-0" size={20} />
         <div className="flex-1 min-w-0">
           <h3 className="font-semibold text-sm text-[var(--text-primary)]">ConeCode Free</h3>
-          <p className="text-xs text-[var(--text-muted)] mt-1">{zh ? '赠送模型，无需配置 API Key。' : 'Gifted models. No API key required.'}</p>
         </div>
         <button type="button" onClick={() => void refresh()} disabled={loading} aria-label={zh ? '刷新免费服务状态' : 'Refresh free service'} className="p-2 rounded-lg hover:bg-[var(--bg-1)] text-[var(--text-secondary)] disabled:opacity-50">
           <FiRefreshCw size={15} className={loading ? 'animate-spin' : ''} />
         </button>
       </div>
-      <p role="status" className={`text-xs ${status?.available ? 'text-[var(--success)]' : 'text-[var(--text-muted)]'}`}>
+      <p role="status" className={`text-xs leading-relaxed ${status?.available ? 'text-[var(--success)]' : 'text-[var(--text-muted)]'}`}>
         {error ? (zh ? error : 'ConeCode Free is temporarily unavailable. Please try again later.') : status?.available ? (zh ? '正在开放，可直接选择模型使用' : 'Available. Select a model to start.') : loading && !status ? (zh ? '正在获取开放状态…' : 'Checking availability…') : (zh ? '当前未开放' : 'Currently unavailable')}
       </p>
       {status?.mode === 'scheduled' && status.startsAt && status.endsAt && <p className="text-xs text-[var(--text-secondary)]">{zh ? '开放时间：' : 'Available: '}{date(status.startsAt)} — {date(status.endsAt)}</p>}
       {!!status?.models.length && <div className="flex flex-wrap gap-2">{status.models.map((model) => (
-        <button key={model.id} type="button" onClick={() => selectModel(model.id, FREE_PROVIDER_ID)} title={model.id} className="px-2.5 py-1.5 text-xs rounded-lg border border-[var(--border)] bg-[var(--bg-1)] text-[var(--text-primary)] hover:border-[var(--accent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">{model.name}</button>
+        <button key={model.id} type="button" onClick={() => selectModel(model.id, FREE_PROVIDER_ID)} title={model.id} className="max-w-full px-2.5 py-1.5 text-left text-xs rounded-lg border border-[var(--border)] bg-[var(--bg-1)] text-[var(--text-primary)] hover:border-[var(--accent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">{model.name}</button>
       ))}</div>}
       {status?.available && (
         <div className="space-y-1.5">

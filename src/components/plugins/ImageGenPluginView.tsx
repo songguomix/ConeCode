@@ -85,13 +85,13 @@ export default function ImageGenPluginView(props: ImageGenPluginViewProps = {}) 
   };
 
   return (
-    <div className="space-y-4 text-xs">
+    <div className="space-y-3.5 text-xs min-w-0">
       {/* Intro & Tool Status Banner */}
-      <div className="p-3.5 rounded-2xl bg-gradient-to-r from-pink-500/10 via-[var(--accent-soft)] to-violet-500/10 border border-pink-500/20 shadow-2xs">
-        <div className="flex items-start justify-between gap-3">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <span className="p-1.5 rounded-xl bg-pink-500 text-white shadow-2xs">
+      <div className="p-3.5 rounded-xl bg-[var(--accent-soft)] border border-[color-mix(in_srgb,var(--accent)_15%,transparent)]">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0 flex-1 space-y-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="p-1.5 rounded-lg bg-[var(--accent)] text-white">
                 <FiImage size={15} />
               </span>
               <h3 className="font-semibold text-sm text-[var(--text-primary)]">
@@ -107,7 +107,7 @@ export default function ImageGenPluginView(props: ImageGenPluginViewProps = {}) 
           </div>
           <button
             onClick={() => openModal()}
-            className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-[var(--accent)] to-[#e88a6a] text-white font-medium text-xs flex items-center gap-1.5 hover:opacity-95 shadow-2xs transition-all shrink-0 cursor-pointer"
+            className="px-2.5 py-1.5 rounded-lg bg-[var(--accent)] text-white font-medium text-xs flex items-center gap-1.5 hover:bg-[var(--accent-hover)] transition-colors shrink-0 cursor-pointer"
           >
             <SparklesIcon size={13} />
             {t('openStudio')}
@@ -116,11 +116,11 @@ export default function ImageGenPluginView(props: ImageGenPluginViewProps = {}) 
       </div>
 
       {/* Zero Configuration Banner: Uses Software Credentials Directly */}
-      <div className="p-3 rounded-xl bg-[var(--bg-2)] border border-[var(--border)] flex items-start gap-2.5">
-        <span className="p-1 rounded-lg bg-[var(--accent)]/15 text-[var(--accent)] shrink-0 mt-0.5">
+      <div className="p-3 rounded-xl bg-[var(--bg-2)] border border-[var(--border)] flex items-start gap-2.5 min-w-0">
+        <span className="p-1 rounded-lg bg-[color-mix(in_srgb,var(--accent)_15%,transparent)] text-[var(--accent)] shrink-0 mt-0.5">
           <FiKey size={13} />
         </span>
-        <div className="flex-1 space-y-0.5">
+        <div className="min-w-0 flex-1 space-y-1">
           <p className="font-medium text-[var(--text-primary)] text-xs">
             {t('reuseConfigTip')}
           </p>
@@ -132,21 +132,21 @@ export default function ImageGenPluginView(props: ImageGenPluginViewProps = {}) 
 
       {/* Model & Provider Settings */}
       <div className="p-3.5 rounded-2xl bg-[var(--bg-2)] border border-[var(--border)] space-y-3 shadow-2xs">
-        <div className="flex items-center gap-2 pb-2 border-b border-[var(--border)]/60 text-[var(--text-primary)] font-medium">
+        <div className="flex items-center gap-2 pb-2 border-b border-[color-mix(in_srgb,var(--border)_60%,transparent)] text-[var(--text-primary)] font-medium">
           <FiCpu size={14} className="text-[var(--accent)]" />
           <span>{t('providerModelSelect')}</span>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {/* Provider Select */}
-          <div className="space-y-1">
+          <div className="min-w-0 space-y-1">
             <label className="text-[11px] font-medium text-[var(--text-secondary)] flex items-center gap-1">
               <span>{t('callProvider')}</span>
             </label>
             <select
               value={config.providerId || 'auto'}
               onChange={(e) => handleProviderChange(e.target.value)}
-              className="w-full px-2.5 py-1.5 rounded-xl bg-[var(--bg-1)] border border-[var(--border)] text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)] transition-all cursor-pointer"
+              className="w-full min-w-0 px-2.5 py-1.5 rounded-lg bg-[var(--bg-1)] border border-[var(--border)] text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)] transition-all cursor-pointer"
             >
               <option value="auto">{t('autoSelect')}</option>
               <option value={FREE_PROVIDER_ID}>{t('conecodeFreeOption')}</option>
@@ -165,7 +165,7 @@ export default function ImageGenPluginView(props: ImageGenPluginViewProps = {}) 
           </div>
 
           {/* Model Select */}
-          <div className="space-y-1">
+          <div className="min-w-0 space-y-1">
             <label className="text-[11px] font-medium text-[var(--text-secondary)] flex items-center justify-between">
               <span>{t('genModel')}</span>
               {isCustomModel ? (
@@ -191,7 +191,7 @@ export default function ImageGenPluginView(props: ImageGenPluginViewProps = {}) 
               <select
                 value={config.model}
                 onChange={(e) => handleModelSelect(e.target.value)}
-                className="w-full px-2.5 py-1.5 rounded-xl bg-[var(--bg-1)] border border-[var(--border)] text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)] transition-all cursor-pointer"
+                className="w-full min-w-0 px-2.5 py-1.5 rounded-lg bg-[var(--bg-1)] border border-[var(--border)] text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)] transition-all cursor-pointer"
               >
                 {!config.model && (
                   <option value="" disabled>{t('pleaseSelectModel')}</option>
@@ -217,7 +217,7 @@ export default function ImageGenPluginView(props: ImageGenPluginViewProps = {}) 
                     setConfig({ model: e.target.value });
                   }}
                   placeholder={t('customModelPlaceholder')}
-                  className="flex-1 px-2.5 py-1.5 rounded-xl bg-[var(--bg-1)] border border-[var(--border)] text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
+                  className="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg bg-[var(--bg-1)] border border-[var(--border)] text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
                 />
               </div>
             )}
@@ -225,7 +225,7 @@ export default function ImageGenPluginView(props: ImageGenPluginViewProps = {}) 
         </div>
 
         {/* Live Credential Status Preview (Address hidden) */}
-        <div className="p-2.5 rounded-xl bg-[var(--bg-1)] border border-[var(--border)]/70 flex flex-wrap items-center justify-between gap-2 text-[11px]">
+        <div className="p-2.5 rounded-xl bg-[var(--bg-1)] border border-[color-mix(in_srgb,var(--border)_70%,transparent)] flex flex-wrap items-center justify-between gap-2 text-[11px]">
           <div className="flex items-center gap-2 text-[var(--text-secondary)]">
             <span className="font-medium text-[var(--text-secondary)]">
               {resolved.providerName || t('matchedProvider')}
@@ -249,7 +249,7 @@ export default function ImageGenPluginView(props: ImageGenPluginViewProps = {}) 
 
       {/* Default Aspect Ratio & Art Style Settings */}
       <div className="p-3.5 rounded-2xl bg-[var(--bg-2)] border border-[var(--border)] space-y-3 shadow-2xs">
-        <div className="flex items-center gap-2 pb-2 border-b border-[var(--border)]/60 text-[var(--text-primary)] font-medium">
+        <div className="flex items-center gap-2 pb-2 border-b border-[color-mix(in_srgb,var(--border)_60%,transparent)] text-[var(--text-primary)] font-medium">
           <FiSliders size={14} className="text-[var(--accent)]" />
           <span>{t('aspectRatioPref')}</span>
         </div>
@@ -267,14 +267,14 @@ export default function ImageGenPluginView(props: ImageGenPluginViewProps = {}) 
                   key={ratio.id}
                   type="button"
                   onClick={() => setConfig({ aspectRatio: ratio.id as AspectRatio })}
-                  className={`py-1.5 px-2 rounded-xl text-center border transition-all cursor-pointer ${
+                  className={`py-1.5 px-2 rounded-lg text-center border transition-all cursor-pointer ${
                     active
                       ? 'bg-[var(--accent)] text-white border-[var(--accent)] shadow-2xs font-medium'
                       : 'bg-[var(--bg-1)] text-[var(--text-secondary)] border-[var(--border)] hover:bg-[var(--bg-3)]'
                   }`}
                 >
                   <div className="text-[11px] font-mono">{ratio.id}</div>
-                  <div className={`text-[9px] truncate ${active ? 'text-white/80' : 'text-[var(--text-muted)]'}`}>
+                  <div className={`text-[10px] truncate ${active ? 'text-white/80' : 'text-[var(--text-muted)]'}`}>
                     {ratio.label}
                   </div>
                 </button>
@@ -286,14 +286,14 @@ export default function ImageGenPluginView(props: ImageGenPluginViewProps = {}) 
         {/* Quality, Style & Art Style Preset */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
           {/* Quality */}
-          <div className="space-y-1">
+          <div className="min-w-0 space-y-1">
             <label className="text-[11px] font-medium text-[var(--text-secondary)]">
               {t('qualityLevel')}
             </label>
             <select
               value={config.quality || 'standard'}
               onChange={(e) => setConfig({ quality: e.target.value as ImageQuality })}
-              className="w-full px-2.5 py-1.5 rounded-xl bg-[var(--bg-1)] border border-[var(--border)] text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)] transition-all cursor-pointer"
+              className="w-full min-w-0 px-2.5 py-1.5 rounded-lg bg-[var(--bg-1)] border border-[var(--border)] text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)] transition-all cursor-pointer"
             >
               <option value="standard">{t('standardQuality')}</option>
               <option value="hd">{t('hdQuality')}</option>
@@ -301,14 +301,14 @@ export default function ImageGenPluginView(props: ImageGenPluginViewProps = {}) 
           </div>
 
           {/* Color Style */}
-          <div className="space-y-1">
+          <div className="min-w-0 space-y-1">
             <label className="text-[11px] font-medium text-[var(--text-secondary)]">
               {t('colorStyle')}
             </label>
             <select
               value={config.style || 'vivid'}
               onChange={(e) => setConfig({ style: e.target.value as ImageStyle })}
-              className="w-full px-2.5 py-1.5 rounded-xl bg-[var(--bg-1)] border border-[var(--border)] text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)] transition-all cursor-pointer"
+              className="w-full min-w-0 px-2.5 py-1.5 rounded-lg bg-[var(--bg-1)] border border-[var(--border)] text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)] transition-all cursor-pointer"
             >
               <option value="vivid">{t('vividStyle')}</option>
               <option value="natural">{t('naturalStyle')}</option>
@@ -316,14 +316,14 @@ export default function ImageGenPluginView(props: ImageGenPluginViewProps = {}) 
           </div>
 
           {/* Art Style Preset */}
-          <div className="space-y-1">
+          <div className="min-w-0 space-y-1">
             <label className="text-[11px] font-medium text-[var(--text-secondary)]">
               {t('presetArtStyle')}
             </label>
             <select
               value={config.artStyleId || ''}
               onChange={(e) => setConfig({ artStyleId: e.target.value })}
-              className="w-full px-2.5 py-1.5 rounded-xl bg-[var(--bg-1)] border border-[var(--border)] text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)] transition-all cursor-pointer"
+              className="w-full min-w-0 px-2.5 py-1.5 rounded-lg bg-[var(--bg-1)] border border-[var(--border)] text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)] transition-all cursor-pointer"
             >
               <option value="">{t('noPresetStyle')}</option>
               {ART_PRESET_STYLES.map((style) => (
@@ -337,7 +337,7 @@ export default function ImageGenPluginView(props: ImageGenPluginViewProps = {}) 
       </div>
 
       {/* How to use in Dialogue Tool Calling */}
-      <div className="p-3.5 rounded-2xl bg-[var(--bg-2)] border border-[var(--border)] space-y-2.5 shadow-2xs">
+      <div className="p-3.5 rounded-2xl bg-[var(--bg-2)] border border-[var(--border)] space-y-3 shadow-2xs">
         <div className="flex items-center gap-2 text-[var(--text-primary)] font-medium">
           <SparklesIcon size={14} className="text-[var(--accent)]" />
           <span>{t('callInChat')}</span>
@@ -345,11 +345,11 @@ export default function ImageGenPluginView(props: ImageGenPluginViewProps = {}) 
         <p className="text-[11px] text-[var(--text-secondary)] leading-relaxed">
           {t('callInChatDesc')}
         </p>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
-          <div className="p-2 rounded-xl bg-[var(--bg-1)] border border-[var(--border)]/70 text-[var(--text-secondary)] italic">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] leading-relaxed">
+          <div className="p-2 rounded-xl bg-[var(--bg-1)] border border-[color-mix(in_srgb,var(--border)_70%,transparent)] text-[var(--text-secondary)] italic">
             {t('examplePrompt1')}
           </div>
-          <div className="p-2 rounded-xl bg-[var(--bg-1)] border border-[var(--border)]/70 text-[var(--text-secondary)] italic">
+          <div className="p-2 rounded-xl bg-[var(--bg-1)] border border-[color-mix(in_srgb,var(--border)_70%,transparent)] text-[var(--text-secondary)] italic">
             {t('examplePrompt2')}
           </div>
         </div>
@@ -360,8 +360,8 @@ export default function ImageGenPluginView(props: ImageGenPluginViewProps = {}) 
 
       {/* Recent History Gallery preview */}
       {history.length > 0 && (
-        <div className="p-3.5 rounded-2xl bg-[var(--bg-2)] border border-[var(--border)] space-y-2.5 shadow-2xs">
-          <div className="flex items-center justify-between">
+        <div className="p-3.5 rounded-2xl bg-[var(--bg-2)] border border-[var(--border)] space-y-3 shadow-2xs">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="font-medium text-[var(--text-primary)]">{t('recentGallery')} ({history.length})</span>
             <button
               onClick={() => {

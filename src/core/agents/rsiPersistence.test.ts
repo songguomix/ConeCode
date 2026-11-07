@@ -5,7 +5,7 @@ import {
   rebuildLoopStateFromTrees, saveBaseline, saveLoopState, saveStrategy, writeIterationFile,
   MAX_LESSONS,
 } from './rsiPersistence';
-import { createLoopState } from './rsiLoop';
+import { appendToTree, createLoopState, recordEpisodeOutcome } from './rsiLoop';
 import { appendExperiment, createDiscoveryTree, type RsiFs } from './rsiTree';
 import type { GoalVector } from './rsiLoop';
 
@@ -109,6 +109,35 @@ describe('rsiPersistence', () => {
     expect(s.seenIds).toEqual(['a', 'b']);
     expect(s.consecutiveHardFails).toBe(1);
     expect(s.spentUsd).toBeCloseTo(0.3, 10);
+  });
+
+  it('rebuilds the same failure streaks and Pareto frontier as the live loop', () => {
+    let state = createLoopState(goal, '/ws');
+    let tree = createDiscoveryTree('recovery', 'default');
+    const results = [
+      { pass: false, speed: 0, memory: 0 },
+      { pass: true, speed: 1, memory: 0 },
+      { pass: false, speed: 0, memory: 0 },
+      { pass: true, speed: 0, memory: 0.5 },
+      { pass: false, speed: 0, memory: 0 },
+    ];
+    for (const [index, result] of results.entries()) {
+      const input = {
+        candidate: { ...cand(), id: `candidate-${index}` },
+        result: {
+          externalPass: result.pass, metrics: [{ id: 'speed', delta: result.speed }, { id: 'memory', delta: result.memory }],
+          judges: { alignment: 1, simplicity: 1, discipline: 1 }, filesTouched: 1, linesChanged: 5,
+        },
+        costUsd: 0.1, parentId: null, baselineId: 'base', strategyId: 'default',
+      };
+      const outcome = recordEpisodeOutcome(state, input);
+      state = outcome.state;
+      tree = appendToTree(tree, input, outcome);
+    }
+    const recovered = rebuildLoopStateFromTrees(goal, '/ws', 0, [tree]);
+    expect(recovered).toEqual(state);
+    expect(recovered.consecutiveHardFails).toBe(1);
+    expect(recovered.archive.map((node) => node.id)).toEqual(['candidate-1', 'candidate-3']);
   });
 
   it('persists and reads the DREAM-chosen strategy', () => {

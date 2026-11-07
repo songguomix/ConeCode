@@ -1,0 +1,412 @@
+{
+  "schemaVersion": 1,
+  "measuredAt": "2026-11-07T09:17:13.041Z",
+  "mode": "paired-live-observation-payload",
+  "environment": {
+    "node": "v22.23.2",
+    "platform": "darwin",
+    "arch": "arm64",
+    "playwright": "1.65.0"
+  },
+  "sourceDigest": "aec6bc2d6b3170a05dd3853785a8d6d47e9c06dde9a50c5a13d7fcbcbe97abe9",
+  "sampleSize": 9,
+  "fixtureCases": 3,
+  "repeats": 3,
+  "fullChars": 32571,
+  "projectedChars": 23739,
+  "reductionRatio": 0.2711614626508243,
+  "modelCalls": null,
+  "costUsd": null,
+  "taskSuccessRate": null,
+  "fullControllerComparison": "not_run",
+  "note": "Real Chromium observations, paired serialization on the same input. Characters are UTF-16 string lengths, not token counts. PNG bytes are reported separately and excluded from both JSON counts. This measures observation payload only; no model calls or before/after task success, latency, or cost improvement is claimed. This measurement does not run the controller; see the separate controller comparison. Serialization timings are descriptive small samples with fixed full-then-projection order.",
+  "samples": [
+    {
+      "scenario": "form",
+      "iteration": 1,
+      "observationId": "obs_8dbe755c-6347-436e-b8fd-847fcb2b72ca",
+      "observationMs": 47.004583000000025,
+      "fullChars": 2811,
+      "projectedChars": 1959,
+      "fullSerializationMs": 0.012416999999970812,
+      "projectionAndSerializationMs": 0.06837500000000318,
+      "observedTargets": 4,
+      "projectedTargets": 4,
+      "projectedCoverage": {
+        "textTruncated": false,
+        "targetsTruncated": false,
+        "hiddenTargets": 0,
+        "offscreenTargets": 0,
+        "crossOriginFrames": 0,
+        "shadowRoots": 0,
+        "openDialogs": 0,
+        "coverageNotes": [
+          "Only the viewport is captured; content outside the viewport is not claimed to be absent."
+        ],
+        "unreadableRegions": [],
+        "targetsOmittedFromModel": 0,
+        "textOmittedFromModel": 0
+      },
+      "forcedTrimCoverage": {
+        "textTruncated": false,
+        "targetsTruncated": false,
+        "hiddenTargets": 0,
+        "offscreenTargets": 0,
+        "crossOriginFrames": 0,
+        "shadowRoots": 0,
+        "openDialogs": 0,
+        "coverageNotes": [
+          "Only the viewport is captured; content outside the viewport is not claimed to be absent."
+        ],
+        "unreadableRegions": [],
+        "targetsOmittedFromModel": 3,
+        "textOmittedFromModel": 134
+      },
+      "screenshotBytes": 30614
+    },
+    {
+      "scenario": "form",
+      "iteration": 2,
+      "observationId": "obs_c5273c82-6ca3-4895-9b67-f42ccb4e4714",
+      "observationMs": 29.438874999999996,
+      "fullChars": 2811,
+      "projectedChars": 1959,
+      "fullSerializationMs": 0.007749999999987267,
+      "projectionAndSerializationMs": 0.01866699999999355,
+      "observedTargets": 4,
+      "projectedTargets": 4,
+      "projectedCoverage": {
+        "textTruncated": false,
+        "targetsTruncated": false,
+        "hiddenTargets": 0,
+        "offscreenTargets": 0,
+        "crossOriginFrames": 0,
+        "shadowRoots": 0,
+        "openDialogs": 0,
+        "coverageNotes": [
+          "Only the viewport is captured; content outside the viewport is not claimed to be absent."
+        ],
+        "unreadableRegions": [],
+        "targetsOmittedFromModel": 0,
+        "textOmittedFromModel": 0
+      },
+      "forcedTrimCoverage": {
+        "textTruncated": false,
+        "targetsTruncated": false,
+        "hiddenTargets": 0,
+        "offscreenTargets": 0,
+        "crossOriginFrames": 0,
+        "shadowRoots": 0,
+        "openDialogs": 0,
+        "coverageNotes": [
+          "Only the viewport is captured; content outside the viewport is not claimed to be absent."
+        ],
+        "unreadableRegions": [],
+        "targetsOmittedFromModel": 3,
+        "textOmittedFromModel": 134
+      },
+      "screenshotBytes": 30614
+    },
+    {
+      "scenario": "form",
+      "iteration": 3,
+      "observationId": "obs_f6ffb175-f761-4304-bd14-ec5913ef2f9a",
+      "observationMs": 16.125292,
+      "fullChars": 2811,
+      "projectedChars": 1959,
+      "fullSerializationMs": 0.007541999999943982,
+      "projectionAndSerializationMs": 0.01599999999996271,
+      "observedTargets": 4,
+      "projectedTargets": 4,
+      "projectedCoverage": {
+        "textTruncated": false,
+        "targetsTruncated": false,
+        "hiddenTargets": 0,
+        "offscreenTargets": 0,
+        "crossOriginFrames": 0,
+        "shadowRoots": 0,
+        "openDialogs": 0,
+        "coverageNotes": [
+          "Only the viewport is captured; content outside the viewport is not claimed to be absent."
+        ],
+        "unreadableRegions": [],
+        "targetsOmittedFromModel": 0,
+        "textOmittedFromModel": 0
+      },
+      "forcedTrimCoverage": {
+        "textTruncated": false,
+        "targetsTruncated": false,
+        "hiddenTargets": 0,
+        "offscreenTargets": 0,
+        "crossOriginFrames": 0,
+        "shadowRoots": 0,
+        "openDialogs": 0,
+        "coverageNotes": [
+          "Only the viewport is captured; content outside the viewport is not claimed to be absent."
+        ],
+        "unreadableRegions": [],
+        "targetsOmittedFromModel": 3,
+        "textOmittedFromModel": 134
+      },
+      "screenshotBytes": 30614
+    },
+    {
+      "scenario": "list",
+      "iteration": 1,
+      "observationId": "obs_b65339be-2022-48de-918e-17b9c9bc21d3",
+      "observationMs": 44.76458400000001,
+      "fullChars": 4938,
+      "projectedChars": 3509,
+      "fullSerializationMs": 0.013000000000033651,
+      "projectionAndSerializationMs": 0.027041999999937616,
+      "observedTargets": 11,
+      "projectedTargets": 11,
+      "projectedCoverage": {
+        "textTruncated": false,
+        "targetsTruncated": false,
+        "hiddenTargets": 0,
+        "offscreenTargets": 0,
+        "crossOriginFrames": 0,
+        "shadowRoots": 0,
+        "openDialogs": 0,
+        "coverageNotes": [
+          "Only the viewport is captured; content outside the viewport is not claimed to be absent."
+        ],
+        "unreadableRegions": [],
+        "targetsOmittedFromModel": 0,
+        "textOmittedFromModel": 0
+      },
+      "forcedTrimCoverage": {
+        "textTruncated": false,
+        "targetsTruncated": false,
+        "hiddenTargets": 0,
+        "offscreenTargets": 0,
+        "crossOriginFrames": 0,
+        "shadowRoots": 0,
+        "openDialogs": 0,
+        "coverageNotes": [
+          "Only the viewport is captured; content outside the viewport is not claimed to be absent."
+        ],
+        "unreadableRegions": [],
+        "targetsOmittedFromModel": 10,
+        "textOmittedFromModel": 233
+      },
+      "screenshotBytes": 39845
+    },
+    {
+      "scenario": "list",
+      "iteration": 2,
+      "observationId": "obs_407e921f-13e9-4cbe-8582-ba61a388b512",
+      "observationMs": 32.65416600000003,
+      "fullChars": 4938,
+      "projectedChars": 3509,
+      "fullSerializationMs": 0.012042000000064945,
+      "projectionAndSerializationMs": 0.07112499999993815,
+      "observedTargets": 11,
+      "projectedTargets": 11,
+      "projectedCoverage": {
+        "textTruncated": false,
+        "targetsTruncated": false,
+        "hiddenTargets": 0,
+        "offscreenTargets": 0,
+        "crossOriginFrames": 0,
+        "shadowRoots": 0,
+        "openDialogs": 0,
+        "coverageNotes": [
+          "Only the viewport is captured; content outside the viewport is not claimed to be absent."
+        ],
+        "unreadableRegions": [],
+        "targetsOmittedFromModel": 0,
+        "textOmittedFromModel": 0
+      },
+      "forcedTrimCoverage": {
+        "textTruncated": false,
+        "targetsTruncated": false,
+        "hiddenTargets": 0,
+        "offscreenTargets": 0,
+        "crossOriginFrames": 0,
+        "shadowRoots": 0,
+        "openDialogs": 0,
+        "coverageNotes": [
+          "Only the viewport is captured; content outside the viewport is not claimed to be absent."
+        ],
+        "unreadableRegions": [],
+        "targetsOmittedFromModel": 10,
+        "textOmittedFromModel": 233
+      },
+      "screenshotBytes": 39845
+    },
+    {
+      "scenario": "list",
+      "iteration": 3,
+      "observationId": "obs_0b9b2b42-5177-4879-b2aa-7d3cd5631583",
+      "observationMs": 34.18033300000002,
+      "fullChars": 4938,
+      "projectedChars": 3509,
+      "fullSerializationMs": 0.012000000000057298,
+      "projectionAndSerializationMs": 0.014749999999935426,
+      "observedTargets": 11,
+      "projectedTargets": 11,
+      "projectedCoverage": {
+        "textTruncated": false,
+        "targetsTruncated": false,
+        "hiddenTargets": 0,
+        "offscreenTargets": 0,
+        "crossOriginFrames": 0,
+        "shadowRoots": 0,
+        "openDialogs": 0,
+        "coverageNotes": [
+          "Only the viewport is captured; content outside the viewport is not claimed to be absent."
+        ],
+        "unreadableRegions": [],
+        "targetsOmittedFromModel": 0,
+        "textOmittedFromModel": 0
+      },
+      "forcedTrimCoverage": {
+        "textTruncated": false,
+        "targetsTruncated": false,
+        "hiddenTargets": 0,
+        "offscreenTargets": 0,
+        "crossOriginFrames": 0,
+        "shadowRoots": 0,
+        "openDialogs": 0,
+        "coverageNotes": [
+          "Only the viewport is captured; content outside the viewport is not claimed to be absent."
+        ],
+        "unreadableRegions": [],
+        "targetsOmittedFromModel": 10,
+        "textOmittedFromModel": 233
+      },
+      "screenshotBytes": 39845
+    },
+    {
+      "scenario": "iframe",
+      "iteration": 1,
+      "observationId": "obs_c3201492-cdd0-4293-a0de-781829a42599",
+      "observationMs": 46.915958000000046,
+      "fullChars": 3108,
+      "projectedChars": 2445,
+      "fullSerializationMs": 0.008999999999900865,
+      "projectionAndSerializationMs": 0.013500000000021828,
+      "observedTargets": 2,
+      "projectedTargets": 2,
+      "projectedCoverage": {
+        "textTruncated": false,
+        "targetsTruncated": false,
+        "hiddenTargets": 0,
+        "offscreenTargets": 0,
+        "crossOriginFrames": 0,
+        "shadowRoots": 1,
+        "openDialogs": 0,
+        "coverageNotes": [
+          "Only the viewport is captured; content outside the viewport is not claimed to be absent."
+        ],
+        "unreadableRegions": [],
+        "targetsOmittedFromModel": 0,
+        "textOmittedFromModel": 0
+      },
+      "forcedTrimCoverage": {
+        "textTruncated": false,
+        "targetsTruncated": false,
+        "hiddenTargets": 0,
+        "offscreenTargets": 0,
+        "crossOriginFrames": 0,
+        "shadowRoots": 1,
+        "openDialogs": 0,
+        "coverageNotes": [
+          "Only the viewport is captured; content outside the viewport is not claimed to be absent."
+        ],
+        "unreadableRegions": [],
+        "targetsOmittedFromModel": 1,
+        "textOmittedFromModel": 941
+      },
+      "screenshotBytes": 63701
+    },
+    {
+      "scenario": "iframe",
+      "iteration": 2,
+      "observationId": "obs_ad2bdd70-a141-4dab-806c-b500a1cc2c13",
+      "observationMs": 33.31325000000004,
+      "fullChars": 3108,
+      "projectedChars": 2445,
+      "fullSerializationMs": 0.008582999999930507,
+      "projectionAndSerializationMs": 0.010292000000049484,
+      "observedTargets": 2,
+      "projectedTargets": 2,
+      "projectedCoverage": {
+        "textTruncated": false,
+        "targetsTruncated": false,
+        "hiddenTargets": 0,
+        "offscreenTargets": 0,
+        "crossOriginFrames": 0,
+        "shadowRoots": 1,
+        "openDialogs": 0,
+        "coverageNotes": [
+          "Only the viewport is captured; content outside the viewport is not claimed to be absent."
+        ],
+        "unreadableRegions": [],
+        "targetsOmittedFromModel": 0,
+        "textOmittedFromModel": 0
+      },
+      "forcedTrimCoverage": {
+        "textTruncated": false,
+        "targetsTruncated": false,
+        "hiddenTargets": 0,
+        "offscreenTargets": 0,
+        "crossOriginFrames": 0,
+        "shadowRoots": 1,
+        "openDialogs": 0,
+        "coverageNotes": [
+          "Only the viewport is captured; content outside the viewport is not claimed to be absent."
+        ],
+        "unreadableRegions": [],
+        "targetsOmittedFromModel": 1,
+        "textOmittedFromModel": 941
+      },
+      "screenshotBytes": 63701
+    },
+    {
+      "scenario": "iframe",
+      "iteration": 3,
+      "observationId": "obs_43a46dc4-0580-4b7b-be4d-f28e957c0d4c",
+      "observationMs": 33.26208299999996,
+      "fullChars": 3108,
+      "projectedChars": 2445,
+      "fullSerializationMs": 0.007833000000005086,
+      "projectionAndSerializationMs": 0.009374999999977263,
+      "observedTargets": 2,
+      "projectedTargets": 2,
+      "projectedCoverage": {
+        "textTruncated": false,
+        "targetsTruncated": false,
+        "hiddenTargets": 0,
+        "offscreenTargets": 0,
+        "crossOriginFrames": 0,
+        "shadowRoots": 1,
+        "openDialogs": 0,
+        "coverageNotes": [
+          "Only the viewport is captured; content outside the viewport is not claimed to be absent."
+        ],
+        "unreadableRegions": [],
+        "targetsOmittedFromModel": 0,
+        "textOmittedFromModel": 0
+      },
+      "forcedTrimCoverage": {
+        "textTruncated": false,
+        "targetsTruncated": false,
+        "hiddenTargets": 0,
+        "offscreenTargets": 0,
+        "crossOriginFrames": 0,
+        "shadowRoots": 1,
+        "openDialogs": 0,
+        "coverageNotes": [
+          "Only the viewport is captured; content outside the viewport is not claimed to be absent."
+        ],
+        "unreadableRegions": [],
+        "targetsOmittedFromModel": 1,
+        "textOmittedFromModel": 941
+      },
+      "screenshotBytes": 63701
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   bootstrapRsiWorkspace, electronAsyncFs, electronExecRunner, rollbackWorkspace,
   snapshotWorkspace, verifyAndAdjudicate, type AsyncRsiFs, type AdjudicateDeps,
@@ -18,6 +18,7 @@ function memAsyncFs(seed: Record<string, string> = {}): AsyncRsiFs & { files: Ma
   return {
     files,
     readFile: async (p) => files.get(p) ?? null,
+    pathExists: async (p) => files.has(p),
     writeFile: async (p, c) => { files.set(p, c); },
     mkdir: async () => {},
     listFiles: async (dir) => {
@@ -70,6 +71,52 @@ function adjudicateDeps(fs: AsyncRsiFs & { files: Map<string, string> }, snap: {
 }
 
 describe('snapshot/rollback over the async bridge', () => {
+  it('refuses to snapshot an existing file whose contents cannot be read', async () => {
+    const fs = memAsyncFs({ '/ws/existing.ts': 'important content' });
+    fs.readFile = async () => null;
+    await expect(snapshotWorkspace(fs, ['/ws/existing.ts'])).rejects.toThrow(/unreadable or absence is unconfirmed/);
+    expect(fs.files.get('/ws/existing.ts')).toBe('important content');
+  });
+
+  it('refuses unknown existence and propagates read failures before mutation', async () => {
+    const fs = memAsyncFs();
+    fs.pathExists = async () => null;
+    await expect(snapshotWorkspace(fs, ['/ws/unknown.ts'])).rejects.toThrow(/absence is unconfirmed/);
+    fs.readFile = async () => { throw new Error('permission denied'); };
+    await expect(snapshotWorkspace(fs, ['/ws/unknown.ts'])).rejects.toThrow('permission denied');
+  });
+
+  it('does not delete an unreadable original from an old declaredPaths snapshot', async () => {
+    const fs = memAsyncFs({ '/ws/existing.ts': 'important content' });
+    const legacy = {
+      id: 'legacy', files: {}, declaredPaths: ['/ws/existing.ts'],
+      scanned: { '/ws': [] }, takenAt: 1,
+    };
+    const report = await rollbackWorkspace(fs, legacy, fs.readFile);
+    expect(report.deleted).toEqual([]);
+    expect(fs.files.get('/ws/existing.ts')).toBe('important content');
+  });
+
+  it('never deletes a previously listed original even if absence metadata disagrees', async () => {
+    const fs = memAsyncFs({ '/ws/existing.ts': 'important content' });
+    const report = await rollbackWorkspace(fs, {
+      id: 'conflicting', files: {}, absentPaths: ['/ws/existing.ts'],
+      scanned: { '/ws': ['/ws/existing.ts'] }, takenAt: 1,
+    }, fs.readFile);
+    expect(report.deleted).toEqual([]);
+    expect(fs.files.get('/ws/existing.ts')).toBe('important content');
+  });
+
+  it('deletes declared new files even when directory scanning is unavailable', async () => {
+    const fs = memAsyncFs();
+    fs.listFiles = async () => null;
+    const snapshot = await snapshotWorkspace(fs, ['/ws/new.ts']);
+    await fs.writeFile('/ws/new.ts', 'new content');
+    const report = await rollbackWorkspace(fs, snapshot, fs.readFile);
+    expect(report.deleted).toEqual(['/ws/new.ts']);
+    expect(await fs.readFile('/ws/new.ts')).toBeNull();
+  });
+
   it('round-trips declared contents and deletes undeclared creations', async () => {
     const fs = memAsyncFs({ '/ws/a.ts': 'v0' });
     const snap = await snapshotWorkspace(fs, ['/ws/a.ts']);
@@ -88,6 +135,37 @@ describe('snapshot/rollback over the async bridge', () => {
 });
 
 describe('verifyAndAdjudicate (program-owned post-mutation gate)', () => {
+  it('appends earned wins to the existing evolution log without losing history', async () => {
+    const fs = memAsyncFs({ 'rsi/GOAL_VECTOR.md': GOAL_MD, 'rsi/EVOLUTION_LOG.md': '# Earlier wins\n\nExisting evidence.\n' });
+    const snap = await snapshotWorkspace(fs, ['/ws/a.ts']);
+    const previous = { ...createLoopState(goal, '/ws'), acceptedCount: 1 };
+    const result = await verifyAndAdjudicate(previous, adjudicateDeps(fs, snap, { stdout: VITEST_PASS, stderr: '', exitCode: 0 }));
+    expect(result.evolutionAppended).toBe(true);
+    expect(await fs.readFile('rsi/EVOLUTION_LOG.md')).toContain('Existing evidence.');
+    expect(await fs.readFile('rsi/EVOLUTION_LOG.md')).toContain('rsi-001');
+    expect(await fs.readFile('rsi/LOOP_STATE.json')).toContain('rsi-001');
+  });
+
+  it('rejects a passing command when a frozen metric cannot be measured', async () => {
+    const fs = memAsyncFs({ 'rsi/GOAL_VECTOR.md': GOAL_MD, '/ws/a.ts': 'original' });
+    const snap = await snapshotWorkspace(fs, ['/ws/a.ts']);
+    await fs.writeFile('/ws/a.ts', 'changed');
+    const result = await verifyAndAdjudicate(createLoopState(goal, '/ws'), adjudicateDeps(fs, snap, { stdout: 'No tests found', stderr: '', exitCode: 0 }));
+    expect(result.outcome.verdict).toEqual({ action: 'reject', reason: 'external-fail' });
+    expect(result.missingMetrics.join(';')).toMatch(/test.failures/);
+    expect(await fs.readFile('/ws/a.ts')).toBe('original');
+  });
+
+  it('rejects a missing frozen goal and restores the pre-mutation snapshot', async () => {
+    const fs = memAsyncFs({ '/ws/a.ts': 'original' });
+    const snap = await snapshotWorkspace(fs, ['/ws/a.ts']);
+    await fs.writeFile('/ws/a.ts', 'changed');
+    const result = await verifyAndAdjudicate(createLoopState(goal, '/ws'), adjudicateDeps(fs, snap, { stdout: VITEST_PASS, stderr: '', exitCode: 0 }));
+    expect(result.preempted).toBe('goal-vector-missing');
+    expect(result.cascadeStages).toBe(0);
+    expect(await fs.readFile('/ws/a.ts')).toBe('original');
+  });
+
   it('accepts a truly improving candidate without touching files', async () => {
     const fs = memAsyncFs({ 'rsi/GOAL_VECTOR.md': GOAL_MD, '/ws/a.ts': 'v0' });
     const snap = await snapshotWorkspace(fs, ['/ws/a.ts']);
@@ -150,6 +228,24 @@ describe('verifyAndAdjudicate (program-owned post-mutation gate)', () => {
 });
 
 describe('bridge environment guards', () => {
+  it('does not infer absence from swallowed IPC errors or hidden-file listings', async () => {
+    const readFile = vi.fn(async () => null);
+    const readDir = vi.fn(async () => [] as Array<{ name: string; path: string; isDirectory: boolean }>);
+    vi.stubGlobal('window', { electronAPI: { fs: { readFile, readDir, stat: async () => null } } });
+    try {
+      const fs = electronAsyncFs()!;
+      await expect(snapshotWorkspace(fs, ['/ws/existing.ts'])).rejects.toThrow(/absence is unconfirmed/);
+      expect(await fs.listFiles('/ws')).toBeNull();
+      readDir.mockResolvedValue([{ name: 'sibling.ts', path: '/ws/sibling.ts', isDirectory: false }]);
+      await expect(snapshotWorkspace(fs, ['/ws/.hidden'])).rejects.toThrow(/absence is unconfirmed/);
+      expect((await snapshotWorkspace(fs, ['/ws/new.ts'])).absentPaths).toEqual(['/ws/new.ts']);
+      readFile.mockRejectedValueOnce(new Error('IPC read failed'));
+      await expect(fs.readFile('/ws/existing.ts')).rejects.toThrow('IPC read failed');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('returns null adapters outside Electron (no fabricated bridge)', () => {
     expect(electronAsyncFs()).toBeNull();
     expect(electronExecRunner()).toBeNull();

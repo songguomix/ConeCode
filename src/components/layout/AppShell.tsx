@@ -19,6 +19,10 @@ import WorktreePanel from '../worktree/WorktreePanel';
 import BackgroundPanel from '../background/BackgroundPanel';
 import ScreenshotOverlay from '../screenshot/ScreenshotOverlay';
 import ImageGeneratorModal from '../chat/ImageGeneratorModal';
+import DshMarketPanel from '../dsh-market/DshMarketPanel';
+import ResizeHandle from './ResizeHandle';
+import { panelLayout } from './panelLayout';
+import { workbenchVisible } from './rsiLayout';
 
 export default function AppShell() {
   const sidebarOpen = useUIStore((s) => s.sidebarOpen);
@@ -35,7 +39,7 @@ export default function AppShell() {
   const remoteOpen = useUIStore((s) => s.remoteOpen);
   const computerOpen = useUIStore((s) => s.computerOpen);
   const previewOpen = useUIStore((s) => s.previewOpen);
-  const workbenchTab = useUIStore((s) => s.workbenchTab);
+  const closePreview = useUIStore((s) => s.closePreview);
   const setWorkbenchTab = useUIStore((s) => s.setWorkbenchTab);
   const editorWidthPct = useUIStore((s) => s.editorWidthPct);
   const setEditorWidthPct = useUIStore((s) => s.setEditorWidthPct);
@@ -79,58 +83,31 @@ export default function AppShell() {
   // The left column is the code editor. The browser/preview docks on the RIGHT
   // so "open what we built" sits beside the chat — click-to-annotate then lands
   // in the composer without covering the transcript.
-  const workbenchOpen = !!selectedFile;
+  // RSI owns the entire center column: an open editor is hidden (never
+  // cleared) while the loop runs, so the conversation is never squeezed.
+  const workbenchOpen = workbenchVisible({ agentMode, selectedFile });
   const previewDockOpen = previewOpen;
 
   // Opening a file from the tree brings the code forward.
   useEffect(() => { if (selectedFile) setWorkbenchTab('code'); }, [selectedFile, setWorkbenchTab]);
 
-  const startDrag = (e: React.MouseEvent) => {
-    e.preventDefault();
-    const container = splitRef.current;
-    if (!container) return;
-    const onMove = (ev: MouseEvent) => {
-      const rect = container.getBoundingClientRect();
-      if (rect.width <= 0) return;
-      setEditorWidthPct(((ev.clientX - rect.left) / rect.width) * 100);
-    };
-    const onUp = () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
+  const [viewport, setViewport] = useState(() => ({ width: window.innerWidth, height: window.innerHeight }));
+  useEffect(() => {
+    const resize = () => setViewport({ width: window.innerWidth, height: window.innerHeight });
+    window.addEventListener('resize', resize);
+    return () => window.removeEventListener('resize', resize);
+  }, []);
+  const layout = panelLayout({
+    ...viewport, sidebarOpen, sidebarWidth: sidebarWidthPx, previewOpen,
+    previewWidth: previewWidthPx, editorOpen: workbenchOpen, terminalHeight: terminalHeightPx,
+  });
+  const editorUnits = () => {
+    const rect = splitRef.current?.getBoundingClientRect();
+    return 100 / Math.max(1, layout.stackedEditor ? (rect?.height ?? viewport.height) : (rect?.width ?? viewport.width));
   };
-
-  // Pixel drag for sidebar / preview / terminal sizes (persisted in ui.store).
-  const dragPixels = (
-    e: React.MouseEvent,
-    startPx: number,
-    sign: number,
-    apply: (px: number) => void,
-    vertical = false,
-  ) => {
-    e.preventDefault();
-    const startPos = vertical ? e.clientY : e.clientX;
-    const onMove = (ev: MouseEvent) => {
-      const delta = (vertical ? ev.clientY : ev.clientX) - startPos;
-      apply(startPx + sign * delta);
-    };
-    const onUp = () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
-    document.body.style.cursor = vertical ? 'row-resize' : 'col-resize';
-    document.body.style.userSelect = 'none';
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-  };
+  const editorSpace = layout.stackedEditor ? viewport.height - (terminalOpen ? layout.terminal : 0) : layout.content;
+  const editorMax = Math.min(80, Math.max(20, 100 * (1 - 320 / Math.max(1, editorSpace))));
+  const editorSize = Math.min(editorWidthPct, editorMax);
 
   return (
     <div className="flex h-screen relative overflow-hidden bg-[var(--bg-0)] select-none">
@@ -139,35 +116,29 @@ export default function AppShell() {
       <div className="ambient-glow-2" aria-hidden="true" />
 
       {sidebarOpen && (
-        <div className="relative shrink-0 flex min-h-0 z-20" style={{ width: sidebarWidthPx }}>
-          <Sidebar />
-          <div
-            onMouseDown={(e) => dragPixels(e, sidebarWidthPx, 1, setSidebarWidthPx)}
-            onDoubleClick={() => setSidebarWidthPx(260)}
-            title="拖动调整宽度（双击复位）"
-            className="group absolute top-0 bottom-0 -right-px w-[7px] cursor-col-resize z-30 flex justify-end"
-          >
-            <div className="w-px h-full bg-[var(--border)] group-hover:bg-[var(--accent)] transition-colors" />
-            <div className="absolute inset-y-0 -left-2 -right-2" />
+        <>
+          {layout.sidebarOverlay && <button aria-label={t('toggleSidebar')} onClick={toggleSidebar} className="absolute inset-0 z-30 bg-black/25 backdrop-blur-sm" />}
+          <div className={`${layout.sidebarOverlay ? 'absolute inset-y-0 left-0 z-40 shadow-2xl' : 'relative z-20'} shrink-0 flex min-h-0`} style={{ width: layout.sidebar }}>
+            <Sidebar />
+            <ResizeHandle label={t('dragResizeWidth')} value={layout.sidebar} min={200} max={Math.min(480, Math.max(200, viewport.width - 48))} reset={260} onChange={setSidebarWidthPx}
+              className="absolute inset-y-0 -right-[3px] w-[7px] cursor-col-resize z-30 flex justify-center" />
           </div>
-        </div>
+        </>
       )}
-      {/* Floating sidebar reopen — modern frosted glass pill button */}
       {!sidebarOpen && (
-        <button onClick={toggleSidebar} title={t('toggleSidebar')}
+        <button onClick={toggleSidebar} title={t('toggleSidebar')} aria-label={t('toggleSidebar')}
           className="absolute left-3 top-1/2 -translate-y-1/2 z-40 w-10 h-10 rounded-full glass-dock flex items-center justify-center text-[var(--accent)] hover:bg-[var(--accent)] hover:text-white hover:border-[var(--accent)] hover:scale-105 active:scale-95 transition-all shadow-[0_8px_24px_rgba(0,0,0,0.12)]">
           <FiMenu size={17} strokeWidth={2.2} />
         </button>
       )}
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col min-w-0 min-h-0">
         <div className="flex-1 flex flex-col min-h-0">
-          <div ref={splitRef} className="flex-1 flex min-h-0">
+          <div className="relative flex-1 flex min-h-0 min-w-0">
+            <div ref={splitRef} className={`flex-1 flex min-w-0 min-h-0 ${layout.stackedEditor ? 'flex-col' : ''}`}>
             {workbenchOpen && (
               <>
-                <div className="min-w-0 shrink-0 flex flex-col" style={{ width: `${editorWidthPct}%` }}>
+                <div className="min-w-0 min-h-0 shrink-0 flex flex-col" style={layout.stackedEditor ? { height: `${editorSize}%` } : { width: `${editorSize}%` }}>
                   <div className="flex-1 min-h-0 relative">
-                    {/* visibility (not display:none) keeps the hidden panel's box
-                        alive — a collapsed <webview> comes back blank. */}
                     {selectedFile && (
                       <div className="absolute inset-0">
                         <EditorPanel />
@@ -175,50 +146,36 @@ export default function AppShell() {
                     )}
                   </div>
                 </div>
-                <div
-                  onMouseDown={startDrag}
-                  onDoubleClick={() => setEditorWidthPct(50)}
-                  title="拖动调整宽度（双击复位）"
-                  className="group relative w-px shrink-0 cursor-col-resize bg-[var(--border)] hover:bg-[var(--accent)] transition-colors"
-                >
-                  <div className="absolute inset-y-0 -left-2 -right-2 z-10" />
-                </div>
+                <ResizeHandle label={layout.stackedEditor ? t('dragResizeHeight') : t('dragResizeWidth')}
+                  value={editorSize} min={20} max={editorMax} reset={50} onChange={setEditorWidthPct}
+                  horizontal={layout.stackedEditor} unitsPerPixel={editorUnits}
+                  className={layout.stackedEditor ? 'relative h-[7px] -my-[3px] shrink-0 cursor-row-resize z-30 flex items-center' : 'relative w-[7px] -mx-[3px] shrink-0 cursor-col-resize z-30 flex justify-center'} />
               </>
             )}
-            <div className="flex-1 flex flex-col min-w-0">
+            <div className="flex-1 flex flex-col min-w-0 min-h-0">
               {/* Slim window-drag strip: the chat column has no tab bar, so
                   without this the window can only be moved from the far left. */}
               <div className="h-7 shrink-0" style={{ WebkitAppRegion: 'drag' } as any} />
               {agentMode === 'rsi' ? <RsiView /> : <ChatView />}
             </div>
+            </div>
             {/* Browser / project preview docks on the right of the chat. */}
             {previewDockOpen && (
-              <div className="relative shrink-0 flex flex-col min-w-0 anim-message" style={{ width: previewWidthPx }}>
-                <div
-                  onMouseDown={(e) => dragPixels(e, previewWidthPx, -1, setPreviewWidthPx)}
-                  onDoubleClick={() => setPreviewWidthPx(480)}
-                  title="拖动调整宽度（双击复位）"
-                  className="group absolute top-0 bottom-0 -left-px w-[7px] cursor-col-resize z-30 flex"
-                >
-                  <div className="w-px h-full bg-[var(--border)] group-hover:bg-[var(--accent)] transition-colors" />
-                  <div className="absolute inset-y-0 -left-2 -right-2" />
+              <>
+                {layout.previewOverlay && <button aria-label={t('close')} onClick={closePreview} className="absolute inset-0 z-30 bg-black/25 backdrop-blur-sm" />}
+                <div className={`${layout.previewOverlay ? 'absolute right-0 inset-y-0 z-40 shadow-2xl' : 'relative'} shrink-0 flex flex-col min-w-0 min-h-0 anim-message bg-[var(--bg-0)]`} style={{ width: layout.preview }}>
+                  <ResizeHandle label={t('dragResizeWidth')} value={layout.preview} min={Math.min(280, layout.previewMax)} max={layout.previewMax} reset={480} onChange={setPreviewWidthPx} sign={-1}
+                    className="absolute inset-y-0 -left-[3px] w-[7px] cursor-col-resize z-30 flex justify-center" />
+                  <PreviewPanel />
                 </div>
-                <PreviewPanel />
-              </div>
+              </>
             )}
           </div>
           {terminalMounted && (
-            <div className="relative shrink-0" style={{ height: terminalOpen ? terminalHeightPx : 0 }}>
+            <div className="relative shrink-0" style={{ height: terminalOpen ? layout.terminal : 0 }}>
               {terminalOpen && (
-                <div
-                  onMouseDown={(e) => dragPixels(e, terminalHeightPx, -1, setTerminalHeightPx, true)}
-                  onDoubleClick={() => setTerminalHeightPx(280)}
-                  title="拖动调整高度（双击复位）"
-                  className="group absolute top-0 inset-x-0 h-[7px] cursor-row-resize z-30 flex flex-col items-center"
-                >
-                  <div className="h-px w-full bg-[var(--border)] group-hover:bg-[var(--accent)] transition-colors" />
-                  <div className="absolute inset-x-0 -top-1 -bottom-1" />
-                </div>
+                <ResizeHandle label={t('dragResizeHeight')} value={layout.terminal} min={120} max={layout.terminalMax} reset={280} onChange={setTerminalHeightPx} horizontal sign={-1}
+                  className="absolute -top-[3px] inset-x-0 h-[7px] cursor-row-resize z-30 flex items-center" />
               )}
               <div className={terminalOpen ? 'h-full' : 'hidden'}>
                 <TerminalPanel />
@@ -238,6 +195,7 @@ export default function AppShell() {
       {remoteOpen && <RemotePanel />}
       {computerOpen && <ComputerPanel />}
       <ImageGeneratorModal />
+      <DshMarketPanel />
     </div>
   );
 }

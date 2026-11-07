@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
-import { FiSquare, FiPaperclip, FiX, FiFile, FiArrowUp, FiPlus, FiTool, FiChevronRight, FiCamera, FiClock, FiImage, FiPlay } from 'react-icons/fi';
+import { FiSquare, FiPaperclip, FiX, FiFile, FiArrowUp, FiPlus, FiTool, FiChevronRight, FiCamera, FiClock, FiPlay } from 'react-icons/fi';
 import { AGENT_MODES, type AgentMode } from '../../core/agents/modePrompts';
 import { useMemoryStore, useChatStore, useModelStore, useLanguageStore, useWorkspaceStore, useSettingsStore, useUIStore, useGoalStore, useSkillsStore, useImageGenStore } from '../../stores';
+import { useMemoryV2Store, isMemoryV2Active } from '../../stores/memoryV2.store';
 import { useScreenshotStore } from '../../stores/screenshot.store';
 import { useBackgroundStore } from '../../stores/background.store';
 import { prettyShortcut } from '../../core/screenshot/shortcut';
@@ -38,7 +39,7 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
   const continueGeneration = useChatStore((s) => s.continueGeneration);
   const compactConversation = useChatStore((s) => s.compactConversation);
   const pushNotice = useChatStore((s) => s.pushNotice);
-  const createConversation = useChatStore((s) => s.createConversation);
+  const newConversation = useChatStore((s) => s.newConversation);
   const planMode = useChatStore((s) => s.planMode);
   const installHolding = useInstallGateStore((s) => isHolding(s.jobs));
   const togglePlanMode = useChatStore((s) => s.togglePlanMode);
@@ -58,7 +59,7 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
   const composingRef = useRef(false);
   const compositionEndAtRef = useRef(0);
   const {
-    selectedFile, contextFiles, customCommands, agentsMdPath, rootPath, memoryFiles,
+    selectedFile, contextFiles, customCommands, agentsMdPath, rootPath, memoryFiles, fileList,
     selectFile, addContextFile, addPastedImage, removeContextFile, ensureFileList, reloadProjectConfig,
     addRoot, addRootFromDialog, allRoots,
   } = useWorkspaceStore();
@@ -78,7 +79,6 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
   const [caret, setCaret] = useState(0);
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
-  const [allFiles, setAllFiles] = useState<string[] | null>(null);
   /** Text captured with "#", waiting for the user to say which file it belongs in. */
   const [pendingCapture, setPendingCapture] = useState<string | null>(null);
 
@@ -89,14 +89,21 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
   const showSlash = !slashDismissed && slashMatches.length > 0;
 
   const mentionMatches = useMemo<string[]>(() => {
-    if (mentionQuery == null || !allFiles) return [];
+    if (mentionQuery == null || !fileList) return [];
     const q = mentionQuery.toLowerCase();
-    return allFiles.filter((f) => f.toLowerCase().includes(q)).slice(0, 8);
-  }, [mentionQuery, allFiles]);
+    return fileList.filter((f) => f.toLowerCase().includes(q)).slice(0, 8);
+  }, [mentionQuery, fileList]);
   const showMention = !showSlash && mentionQuery != null && mentionMatches.length > 0;
+  const hasSendableContent = !!input.trim() || contextFiles.some((file) => file.isImage && !!file.dataUrl);
 
   useEffect(() => { setSlashIndex(0); }, [input]);
   useEffect(() => { setMentionIndex(0); }, [mentionQuery]);
+
+  useEffect(() => {
+    if (mentionQuery != null && fileList == null) {
+      void ensureFileList().catch(() => { /* A later edit can retry the lookup. */ });
+    }
+  }, [mentionQuery, fileList, ensureFileList]);
 
   useEffect(() => {
     if (inputContent) {
@@ -127,9 +134,6 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
     setCaret(caretPos);
     const tok = mentionTokenAt(value, caretPos);
     setMentionQuery(tok);
-    if (tok != null && allFiles == null) {
-      ensureFileList().then(setAllFiles).catch(() => setAllFiles([]));
-    }
   };
 
   const acceptMention = (rel: string) => {
@@ -147,6 +151,12 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
   };
 
   const runCommand = async (cmd: SlashCommand, args: string) => {
+    if (isSavingEdit || installHolding) return;
+    const needsModel = cmd.kind === 'prompt' || ['clear', 'compact', 'goal'].includes(cmd.name);
+    if (needsModel && !selectedModel) {
+      if (!useUIStore.getState().modelSelectorOpen) toggleModelSelector();
+      return;
+    }
     setInput('');
     setSlashDismissed(false);
     resetHeight();
@@ -171,7 +181,7 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
         break;
       }
       case 'clear':
-        if (selectedModel) await createConversation(pid!, mid!);
+        if (selectedModel) await newConversation(pid!, mid!);
         break;
       case 'compact':
         if (selectedModel) await compactConversation(pid!, mid!);
@@ -197,7 +207,7 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
           break;
         }
         if (!selectedModel) break;
-        const conversationId = activeConversationId || await createConversation(pid!, mid!);
+        const conversationId = activeConversationId || await newConversation(pid!, mid!);
         useGoalStore.getState().setGoal(conversationId, goalText);
         await sendMessage(goalText, pid!, mid!);
         break;
@@ -279,7 +289,24 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
       writeFile: (path, content) => window.electronAPI.fs.writeFile(path, content),
       createDir: (path) => window.electronAPI.fs.createDir(path),
     });
-    if (result.ok) await reloadProjectConfig();
+    if (result.ok) {
+      await reloadProjectConfig();
+      // Memory 2.0 should see an explicitly captured rule too. The file write
+      // above remains the human-editable source of truth; this adds the
+      // structured, searchable record without replacing it.
+      if (isMemoryV2Active()) {
+        await useMemoryV2Store.getState().saveMemory({
+          content: text,
+          type: 'constraint',
+          layer: scope === 'project' ? 'project' : 'global',
+          projectId: scope === 'project' ? undefined : null,
+          tags: ['quick-capture', scope],
+          importance: 0.8,
+          status: 'confirmed',
+          origin: 'user',
+        });
+      }
+    }
     await pushNotice(
       `${result.ok ? '🧠' : '⚠️'} ${result.message}`,
       selectedModel?.providerId, selectedModel?.id,
@@ -290,8 +317,7 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
     if (isSavingEdit || installHolding) return;
     const text = input;
     // A pasted/attached image can carry a textless turn ("paste, hit send").
-    const hasAttachedImages = contextFiles.some((f) => f.isImage && f.dataUrl);
-    if (!text.trim() && !hasAttachedImages) return;
+    if (!hasSendableContent) return;
 
     const slash = parseSlashInput(text.trim());
     if (slash) {
@@ -310,7 +336,10 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
       return;
     }
 
-    if (!selectedModel) return;
+    if (!selectedModel) {
+      if (!useUIStore.getState().modelSelectorOpen) toggleModelSelector();
+      return;
+    }
     // An armed skill leads the message with its full instructions (same shape
     // as the use_skill tool result, so the agent treats it identically), then
     // disarms — one skill, one message.
@@ -362,6 +391,9 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Candidate navigation and confirmation belong to the IME until composition
+    // finishes, including its Arrow keys and Tab key.
+    if (isImeConfirm(e) && e.key !== 'Escape') return;
     if (e.key === 'Escape' && skillPickerOpen) {
       e.preventDefault();
       setSkillPickerOpen(false);
@@ -376,10 +408,11 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
       if (e.key === 'ArrowDown') { e.preventDefault(); setSlashIndex((i) => (i + 1) % slashMatches.length); return; }
       if (e.key === 'ArrowUp') { e.preventDefault(); setSlashIndex((i) => (i - 1 + slashMatches.length) % slashMatches.length); return; }
       if (e.key === 'Escape') { e.preventDefault(); setSlashDismissed(true); return; }
-      if (e.key === 'Tab') { e.preventDefault(); setInput('/' + slashMatches[slashIndex].name + ' '); return; }
+      const command = slashMatches[slashIndex] ?? slashMatches[0];
+      if (e.key === 'Tab') { e.preventDefault(); setInput('/' + command.name + ' '); return; }
       if (e.key === 'Enter' && !e.shiftKey && !isImeConfirm(e)) {
         e.preventDefault();
-        runCommand(slashMatches[slashIndex], '');
+        void runCommand(command, '');
         return;
       }
     } else if (showMention) {
@@ -388,7 +421,7 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
       if (e.key === 'Escape') { e.preventDefault(); setMentionQuery(null); return; }
       if ((e.key === 'Tab' || e.key === 'Enter') && !e.shiftKey && !isImeConfirm(e)) {
         e.preventDefault();
-        acceptMention(mentionMatches[mentionIndex]);
+        acceptMention(mentionMatches[mentionIndex] ?? mentionMatches[0]);
         return;
       }
     }
@@ -443,19 +476,20 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
     }
   };
 
-  const getFileName = (path: string) => path.split('/').pop() || path;
+  const getFileName = (path: string) => path.split(/[\\/]/).pop() || path;
+  const columnClass = 'max-w-[900px] mx-auto w-full px-4';
 
   return (
     <div className={centered
-      ? "w-full max-w-[840px] mx-auto transition-colors"
-      : "bg-[var(--glass-surface)]/60 backdrop-blur-2xl border-t border-[var(--glass-border)] transition-colors"
+      ? "w-full max-w-[840px] mx-auto min-w-0 transition-colors"
+      : "bg-[color-mix(in_srgb,var(--glass-surface)_60%,transparent)] backdrop-blur-2xl border-t border-[var(--glass-border)] transition-colors"
     }>
       {/* Interrupted-run resume: one click picks up where the reply stopped. */}
-      {continuableConvId === activeConversationId && !!activeConversationId && !isStreaming && !isSavingEdit && (
-        <div className="max-w-[900px] mx-auto w-full px-4 pt-2.5 flex justify-center">
+      {continuableConvId === activeConversationId && !!activeConversationId && !isStreaming && !isSavingEdit && !installHolding && (
+        <div className={`${columnClass} pt-2.5 flex justify-center`}>
           <button
             onClick={() => void continueGeneration()}
-            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-medium bg-[var(--accent-soft)] text-[var(--accent)] border border-[var(--accent)]/30 hover:bg-[var(--accent)] hover:text-white transition-all shadow-2xs cursor-pointer"
+            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-medium bg-[var(--accent-soft)] text-[var(--accent)] border border-[color-mix(in_srgb,var(--accent)_30%,transparent)] hover:bg-[var(--accent)] hover:text-white transition-all shadow-2xs cursor-pointer"
           >
             <FiPlay size={11} />
             {t('continueOutput')}
@@ -464,33 +498,33 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
       )}
       {/* Context files indicator */}
       {(autoIncludeFileContext && selectedFile) || contextFiles.length > 0 || activeSkill ? (
-        <div className="max-w-[900px] mx-auto w-full px-4 pt-2.5 pb-1">
+        <div className={`${columnClass} pt-2.5 pb-1`}>
           <div className="flex flex-wrap gap-1.5">
             {activeSkill && (
               <span title={activeSkill.description || activeSkill.name}
-                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-[var(--accent-soft)] text-[var(--accent)] text-xs font-medium border border-[var(--accent)]/30 backdrop-blur-md shadow-2xs">
-                <FiTool size={11} />
-                {activeSkill.name}
-                <button onClick={() => setActiveSkillId(null)} className="ml-0.5 hover:opacity-70 transition-opacity">
+                className="inline-flex max-w-full min-w-0 items-center gap-1.5 px-3 py-1 rounded-xl bg-[var(--accent-soft)] text-[var(--accent)] text-xs font-medium border border-[color-mix(in_srgb,var(--accent)_30%,transparent)] backdrop-blur-md shadow-2xs">
+                <FiTool size={11} className="shrink-0" />
+                <span className="truncate">{activeSkill.name}</span>
+                <button onClick={() => setActiveSkillId(null)} aria-label={`${t('dismiss')} ${activeSkill.name}`} className="ml-0.5 shrink-0 hover:opacity-70 transition-opacity cursor-pointer">
                   <FiX size={11} />
                 </button>
               </span>
             )}
             {autoIncludeFileContext && selectedFile && (
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-[var(--glass-card)] text-[var(--accent)] text-xs font-medium border border-[var(--glass-border)] backdrop-blur-md shadow-2xs">
-                <FiPaperclip size={11} />
-                {getFileName(selectedFile)} (auto)
+              <span title={selectedFile} className="inline-flex max-w-full min-w-0 items-center gap-1.5 px-3 py-1 rounded-xl bg-[var(--glass-card)] text-[var(--accent)] text-xs font-medium border border-[var(--glass-border)] backdrop-blur-md shadow-2xs">
+                <FiPaperclip size={11} className="shrink-0" />
+                <span className="truncate">{getFileName(selectedFile)} (auto)</span>
               </span>
             )}
             {contextFiles.map((file) => (
-              <span key={file.path} className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-[var(--glass-card)] text-[var(--text-secondary)] text-xs border border-[var(--glass-border)] backdrop-blur-md shadow-2xs">
+              <span key={file.path} title={file.path} className="inline-flex max-w-full min-w-0 items-center gap-1.5 px-3 py-1 rounded-xl bg-[var(--glass-card)] text-[var(--text-secondary)] text-xs border border-[var(--glass-border)] backdrop-blur-md shadow-2xs">
                 {file.isImage && file.dataUrl ? (
                   <img src={file.dataUrl} alt={getFileName(file.path)} className="h-8 w-8 object-cover rounded-lg shadow-2xs" title={file.path} />
                 ) : (
-                  <FiPaperclip size={11} />
+                  <FiPaperclip size={11} className="shrink-0" />
                 )}
-                {!file.isImage && getFileName(file.path)}
-                <button onClick={() => removeContextFile(file.path)} className="ml-0.5 hover:text-[var(--text-primary)] transition-colors">
+                {!file.isImage && <span className="truncate">{getFileName(file.path)}</span>}
+                <button onClick={() => removeContextFile(file.path)} aria-label={`${t('dismiss')} ${getFileName(file.path)}`} className="ml-0.5 shrink-0 hover:text-[var(--text-primary)] transition-colors cursor-pointer">
                   <FiX size={11} />
                 </button>
               </span>
@@ -501,21 +535,21 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
 
       {/* "#" capture — ask where it belongs rather than guessing. */}
       {pendingCapture && (
-        <div className="max-w-[900px] mx-auto w-full px-4 pt-2">
-          <div className="rounded-2xl border border-[var(--accent)]/40 bg-[var(--glass-card)] backdrop-blur-xl px-4 py-3 shadow-lg">
+        <div className={`${columnClass} pt-2`}>
+          <div className="rounded-2xl border border-[color-mix(in_srgb,var(--accent)_40%,transparent)] bg-[var(--glass-card)] backdrop-blur-xl px-4 py-3 shadow-lg">
             <div className="text-[11px] text-[var(--text-muted)] mb-1 font-medium">{t('captureWhere')}</div>
             <div className="text-[13px] text-[var(--text-primary)] mb-2.5 break-words font-medium">{pendingCapture}</div>
             <div className="flex items-center gap-2">
               <button onClick={() => commitCapture('project')} disabled={!rootPath}
-                className="px-3 py-1.5 rounded-xl bg-[var(--accent)] text-white text-xs font-medium hover:bg-[var(--accent-hover)] disabled:opacity-40 shadow-xs">
+                className="px-3 py-1.5 rounded-xl bg-[var(--accent)] text-white text-xs font-medium hover:bg-[var(--accent-hover)] disabled:opacity-40 shadow-xs cursor-pointer">
                 {t('captureProject')}
               </button>
               <button onClick={() => commitCapture('user')}
-                className="px-3 py-1.5 rounded-xl bg-[var(--glass-card)] border border-[var(--glass-border)] text-[var(--text-secondary)] text-xs font-medium hover:bg-[var(--bg-3)]">
+                className="px-3 py-1.5 rounded-xl bg-[var(--glass-card)] border border-[var(--glass-border)] text-[var(--text-secondary)] text-xs font-medium hover:bg-[var(--bg-3)] cursor-pointer">
                 {t('captureUser')}
               </button>
               <button onClick={() => setPendingCapture(null)}
-                className="ml-auto px-2.5 py-1.5 rounded-xl text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)]">
+                className="ml-auto px-2.5 py-1.5 rounded-xl text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer">
                 {t('cancel')}
               </button>
             </div>
@@ -523,7 +557,7 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
         </div>
       )}
 
-      <div className="relative max-w-[900px] mx-auto w-full px-4 pt-2 pb-1.5">
+      <div className={`relative ${columnClass} pt-2 pb-1.5`}>
         {/* Slash-command palette */}
         {showSlash && (
           <div className="absolute bottom-full left-6 right-6 mb-2 max-h-64 overflow-y-auto rounded-2xl border border-[var(--glass-border)] bg-[var(--glass-surface)] backdrop-blur-2xl shadow-2xl z-50 py-1.5 anim-menu ring-1 ring-black/5 dark:ring-white/10" style={{ ['--menu-origin' as any]: 'bottom left', ['--menu-shift' as any]: '6px' }}>
@@ -532,8 +566,10 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
               <button
                 key={c.name}
                 onMouseEnter={() => setSlashIndex(i)}
-                onMouseDown={(e) => { e.preventDefault(); runCommand(c, ''); }}
-                className={`w-full text-left px-3.5 py-2 flex items-center gap-2.5 transition-colors ${i === slashIndex ? 'bg-[var(--accent-soft)] text-[var(--accent)] font-medium' : 'hover:bg-[var(--bg-3)]/60 text-[var(--text-secondary)]'}`}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => void runCommand(c, '')}
+                disabled={isSavingEdit || installHolding}
+                className={`w-full text-left px-3.5 py-2 flex items-center gap-2.5 transition-colors ${i === slashIndex ? 'bg-[var(--accent-soft)] text-[var(--accent)] font-medium' : 'hover:bg-[color-mix(in_srgb,var(--bg-3)_60%,transparent)] text-[var(--text-secondary)]'}`}
               >
                 <span className="font-mono text-xs text-[var(--accent)] shrink-0">/{c.name}</span>
                 <span className="text-xs truncate">{c.custom ? c.description : t(c.description)}</span>
@@ -551,8 +587,9 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
               <button
                 key={f}
                 onMouseEnter={() => setMentionIndex(i)}
-                onMouseDown={(e) => { e.preventDefault(); acceptMention(f); }}
-                className={`w-full text-left px-3.5 py-2 flex items-center gap-2.5 transition-colors ${i === mentionIndex ? 'bg-[var(--accent-soft)] text-[var(--accent)] font-medium' : 'hover:bg-[var(--bg-3)]/60 text-[var(--text-secondary)]'}`}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => acceptMention(f)}
+                className={`w-full text-left px-3.5 py-2 flex items-center gap-2.5 transition-colors ${i === mentionIndex ? 'bg-[var(--accent-soft)] text-[var(--accent)] font-medium' : 'hover:bg-[color-mix(in_srgb,var(--bg-3)_60%,transparent)] text-[var(--text-secondary)]'}`}
               >
                 <FiFile size={13} className="text-[var(--text-muted)] shrink-0" />
                 <span className="text-xs truncate">{f}</span>
@@ -562,21 +599,23 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
         )}
 
         {/* Composer box */}
-        <div className={`rounded-[28px] border border-[var(--glass-border)] bg-[var(--glass-card)] backdrop-blur-2xl pl-4 pr-2.5 py-2.5 focus-within:border-[var(--accent)]/50 focus-within:ring-4 focus-within:ring-[var(--accent)]/15 transition-all ${
+        <div className={`chat-composer rounded-[20px] border border-[var(--glass-border)] bg-[var(--glass-card)] backdrop-blur-2xl pl-3 pr-2.5 py-2 focus-within:border-[color-mix(in_srgb,var(--accent)_50%,transparent)] focus-within:ring-2 focus-within:ring-[color-mix(in_srgb,var(--accent)_15%,transparent)] transition-all ${
           centered
             ? 'shadow-[0_12px_44px_rgba(0,0,0,0.08)] dark:shadow-[0_16px_50px_rgba(0,0,0,0.4)]'
             : 'shadow-[0_8px_32px_rgba(0,0,0,0.06)] dark:shadow-[0_12px_44px_rgba(0,0,0,0.35)]'
         }`}>
-          <div className="flex items-end gap-3">
+          <div className="flex items-end gap-2.5">
             {/* + menu: upload + agent modes (no standalone plan/attach clutter). */}
             <div className="relative shrink-0 mb-0.5">
               <button
                 onClick={() => { setPlusOpen((v) => !v); setSkillPickerOpen(false); }}
                 title={t('modeMenu')}
-                className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all ${
+                aria-label={t('modeMenu')}
+                aria-expanded={plusOpen}
+                className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all cursor-pointer ${
                   plusOpen || agentMode !== 'standard' || activeSkill
-                    ? 'text-[var(--accent)] bg-[var(--accent-soft)] shadow-2xs border border-[var(--accent)]/30'
-                    : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-3)]/70'
+                    ? 'text-[var(--accent)] bg-[var(--accent-soft)] shadow-2xs border border-[color-mix(in_srgb,var(--accent)_30%,transparent)]'
+                    : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[color-mix(in_srgb,var(--bg-3)_70%,transparent)]'
                 }`}
               >
                 <FiPlus size={18} />
@@ -590,7 +629,7 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
                   >
                     <button
                       onClick={() => { void handleAttach(); setPlusOpen(false); }}
-                      className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] text-[var(--text-secondary)] hover:bg-[var(--bg-3)]/60 hover:text-[var(--text-primary)] transition-colors"
+                      className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] text-[var(--text-secondary)] hover:bg-[color-mix(in_srgb,var(--bg-3)_60%,transparent)] hover:text-[var(--text-primary)] transition-colors cursor-pointer"
                     >
                       <FiPaperclip size={14} className="text-[var(--text-muted)]" />
                       <span className="flex-1 text-left font-medium">{t('attachFiles')}</span>
@@ -598,7 +637,7 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
                     <button
                       onClick={() => { setPlusOpen(false); setSkillPickerOpen(false); void startScreenshot(); }}
                       disabled={screenshotStarting}
-                      className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] text-[var(--text-secondary)] hover:bg-[var(--bg-3)]/60 hover:text-[var(--text-primary)] transition-colors disabled:opacity-50"
+                      className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] text-[var(--text-secondary)] hover:bg-[color-mix(in_srgb,var(--bg-3)_60%,transparent)] hover:text-[var(--text-primary)] transition-colors disabled:opacity-50 cursor-pointer"
                     >
                       <FiCamera size={14} className="text-[var(--text-muted)]" />
                       <span className="flex-1 text-left font-medium">{t('screenshot')}</span>
@@ -609,19 +648,9 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
                       )}
                     </button>
                     <button
-                      onClick={() => { setPlusOpen(false); setSkillPickerOpen(false); useImageGenStore.getState().openModal(input.trim()); }}
-                      className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] text-[var(--text-secondary)] hover:bg-[var(--bg-3)]/60 hover:text-[var(--text-primary)] transition-colors group/img"
-                    >
-                      <FiImage size={14} className="text-[var(--accent)] group-hover/img:scale-110 transition-transform" />
-                      <span className="flex-1 text-left font-medium">{t('generateImage')}</span>
-                      <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-[var(--accent-soft)] text-[var(--accent)] font-medium font-sans">
-                        AI
-                      </span>
-                    </button>
-                    <button
                       onClick={() => { void handleBackgroundSend(); setPlusOpen(false); }}
-                      disabled={!input.trim() || !selectedModel}
-                      className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] text-[var(--text-secondary)] hover:bg-[var(--bg-3)]/60 hover:text-[var(--text-primary)] transition-colors disabled:opacity-50"
+                      disabled={!input.trim() || !selectedModel || isStreaming || isSavingEdit || installHolding}
+                      className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] text-[var(--text-secondary)] hover:bg-[color-mix(in_srgb,var(--bg-3)_60%,transparent)] hover:text-[var(--text-primary)] transition-colors disabled:opacity-50 cursor-pointer"
                     >
                       <FiClock size={14} className="text-[var(--text-muted)]" />
                       <span className="flex-1 text-left font-medium">{t('backgroundSend')}</span>
@@ -630,10 +659,10 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
                     {/* One row → popup with the full skill list. */}
                     <button
                       onClick={() => setSkillPickerOpen((v) => !v)}
-                      className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] transition-colors ${
+                      className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] transition-colors cursor-pointer ${
                         skillPickerOpen || activeSkill
                           ? 'text-[var(--accent)] bg-[var(--accent-soft)] font-medium'
-                          : 'text-[var(--text-secondary)] hover:bg-[var(--bg-3)]/60 hover:text-[var(--text-primary)]'
+                          : 'text-[var(--text-secondary)] hover:bg-[color-mix(in_srgb,var(--bg-3)_60%,transparent)] hover:text-[var(--text-primary)]'
                       }`}
                     >
                       <FiTool size={14} />
@@ -661,10 +690,10 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
                                 key={`${skill.scope}:${skill.id}`}
                                 onClick={() => { setActiveSkillId(skill.id); setSkillPickerOpen(false); setPlusOpen(false); textareaRef.current?.focus(); }}
                                 title={skill.description || skill.name}
-                                className={`w-full flex items-center gap-2.5 px-3 py-2 text-[13px] transition-colors ${
+                                className={`w-full flex items-center gap-2.5 px-3 py-2 text-[13px] transition-colors cursor-pointer ${
                                   activeSkillId === skill.id
                                     ? 'text-[var(--accent)] bg-[var(--accent-soft)] font-medium'
-                                    : 'text-[var(--text-secondary)] hover:bg-[var(--bg-3)]/60 hover:text-[var(--text-primary)]'
+                                    : 'text-[var(--text-secondary)] hover:bg-[color-mix(in_srgb,var(--bg-3)_60%,transparent)] hover:text-[var(--text-primary)]'
                                 }`}
                               >
                                 <FiTool size={13} className="shrink-0" />
@@ -702,19 +731,23 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
                     : t('typeMessage')
               }
               rows={1}
-              className="flex-1 bg-transparent border-0 py-2 text-[16px] font-[450] leading-relaxed resize-none outline-none max-h-[200px] overflow-y-auto placeholder:text-[var(--text-muted)]"
+              aria-label={t('typeMessage')}
+              className="flex-1 min-w-0 bg-transparent border-0 py-2 text-[16px] font-[450] leading-relaxed resize-none outline-none max-h-[200px] overflow-y-auto placeholder:text-[var(--text-muted)]"
             />
 
             {isStreaming ? (
               <button onClick={() => stopGeneration()}
-                className="w-9 h-9 rounded-full bg-[var(--accent)] text-white flex items-center justify-center hover:bg-[var(--accent-hover)] transition-all shadow-[0_4px_14px_rgba(201,100,66,0.35)] hover:scale-105 active:scale-95 shrink-0 mb-0.5 anim-press">
+                aria-label={t('cancel')}
+                title={t('cancel')}
+                className="w-9 h-9 rounded-full bg-[var(--accent)] text-white flex items-center justify-center hover:bg-[var(--accent-hover)] transition-all shadow-[0_4px_14px_rgba(201,100,66,0.35)] hover:scale-105 active:scale-95 shrink-0 mb-0.5 anim-press cursor-pointer">
                 <FiSquare size={14} />
               </button>
             ) : (
               <button onClick={handleSend}
-                disabled={!input.trim() || isSavingEdit || installHolding}
+                disabled={!hasSendableContent || isSavingEdit || installHolding}
+                aria-label={t('send')}
                 title={sendWithEnter ? t('sendHintEnter') : t('sendHintCmd')}
-                className="w-9 h-9 rounded-full flex items-center justify-center transition-all bg-gradient-to-tr from-[var(--accent)] to-[#e88a6a] text-white shadow-[0_4px_14px_rgba(201,100,66,0.35)] disabled:opacity-30 disabled:shadow-none hover:shadow-[0_6px_20px_rgba(201,100,66,0.45)] hover:scale-105 active:scale-95 shrink-0 mb-0.5 anim-press">
+                className="w-9 h-9 rounded-full flex items-center justify-center transition-all bg-gradient-to-tr from-[var(--accent)] to-[#e88a6a] text-white shadow-[0_4px_14px_rgba(201,100,66,0.35)] disabled:opacity-30 disabled:shadow-none hover:shadow-[0_6px_20px_rgba(201,100,66,0.45)] hover:scale-105 active:scale-95 shrink-0 mb-0.5 anim-press cursor-pointer disabled:cursor-not-allowed">
                 <FiArrowUp size={18} />
               </button>
             )}

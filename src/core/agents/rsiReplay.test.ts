@@ -22,6 +22,31 @@ function treeWithRewards(episodeId: string, rewards: number[]) {
 }
 
 describe('rsiReplay (DREAM offline)', () => {
+  it('does not grant parallel bonuses to a serial parent-child search', () => {
+    const tree = treeWithRewards('serial', [0.1, 0.2, 0.8]);
+    const serial = replayScore(tree, { ...DEFAULT_EXPLORATION_POLICY, parallelism: 1 });
+    const parallel = replayScore(tree, { ...DEFAULT_EXPLORATION_POLICY, parallelism: 8 });
+    expect(parallel.rounds).toBe(3);
+    expect(parallel.score).toBe(serial.score);
+  });
+
+  it('batches independent attempts without crossing a dependency', () => {
+    const tree = treeWithRewards('branches', [0.1, 0.2, 0.8, 0.6]);
+    tree.nodes[1].parentId = null;
+    tree.nodes[2].parentId = tree.nodes[0].id;
+    tree.nodes[3].parentId = tree.nodes[1].id;
+    const result = replayScore(tree, { ...DEFAULT_EXPLORATION_POLICY, maxAttempts: 4, parallelism: 4 });
+    expect(result.rounds).toBe(2);
+  });
+
+  it('cannot turn a failed or vetoed recorded attempt into a replay win', () => {
+    const tree = treeWithRewards('invalid', [0.2, 99, 100]);
+    tree.nodes[1].externalPass = false;
+    tree.nodes[2].failureReason = 'discipline-veto';
+    tree.nodes[2].status = 'rolled-back';
+    expect(replayScore(tree, DEFAULT_EXPLORATION_POLICY).maxReward).toBe(0.2);
+  });
+
   it('scores V = max(reward) - b1*N + b2*N/rounds from recorded facts only', () => {
     const t = treeWithRewards('ep1', [0.2, 0.8, 0.5]);
     const s = replayScore(t, { ...DEFAULT_EXPLORATION_POLICY, id: 'p', maxAttempts: 3 }, { beta1: 0.05, beta2: 0.02 });

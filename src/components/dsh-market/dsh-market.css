@@ -1,0 +1,41 @@
+/* DSH market keeps its own scrollbars and drag behaviour so the global
+   workbench styles never leak into a modal that is taller than the window. */
+.dsh-market-panel {
+  position: relative;
+  min-height: 0;
+}
+
+.dsh-market-panel ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.dsh-market-panel ::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-muted) 30%, transparent);
+}
+
+.dsh-market-panel ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.dsh-market-panel button:focus-visible,
+.dsh-market-panel input:focus-visible,
+.dsh-market-panel select:focus-visible,
+.dsh-market-panel textarea:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: 1px;
+}
+
+.dsh-market-panel .line-clamp-3 {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+@media (max-width: 640px) {
+  .dsh-market-panel {
+    border-radius: 18px;
+  }
+}

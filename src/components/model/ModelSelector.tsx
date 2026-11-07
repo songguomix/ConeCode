@@ -10,6 +10,7 @@ import ModeSwitch from './ModeSwitch';
 import ContextMeter from './ContextMeter';
 import GovernanceIsland from './GovernanceIsland';
 import type { AIModel } from '../../types';
+import { parseModelLimitDraft } from './limitDraft';
 
 const CAP_ICONS: Record<string, string> = {
   vision: '🖼️',
@@ -23,7 +24,7 @@ const CAP_ICONS: Record<string, string> = {
 function LimitInputHint({ raw, invalidLabel }: { raw: string; invalidLabel: string }) {
   if (!raw.trim()) return null;
   const parsed = parseLimitInput(raw);
-  if (parsed == null) {
+  if (parsed == null || !Number.isSafeInteger(parsed)) {
     return <span className="text-[10.5px] text-[var(--error)] leading-tight">{invalidLabel}</span>;
   }
   return <span className="text-[10.5px] text-[var(--text-muted)] leading-tight tabular-nums">≈ {formatLimitTokens(parsed)} tokens</span>;
@@ -43,6 +44,20 @@ export default function ModelSelector() {
   const [dropDirection, setDropDirection] = useState<'up' | 'down'>('up');
   const searchRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const [containerWidth, setContainerWidth] = useState<number>(900);
+  const limitRequestRef = useRef(0);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => {
+      if (entry?.contentRect) {
+        setContainerWidth(entry.contentRect.width);
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   const models = useModelStore((s) => s.models);
   const selectModel = useModelStore((s) => s.selectModel);
@@ -111,12 +126,28 @@ export default function ModelSelector() {
 
   const flatModels = useMemo(() => grouped.flatMap((g) => g.models), [grouped]);
 
+  useEffect(() => {
+    setSelectedIndex((index) => Math.max(0, Math.min(index, flatModels.length - 1)));
+  }, [flatModels.length]);
+
+  useEffect(() => {
+    if (isOpen) containerRef.current?.querySelector(`[data-model-index="${selectedIndex}"]`)
+      ?.scrollIntoView({ block: 'nearest' });
+  }, [isOpen, selectedIndex]);
+
   const tooltipModel = tooltipKey
     ? models.get(tooltipKey.providerId)?.find((m) => m.id === tooltipKey.modelId) ?? null
     : null;
 
   useEffect(() => {
     if (isOpen) searchRef.current?.focus();
+    else {
+      limitRequestRef.current += 1;
+      setRefreshingLimits(false);
+      setEditingLimits(null);
+      setTooltipKey(null);
+    }
+    return () => { limitRequestRef.current += 1; };
   }, [isOpen]);
 
   useEffect(() => {
@@ -130,10 +161,14 @@ export default function ModelSelector() {
   }, [isOpen]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Escape') { closeModelSelector(); return; }
-    if (e.key === 'ArrowDown') { e.preventDefault(); setSelectedIndex((i) => Math.min(i + 1, flatModels.length - 1)); }
+    if (e.key === 'Escape') { e.stopPropagation(); closeModelSelector(); return; }
+    // Enter on a favorite/refresh button must activate that button, not select
+    // whichever model happened to be highlighted by the search field.
+    if (e.target !== searchRef.current || e.nativeEvent.isComposing) return;
+    if (e.key === 'ArrowDown') { e.preventDefault(); setSelectedIndex((i) => Math.max(0, Math.min(i + 1, flatModels.length - 1))); }
     if (e.key === 'ArrowUp') { e.preventDefault(); setSelectedIndex((i) => Math.max(i - 1, 0)); }
     if (e.key === 'Enter' && !(e.nativeEvent as any).isComposing && flatModels[selectedIndex]) {
+      e.preventDefault();
       selectModel(flatModels[selectedIndex].id, flatModels[selectedIndex].providerId);
       closeModelSelector();
     }
@@ -151,6 +186,8 @@ export default function ModelSelector() {
   };
 
   const openLimitEditor = (model: AIModel) => {
+    limitRequestRef.current += 1;
+    setRefreshingLimits(false);
     if (editingLimits?.providerId === model.providerId && editingLimits.modelId === model.id) {
       setEditingLimits(null);
       return;
@@ -174,111 +211,128 @@ export default function ModelSelector() {
 
   const saveLimits = () => {
     if (!editingLimits) return;
-    // Human input: "128k", "20万", "1m" and "200000" are all valid; anything
-    // unparseable (or blank) clears the override and falls back to the API value.
-    const ctx = parseLimitInput(limitDraft.context);
-    const out = parseLimitInput(limitDraft.maxOutput);
-    setModelLimits(editingLimits.providerId, editingLimits.modelId, {
-      contextWindow: ctx,
-      maxOutputTokens: out,
-    });
+    const limits = parseModelLimitDraft(limitDraft);
+    if (!limits || refreshingLimits) return;
+    limitRequestRef.current += 1;
+    setModelLimits(editingLimits.providerId, editingLimits.modelId, limits);
     setEditingLimits(null);
   };
 
   const resetLimits = () => {
     if (!editingLimits) return;
+    limitRequestRef.current += 1;
+    setRefreshingLimits(false);
     setModelLimits(editingLimits.providerId, editingLimits.modelId, { contextWindow: null, maxOutputTokens: null });
     setEditingLimits(null);
   };
 
   const readLimitsFromApi = async () => {
     if (!editingLimits || refreshingLimits) return;
+    const request = ++limitRequestRef.current;
     setRefreshingLimits(true);
     try {
       const loaded = await fetchModels(editingLimits.providerId);
-      if (!loaded) return;
+      if (!loaded || request !== limitRequestRef.current) return;
       const apiModel = useModelStore.getState().models
         .get(editingLimits.providerId)
         ?.find((m) => m.id === editingLimits.modelId);
       if (!apiModel) return;
-      setModelLimits(editingLimits.providerId, editingLimits.modelId, {
-        contextWindow: null,
-        maxOutputTokens: null,
+      // Reading values is a draft operation; the saved override changes only
+      // when Save is clicked, and an old request cannot edit a different model.
+      setLimitDraft({
+        context: String(apiModel.autoContextWindow ?? apiModel.contextWindow ?? ''),
+        maxOutput: String(apiModel.autoMaxOutputTokens ?? apiModel.maxOutputTokens ?? ''),
       });
-      const refreshed = useModelStore.getState().models
-        .get(editingLimits.providerId)
-        ?.find((m) => m.id === editingLimits.modelId);
-      if (refreshed) {
-        setLimitDraft({
-          context: String(refreshed.autoContextWindow ?? refreshed.contextWindow),
-          maxOutput: String(refreshed.autoMaxOutputTokens ?? refreshed.maxOutputTokens),
-        });
-      }
     } finally {
-      setRefreshingLimits(false);
+      if (request === limitRequestRef.current) setRefreshingLimits(false);
     }
   };
 
   const handleLimitKey = (e: React.KeyboardEvent) => {
     e.stopPropagation();
+    if (e.nativeEvent.isComposing) return;
     if (e.key === 'Enter') { e.preventDefault(); saveLimits(); }
-    if (e.key === 'Escape') { e.preventDefault(); setEditingLimits(null); }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      limitRequestRef.current += 1;
+      setRefreshingLimits(false);
+      setEditingLimits(null);
+      searchRef.current?.focus();
+    }
   };
 
   const providerName = (providerId: string) => providers.find((p) => p.id === providerId)?.name || '';
 
+  const isCompact = containerWidth < 680;
+  const isNarrow = containerWidth < 520;
+  const isUltraNarrow = containerWidth < 380;
+
   return (
     <div ref={containerRef} className="relative max-w-[900px] mx-auto w-full px-4 pb-3">
-      <div className="flex items-center gap-2">
+      <div className={`flex flex-wrap items-center gap-1.5 min-w-0`}>
         <button onClick={toggleModelSelector}
-          className={`flex items-center gap-2 px-3 py-1 rounded-full text-sm bg-[var(--glass-card)] hover:bg-[var(--bg-2)] border border-[var(--glass-border)] hover:border-[var(--accent)]/40 shadow-2xs backdrop-blur-md transition-all ${showThinking ? 'flex-1 min-w-0' : 'flex-1'}`}>
-          {selectedModel?.providerId === FREE_PROVIDER_ID && (
-            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-[var(--accent)]/15 text-[var(--accent)] border border-[var(--accent)]/30 shrink-0 shadow-2xs">
+          aria-label={t('selectModel')}
+          aria-expanded={isOpen}
+          aria-haspopup="dialog"
+          className="flex items-center gap-2 px-3 py-1 min-h-8 rounded-full text-sm bg-[var(--glass-card)] hover:bg-[var(--bg-2)] border border-[var(--glass-border)] hover:border-[color-mix(in_srgb,var(--accent)_40%,transparent)] shadow-2xs backdrop-blur-md transition-all flex-1 min-w-[90px] cursor-pointer overflow-hidden">
+          {selectedModel?.providerId === FREE_PROVIDER_ID && !isNarrow && (
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-[color-mix(in_srgb,var(--accent)_15%,transparent)] text-[var(--accent)] border border-[color-mix(in_srgb,var(--accent)_30%,transparent)] shrink-0 shadow-2xs">
               <FiShield size={9} className="shrink-0" />
               <span>{t('official')}</span>
             </span>
           )}
-          <span className="truncate text-[var(--text-secondary)] text-[12.5px] font-medium">{selectedModel?.name || t('selectModel')}</span>
-          {selectedModel && getCapIcons(selectedModel).map((c) => (
+          {selectedModel?.providerId === FREE_PROVIDER_ID && isNarrow && !isUltraNarrow && (
+            <span className="p-1 rounded-md text-[10px] font-semibold bg-[color-mix(in_srgb,var(--accent)_15%,transparent)] text-[var(--accent)] border border-[color-mix(in_srgb,var(--accent)_30%,transparent)] shrink-0 shadow-2xs" title={t('official')}>
+              <FiShield size={9} className="shrink-0" />
+            </span>
+          )}
+          <span className="truncate text-[var(--text-secondary)] text-[12.5px] font-medium min-w-0" title={selectedModel?.name || t('selectModel')}>
+            {selectedModel?.name || t('selectModel')}
+          </span>
+          {!isCompact && selectedModel && getCapIcons(selectedModel).map((c) => (
             <span key={c} className="text-xs shrink-0">{c === 'reasoning' ? '🧠' : CAP_ICONS[c]}</span>
           ))}
           <FiChevronDown size={13} className="text-[var(--text-muted)] shrink-0 ml-auto" />
         </button>
-
-        <GovernanceIsland />
 
         {showThinking && (
           <ThinkingSlider
             value={reasoningEffort}
             onChange={setReasoningEffort}
             levels={selectedModel?.reasoningEfforts}
+            compact={isCompact}
           />
         )}
 
-        <ModeSwitch value={agentMode} onChange={setAgentMode} />
+        <GovernanceIsland compact={isCompact} />
+
+        <ModeSwitch value={agentMode} onChange={setAgentMode} compact={isCompact} />
 
         <ContextMeter />
 
-        <button onClick={toggleTheme}
-          className="w-8 h-8 rounded-full flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] bg-[var(--glass-card)] hover:bg-[var(--bg-2)] border border-[var(--glass-border)] shadow-2xs backdrop-blur-md transition-all shrink-0"
-          title={resolved === 'dark' ? t('lightMode') : t('darkMode')}>
-          {resolved === 'dark' ? <FiSun size={14} className="text-amber-400" /> : <FiMoon size={14} className="text-indigo-400" />}
-        </button>
+        {!isUltraNarrow && (
+          <button onClick={toggleTheme}
+            className="w-8 h-8 rounded-full flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] bg-[var(--glass-card)] hover:bg-[var(--bg-2)] border border-[var(--glass-border)] shadow-2xs backdrop-blur-md transition-all shrink-0 cursor-pointer"
+            title={resolved === 'dark' ? t('lightMode') : t('darkMode')}>
+            {resolved === 'dark' ? <FiSun size={14} className="text-amber-400" /> : <FiMoon size={14} className="text-indigo-400" />}
+          </button>
+        )}
       </div>
 
       {isOpen && (
-        <div className={`absolute left-6 right-6 bg-[var(--glass-surface)] backdrop-blur-2xl border border-[var(--glass-border)] rounded-2xl shadow-2xl overflow-hidden z-50 anim-menu ring-1 ring-black/5 dark:ring-white/10 ${
+        <div role="dialog" aria-label={t('selectModel')} className={`absolute ${isNarrow ? 'left-2 right-2' : 'left-6 right-6'} bg-[var(--glass-surface)] backdrop-blur-2xl border border-[var(--glass-border)] rounded-2xl shadow-2xl overflow-hidden z-50 anim-menu ring-1 ring-black/5 dark:ring-white/10 ${
           dropDirection === 'down' ? 'top-full mt-2' : 'bottom-full mb-2'
         }`}
           style={{ ['--menu-origin' as any]: dropDirection === 'down' ? 'top center' : 'bottom center', ['--menu-shift' as any]: '6px' }}
           onKeyDown={handleKeyDown}>
           <div className="p-2.5 border-b border-[var(--glass-border)] bg-[var(--glass-surface)]">
-            <div className="flex items-center gap-2 px-3 py-2 bg-[var(--glass-card)] border border-[var(--glass-border)] rounded-xl shadow-2xs">
+            <div className="flex items-center gap-2 px-3 py-2 bg-[var(--glass-card)] border border-[var(--glass-border)] rounded-xl shadow-2xs focus-within:border-[var(--accent)] transition-colors">
               <FiSearch size={14} className="text-[var(--text-muted)]" />
               <input ref={searchRef} value={search} onChange={(e) => { setSearch(e.target.value); setSelectedIndex(0); }}
-                placeholder={t('searchModels')} className="flex-1 bg-transparent text-sm outline-none placeholder:text-[var(--text-muted)]" />
+                aria-label={t('searchModels')}
+                placeholder={t('searchModels')} className="search-input flex-1 min-w-0 bg-transparent text-sm outline-none placeholder:text-[var(--text-muted)]" />
               <button onClick={() => fetchAllModels()} disabled={modelsLoading}
-                className="p-1 rounded-lg hover:bg-[var(--bg-3)]/80 text-[var(--text-muted)] disabled:opacity-50 transition-colors"
+                className="p-1 rounded-lg hover:bg-[color-mix(in_srgb,var(--bg-3)_80%,transparent)] text-[var(--text-muted)] disabled:opacity-50 transition-colors"
                 title={t('refresh')}>
                 <FiRefreshCw size={13} className={modelsLoading ? 'animate-spin' : ''} />
               </button>
@@ -304,24 +358,27 @@ export default function ModelSelector() {
                   return (
                     <div key={scopedLimitKey}>
                       <div
+                        data-model-index={idx}
                         onClick={() => { selectModel(model.id, model.providerId); closeModelSelector(); }}
                         onMouseEnter={() => { setSelectedIndex(idx); setTooltipKey({ providerId: model.providerId, modelId: model.id }); }}
                         onMouseLeave={() => setTooltipKey(null)}
                         className={`flex items-center gap-2 px-3.5 py-2.5 cursor-pointer text-sm transition-all rounded-xl mx-1.5 my-0.5 ${
-                          idx === selectedIndex ? 'bg-[var(--glass-card)] shadow-xs' : 'hover:bg-[var(--bg-3)]/50'
+                          idx === selectedIndex ? 'bg-[var(--glass-card)] shadow-xs' : 'hover:bg-[color-mix(in_srgb,var(--bg-3)_50%,transparent)]'
                         } ${isSelected ? 'text-[var(--accent)] font-medium' : 'text-[var(--text-primary)]'}`}>
                         <button onClick={(e) => { e.stopPropagation(); toggleFavorite(model.id); }}
+                          aria-label={`${t('favorites')} · ${model.name}`}
+                          aria-pressed={favorites.includes(model.id)}
                           className={`text-xs ${favorites.includes(model.id) ? 'text-[var(--accent)]' : 'text-[var(--text-muted)]'}`}>
                           <FiStar size={12} fill={favorites.includes(model.id) ? 'currentColor' : 'none'} />
                         </button>
                         {isOfficial && (
-                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-[var(--accent)]/15 text-[var(--accent)] border border-[var(--accent)]/30 shrink-0 shadow-2xs">
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-[color-mix(in_srgb,var(--accent)_15%,transparent)] text-[var(--accent)] border border-[color-mix(in_srgb,var(--accent)_30%,transparent)] shrink-0 shadow-2xs">
                             <FiShield size={10} className="shrink-0" />
                             <span>{t('official')}</span>
                           </span>
                         )}
-                        <span className="flex-1 truncate">{model.name}</span>
-                        {model.pricing && (
+                        <button className="flex-1 min-w-0 truncate text-left" title={model.name} aria-pressed={isSelected}>{model.name}</button>
+                        {model.pricing && !isNarrow && (
                           <span className="text-[10.5px] tabular-nums text-[var(--text-muted)] shrink-0"
                             title={`${t('costTokensIn')} $${model.pricing.input} · ${t('costTokensOut')} $${model.pricing.output} / 1M`}>
                             ${formatPrice(model.pricing.input)}/${formatPrice(model.pricing.output)}/1M
@@ -348,6 +405,8 @@ export default function ModelSelector() {
                             <label className="flex flex-col gap-0.5 flex-1 min-w-0">
                               <span className="text-[var(--text-muted)]">{t('contextWindow')}</span>
                               <input type="text" value={limitDraft.context} autoFocus
+                                disabled={refreshingLimits}
+                                aria-invalid={!!limitDraft.context.trim() && !parseModelLimitDraft({ context: limitDraft.context, maxOutput: '' })}
                                 onChange={(e) => setLimitDraft((d) => ({ ...d, context: e.target.value }))}
                                 onKeyDown={handleLimitKey}
                                 placeholder="128k / 20万 / 200000"
@@ -357,6 +416,8 @@ export default function ModelSelector() {
                             <label className="flex flex-col gap-0.5 flex-1 min-w-0">
                               <span className="text-[var(--text-muted)]">{t('maxOutput')}</span>
                               <input type="text" value={limitDraft.maxOutput}
+                                disabled={refreshingLimits}
+                                aria-invalid={!!limitDraft.maxOutput.trim() && !parseModelLimitDraft({ context: '', maxOutput: limitDraft.maxOutput })}
                                 onChange={(e) => setLimitDraft((d) => ({ ...d, maxOutput: e.target.value }))}
                                 onKeyDown={handleLimitKey}
                                 placeholder="8k / 4096"
@@ -371,18 +432,19 @@ export default function ModelSelector() {
                               const active = parseLimitInput(limitDraft.context) === preset.value;
                               return (
                                 <button key={preset.label}
+                                  disabled={refreshingLimits}
                                   onClick={() => setLimitDraft((d) => ({ ...d, context: String(preset.value) }))}
                                   className={`px-1.5 py-0.5 rounded-md text-[10.5px] border tabular-nums transition-colors ${
                                     active
                                       ? 'bg-[var(--accent)] text-white border-[var(--accent)]'
-                                      : 'bg-[var(--bg-1)] text-[var(--text-secondary)] border-[var(--border)] hover:border-[var(--accent)]/50 hover:text-[var(--text-primary)]'
+                                      : 'bg-[var(--bg-1)] text-[var(--text-secondary)] border-[var(--border)] hover:border-[color-mix(in_srgb,var(--accent)_50%,transparent)] hover:text-[var(--text-primary)]'
                                   }`}>
                                   {preset.label}
                                 </button>
                               );
                             })}
                           </div>
-                          <div className="flex justify-end gap-2 mt-2">
+                          <div className="flex flex-wrap justify-end gap-2 mt-2">
                             <button onClick={readLimitsFromApi} disabled={refreshingLimits}
                               className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[var(--bg-4)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] disabled:opacity-50 shrink-0">
                               <FiRefreshCw size={11} className={refreshingLimits ? 'animate-spin' : ''} />
@@ -391,7 +453,8 @@ export default function ModelSelector() {
                             <button onClick={resetLimits}
                               className="px-2.5 py-1 rounded-lg bg-[var(--bg-4)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] shrink-0">{t('reset')}</button>
                             <button onClick={saveLimits}
-                              className="px-2.5 py-1 rounded-lg bg-[var(--accent)] text-white hover:bg-[var(--accent-hover)] shrink-0">{t('save')}</button>
+                              disabled={refreshingLimits || !parseModelLimitDraft(limitDraft)}
+                              className="px-2.5 py-1 rounded-lg bg-[var(--accent)] text-white hover:bg-[var(--accent-hover)] disabled:opacity-40 disabled:cursor-not-allowed shrink-0">{t('save')}</button>
                           </div>
                         </div>
                       )}

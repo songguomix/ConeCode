@@ -33,6 +33,10 @@ export default function ChatView() {
   const streamingReasoning = activeRun?.reasoningContent ?? '';
   const streamingStatus = activeRun?.status ?? null;
   const streamingToolName = activeRun?.toolName ?? null;
+  // While a dropped stream is auto-retrying, the turn is reconnecting — not
+  // thinking. Hide the interrupted attempt's reasoning and the "thinking"
+  // placeholder so only the retry pill (plus any stitched reply text) shows.
+  const isRetrying = !!activeRun?.retry;
   const error = useChatStore((s) => s.error);
   const clearError = useChatStore((s) => s.clearError);
   const { t } = useLanguageStore();
@@ -64,6 +68,8 @@ export default function ChatView() {
     setEditingMessageId(null);
     setExpandedProcesses(new Set());
     setDismissedSuggestionId(null);
+    setShowCompacted(false);
+    setPlanDismissedId(null);
   }, [activeConversationId]);
   const messages = useMemo(() => orderForDisplay(rawMessages), [rawMessages]);
   const isNewChat = viewMode === 'chat' && messages.length === 0;
@@ -149,7 +155,7 @@ export default function ChatView() {
     const content = lastAssistantMessage.content;
     return (
       content.includes('[SUGGEST_WORK_MODE]') ||
-      /(建议|推荐|是否|可以).*(切换|使用).*(Work|工作模式)|switch to Work mode|Work mode is recommended/i.test(content)
+      /(建议|推薦|建議|推荐|是否|可以|切換|切り替え).*(切换|切換|使用|切り替え).*(Work|工作模式|工作區|Workモード)|switch to Work mode|switch to work|Work mode is recommended/i.test(content)
     );
   }, [viewMode, lastAssistantMessage, dismissedSuggestionId]);
 
@@ -196,6 +202,14 @@ export default function ChatView() {
     if (isNewChat || !isNearBottomRef.current) return;
     bottomRef.current?.scrollIntoView({ behavior: 'instant' });
   };
+
+  useEffect(() => {
+    // Reading older messages in one conversation must not disable following a
+    // different conversation's latest reply.
+    isNearBottomRef.current = true;
+    const frame = requestAnimationFrame(() => bottomRef.current?.scrollIntoView({ behavior: 'instant' }));
+    return () => cancelAnimationFrame(frame);
+  }, [activeConversationId]);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -267,13 +281,12 @@ export default function ChatView() {
   const installLabel = activeInstallLabel(installJobs);
 
   return (
-    <div className="flex-1 flex flex-col min-h-0 bg-[var(--bg-0)] relative">
-      <div className="h-7 shrink-0" style={{ WebkitAppRegion: 'drag' } as any} />
+    <div className="flex-1 flex flex-col min-h-0 min-w-0 bg-[var(--bg-0)] relative">
       {/* Floating pill, not an in-flow bar: showing/hiding it never shifts the
           transcript, and it clears the window top instead of hugging it. */}
       {installHolding && (
         <div className="absolute top-3 inset-x-0 z-30 flex justify-center px-4 pointer-events-none">
-          <div className="flex items-center gap-2 pl-3 pr-3.5 py-1.5 text-[11px] font-medium bg-[var(--bg-2)]/90 backdrop-blur border border-[var(--border)] shadow-lg rounded-full max-w-full">
+          <div className="flex items-center gap-2 pl-3 pr-3.5 py-1.5 text-[11px] font-medium bg-[color-mix(in_srgb,var(--bg-2)_90%,transparent)] backdrop-blur border border-[var(--border)] shadow-lg rounded-full max-w-full">
             <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)] animate-pulse shrink-0" />
             <span className="truncate text-[var(--text-secondary)]">{t('installHolding')}{installLabel ? ` · ${installLabel}` : ''}</span>
           </div>
@@ -299,7 +312,7 @@ export default function ChatView() {
           </button>
         </div>
       )}
-      <div ref={containerRef} className={`flex-1 overflow-y-auto py-6 ${isNewChat ? 'flex flex-col' : ''}`}>
+      <div ref={containerRef} className={`flex-1 min-h-0 overflow-y-auto overflow-x-hidden py-6 ${isNewChat ? 'flex flex-col' : ''}`}>
         {isNewChat ? (
           <NewChatHero />
         ) : (
@@ -371,7 +384,7 @@ export default function ChatView() {
         {/* opencode-style queue: typed mid-run, sent when this turn ends. */}
         {queued.map((q) => (
           <div key={q.id} className="mt-3 ml-auto max-w-[85%] sm:max-w-[72%] min-w-0">
-            <div className="rounded-2xl border border-dashed border-[var(--accent)]/50 bg-[var(--accent-soft)]/50 px-4 py-2.5">
+            <div className="rounded-2xl border border-dashed border-[color-mix(in_srgb,var(--accent)_50%,transparent)] bg-[color-mix(in_srgb,var(--accent-soft)_50%,transparent)] px-4 py-2.5">
               <div className="flex items-center gap-2 mb-1">
                 <span className="text-[11px] font-medium text-[var(--accent)]">{t('queuedTag')}</span>
                 <button
@@ -392,7 +405,7 @@ export default function ChatView() {
               {/* Auto-retry in progress after a network/model interruption —
                   a live reconnecting pill instead of a silent freeze. */}
               {activeRun?.retry && (
-                <div className="mb-3 inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-[var(--warning)]/30 bg-[var(--warning)]/10 text-[12px] font-medium text-[var(--warning)] anim-fade">
+                <div className="mb-3 inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-[color-mix(in_srgb,var(--warning)_30%,transparent)] bg-[color-mix(in_srgb,var(--warning)_10%,transparent)] text-[12px] font-medium text-[var(--warning)] anim-fade">
                   <FiRefreshCw size={12} className="animate-spin shrink-0" />
                   <span className="whitespace-nowrap">
                     {activeRun.retry.max != null
@@ -406,7 +419,7 @@ export default function ChatView() {
                   </span>
                 </div>
               )}
-              {streamingReasoning && (
+              {!isRetrying && streamingReasoning && (
                 <details open className="mb-3 rounded-xl border border-[var(--glass-border)] bg-[var(--glass-card)] px-3 py-2">
                   <summary className="cursor-pointer text-xs font-medium text-[var(--text-secondary)]">{t('thinkingProcess')}</summary>
                   <div className="mt-2 max-h-72 overflow-y-auto whitespace-pre-wrap break-words text-sm leading-relaxed text-[var(--text-secondary)]">{streamingReasoning}</div>
@@ -414,19 +427,21 @@ export default function ChatView() {
               )}
               {streamingContent
                 ? <MessageContent content={streamingContent} streaming />
-                : <span className="text-[15px] text-[var(--text-muted)] anim-caret">
+                : !isRetrying && (
+                  <span className="text-[15px] text-[var(--text-muted)] anim-caret">
                     {streamingToolName
                       ? `${t('callingTool')} ${streamingToolName}...`
                       : streamingStatus === 'thinking' ? t('thinking') + '...' : '...'}
-                  </span>}
+                  </span>
+                )}
             </div>
           </div>
         )}
 
         {error && (
-          <div className="mt-3 p-3.5 rounded-xl bg-[var(--error)]/10 border border-[var(--error)]/20 text-[var(--error)] text-sm flex items-center justify-between">
-            <span><strong className="mr-2">ConeCode</strong>{error}</span>
-            <button onClick={clearError} className="text-xs underline opacity-70 hover:opacity-100">{t('dismiss')}</button>
+          <div role="alert" className="mt-3 p-3.5 rounded-xl bg-[color-mix(in_srgb,var(--error)_10%,transparent)] border border-[color-mix(in_srgb,var(--error)_20%,transparent)] text-[var(--error)] text-sm flex items-start justify-between gap-3">
+            <span className="min-w-0 whitespace-pre-wrap break-words [overflow-wrap:anywhere]"><strong className="mr-2">ConeCode</strong>{error}</span>
+            <button onClick={clearError} className="shrink-0 text-xs underline opacity-70 hover:opacity-100">{t('dismiss')}</button>
           </div>
         )}
 
@@ -437,7 +452,7 @@ export default function ChatView() {
 
       {showPlanApproval && (
         <div className="max-w-[900px] mx-auto w-full px-4 mb-1">
-          <div className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-[var(--accent)]/30 bg-[var(--accent-soft)]">
+          <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl border border-[color-mix(in_srgb,var(--accent)_30%,transparent)] bg-[var(--accent-soft)]">
             <FiMap size={14} className="text-[var(--accent)] shrink-0" />
             <span className="text-xs text-[var(--text-secondary)] flex-1 min-w-0 truncate">{t('presentPlan')}</span>
             <button

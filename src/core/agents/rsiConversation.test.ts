@@ -82,3 +82,22 @@ describe('rsiDirectionPrompt', () => {
     expect(prompt).toContain('(open a workspace before execution)');
   });
 });
+
+
+describe('RSI direction execution contract', () => {
+  it('treats saved direction as intent rather than evidence or automatic execution', () => {
+    const prompt = rsiDirectionPrompt('conv-1', '/proj', defaultRsiState().directionConfig);
+    expect(prompt).toContain('not evidence that any check ran');
+    expect(prompt).toContain('does not start execution');
+    expect(prompt).toContain('Do not create a new episode merely to answer a question');
+    expect(prompt).toContain('do not import another conversation');
+  });
+
+  it('derives missing optional details without silently replacing a frozen contract', () => {
+    const prompt = rsiDirectionPrompt('conv-1', '/proj', { ...defaultRsiState().directionConfig, objective: '  Fix broken navigation  ' });
+    expect(prompt).toContain('Objective: Fix broken navigation');
+    expect(prompt).toContain('Missing optional fields do not require a questionnaire');
+    expect(prompt).toContain('before replacing the frozen goal');
+    expect(prompt).toContain('primary improvement check with real headroom');
+  });
+});

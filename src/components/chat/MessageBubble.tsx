@@ -6,6 +6,7 @@ import { useChatStore, useModelStore, useLanguageStore, useSettingsStore } from 
 import { formatCount, formatUSD, messageCost } from '../../core/pricing/cost';
 import MessageContent from './MessageContent';
 import AppIcon from '../common/AppIcon';
+import { isHolding, useInstallGateStore } from '../../stores/installGate.store';
 
 /**
  * Memoized: historical rows must not re-parse markdown every time a stream
@@ -33,7 +34,18 @@ function MessageBubble({
   const [expanded, setExpanded] = useState(false);
   const [showCopied, setShowCopied] = useState(false);
   const [answered, setAnswered] = useState(false);
+  const [answerPending, setAnswerPending] = useState(false);
+  const answerPendingRef = useRef(false);
   const sendMessage = useChatStore((s) => s.sendMessage);
+  const hasUserAnswer = useChatStore((s) => {
+    if (!message.isQuestion) return false;
+    const index = s.messages.findIndex((item) => item.id === message.id);
+    return index >= 0 && s.messages.slice(index + 1).some((item) => item.role === 'user' && !item.isToolResult);
+  });
+  const answerBlocked = useChatStore((s) => !!message.isQuestion &&
+    (s.activeConversationId !== message.conversationId || !!s.streamingRuns[message.conversationId] || !!s.messageEdits[message.conversationId]));
+  const installHolding = useInstallGateStore((s) => !!message.isQuestion && isHolding(s.jobs));
+  const questionAnswered = answered || hasUserAnswer;
   const editMessage = useChatStore((s) => s.editMessage);
   const saving = useChatStore((s) => !!s.messageEdits[message.conversationId]);
   const selectedModel = useModelStore((s) => s.getSelectedModel());
@@ -97,7 +109,7 @@ function MessageBubble({
         <div className="min-w-0">
           <button
             onClick={() => setExpanded((v) => !v)}
-            className="flex items-center gap-1.5 text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors"
+            className="flex max-w-full items-center gap-1.5 text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors cursor-pointer"
           >
             {expanded ? <FiChevronDown size={12} /> : <FiChevronRight size={12} />}
             <span className="font-medium">ConeCode</span>
@@ -131,12 +143,22 @@ function MessageBubble({
   };
 
   const handleAnswer = async (answer: string) => {
-    if (answered) return;
-    setAnswered(true);
+    if (questionAnswered || answerPendingRef.current || answerBlocked || installHolding) return;
     const providerId = message.providerId || getSelectedModel()?.providerId || '';
     const modelId = message.modelId || getSelectedModel()?.id || '';
     if (!providerId || !modelId) return;
-    await sendMessage(answer, providerId, modelId);
+    answerPendingRef.current = true;
+    setAnswerPending(true);
+    try {
+      await sendMessage(answer, providerId, modelId);
+      setAnswered(true);
+    } catch {
+      // sendMessage exposes the error in the transcript. Keep the options so
+      // an unsuccessful send can be retried.
+    } finally {
+      answerPendingRef.current = false;
+      setAnswerPending(false);
+    }
   };
 
   return (
@@ -165,11 +187,11 @@ function MessageBubble({
             />
             <div className="mt-3 flex justify-end gap-2">
               <button onClick={onCancelEdit} disabled={saving}
-                className="px-4 py-2 rounded-xl bg-[var(--glass-card)] border border-[var(--glass-border)] text-sm text-[var(--text-primary)] hover:bg-[var(--bg-3)] disabled:opacity-50 transition-colors">
+                className="px-4 py-2 rounded-xl bg-[var(--glass-card)] border border-[var(--glass-border)] text-sm text-[var(--text-primary)] hover:bg-[var(--bg-3)] disabled:opacity-50 transition-colors cursor-pointer">
                 {t('cancel')}
               </button>
               <button onClick={handleSubmitEdit} disabled={saving || !draft.trim() || !selectedModel}
-                className="px-4 py-2 rounded-xl bg-[var(--text-primary)] text-[var(--bg-0)] text-sm hover:opacity-90 disabled:opacity-40 shadow-xs transition-opacity">
+                className="px-4 py-2 rounded-xl bg-[var(--text-primary)] text-[var(--bg-0)] text-sm hover:opacity-90 disabled:opacity-40 shadow-xs transition-opacity cursor-pointer">
                 {t('send')}
               </button>
             </div>
@@ -177,23 +199,23 @@ function MessageBubble({
         </div>
       ) : isUser ? (
         <div className="flex justify-end">
-          <div className="flex flex-col items-end gap-1.5 max-w-[85%] sm:max-w-[72%]">
-            <div className="rounded-2xl px-5 py-3 text-[15.5px] leading-relaxed font-[450] whitespace-pre-wrap break-words [overflow-wrap:anywhere] bg-[var(--glass-card)]/95 backdrop-blur-md border border-[var(--glass-border)] shadow-xs text-[var(--text-primary)]">
+          <div className="flex min-w-0 flex-col items-end gap-1.5 max-w-[85%] sm:max-w-[72%]">
+            <div className="rounded-2xl px-4 py-3 text-[15.5px] leading-relaxed font-[450] whitespace-pre-wrap break-words [overflow-wrap:anywhere] bg-[color-mix(in_srgb,var(--glass-card)_95%,transparent)] backdrop-blur-md border border-[var(--glass-border)] shadow-xs text-[var(--text-primary)]">
               {message.content}
               <MessageImages images={message.images} />
             </div>
-            <div className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+            <div className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
               {message.createdAt && (
                 <span className="text-[10.5px] text-[var(--text-muted)] font-mono mr-0.5">
                   {new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                 </span>
               )}
               <button onClick={handleCopy} title={t('copy')}
-                className="p-1 rounded-lg hover:bg-[var(--bg-3)] text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors">
+                className="p-1 rounded-lg hover:bg-[var(--bg-3)] text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors cursor-pointer">
                 {showCopied ? <FiCheck size={12} className="text-[var(--success)]" /> : <FiCopy size={12} />}
               </button>
               <button onClick={handleEdit} title={t('edit')} aria-label={t('edit')} disabled={saving}
-                className="p-1 rounded-lg hover:bg-[var(--bg-3)] text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors">
+                className="p-1 rounded-lg hover:bg-[var(--bg-3)] text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors cursor-pointer">
                 <FiRotateCcw size={12} />
               </button>
             </div>
@@ -204,7 +226,7 @@ function MessageBubble({
           {/* Assistant Turn Header with ConeCode Original Icon */}
           {(!isContinuation || isConeCodeOutput) && (
             <div className="flex items-center gap-2 mb-2.5 select-none">
-              <div className="w-6 h-6 rounded-lg flex items-center justify-center border border-[var(--accent)]/20 shadow-2xs shrink-0 overflow-hidden">
+              <div className="w-6 h-6 rounded-lg flex items-center justify-center border border-[color-mix(in_srgb,var(--accent)_20%,transparent)] shadow-2xs shrink-0 overflow-hidden">
                 <AppIcon size={24} className="w-full h-full object-cover" />
               </div>
               <span className="text-[13.5px] font-bold text-[var(--text-primary)] font-serif tracking-tight">
@@ -224,7 +246,7 @@ function MessageBubble({
               <button
                 type="button"
                 onClick={() => setThinkingOpen((v) => !v)}
-                className="inline-flex items-center gap-2 text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] py-1.5 px-3 rounded-xl bg-[var(--glass-card)] hover:bg-[var(--bg-3)] border border-[var(--glass-border)] transition-all select-none shadow-2xs group/think"
+                className="inline-flex items-center gap-2 text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] py-1.5 px-3 rounded-xl bg-[var(--glass-card)] hover:bg-[var(--bg-3)] border border-[var(--glass-border)] transition-all select-none shadow-2xs group/think cursor-pointer"
               >
                 <FiClock size={12} className="text-[var(--accent)]" />
                 <span>
@@ -242,7 +264,7 @@ function MessageBubble({
                 )}
               </button>
               {thinkingOpen && reasoningText && (
-                <div className="mt-2 pl-3.5 pr-3 py-2.5 border-l-2 border-[var(--accent)]/45 text-[14px] leading-relaxed text-[var(--text-secondary)] bg-[var(--glass-card)]/40 rounded-r-2xl whitespace-pre-wrap font-serif italic shadow-2xs max-h-96 overflow-y-auto">
+                <div className="mt-2 pl-3.5 pr-3 py-2.5 border-l-2 border-[color-mix(in_srgb,var(--accent)_45%,transparent)] text-[14px] leading-relaxed text-[var(--text-secondary)] bg-[color-mix(in_srgb,var(--glass-card)_40%,transparent)] rounded-r-2xl whitespace-pre-wrap font-serif italic shadow-2xs max-h-96 overflow-y-auto">
                   {reasoningText}
                 </div>
               )}
@@ -255,21 +277,22 @@ function MessageBubble({
                 <div className="text-[var(--accent)] text-xs font-semibold mb-2 flex items-center gap-1.5">
                   <FiHelpCircle size={13} /> {t('aiAsking')}
                 </div>
-                <div className="whitespace-pre-wrap text-[var(--text-primary)] font-serif font-bold text-[16px] leading-relaxed">{message.content}</div>
-                {message.questionOptions && !answered && (
+                <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[var(--text-primary)] font-serif font-bold text-[16px] leading-relaxed">{message.content}</div>
+                {message.questionOptions && !questionAnswered && (
                   <div className="mt-3.5 flex flex-wrap gap-2">
                     {message.questionOptions.map((option, index) => (
                       <button key={index} onClick={() => handleAnswer(option)}
-                        className="px-3.5 py-1.5 rounded-xl border border-[var(--glass-border)] bg-[var(--glass-card)] backdrop-blur-md text-[var(--text-primary)] hover:border-[var(--accent)] hover:text-[var(--accent)] hover:bg-[var(--accent-soft)] transition-all text-sm font-medium shadow-2xs active:scale-98">
+                        disabled={answerPending || answerBlocked || installHolding}
+                        className="max-w-full break-words [overflow-wrap:anywhere] text-left px-3.5 py-1.5 rounded-xl border border-[var(--glass-border)] bg-[var(--glass-card)] backdrop-blur-md text-[var(--text-primary)] hover:border-[var(--accent)] hover:text-[var(--accent)] hover:bg-[var(--accent-soft)] transition-all text-sm font-medium shadow-2xs active:scale-98 cursor-pointer disabled:opacity-50">
                         {option}
                       </button>
                     ))}
                   </div>
                 )}
-                {!message.questionOptions && !answered && (
+                {!message.questionOptions && !questionAnswered && (
                   <div className="mt-3 text-xs text-[var(--text-muted)]">{t('typeAnswerHint')}</div>
                 )}
-                {answered && <div className="mt-2 text-xs font-medium text-[var(--success)] flex items-center gap-1"><FiCheck size={12} /> {t('answered')}</div>}
+                {questionAnswered && <div className="mt-2 text-xs font-medium text-[var(--success)] flex items-center gap-1"><FiCheck size={12} /> {t('answered')}</div>}
               </div>
             ) : (
               <div className="min-w-0 w-full">
@@ -279,9 +302,9 @@ function MessageBubble({
             )}
 
             <div className="flex items-center justify-between mt-1">
-              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
                 <button onClick={handleCopy} title={t('copy')}
-                  className="p-1 rounded-lg hover:bg-[var(--bg-3)] text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors">
+                  className="p-1 rounded-lg hover:bg-[var(--bg-3)] text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors cursor-pointer">
                   {showCopied ? <FiCheck size={12} className="text-[var(--success)]" /> : <FiCopy size={12} />}
                 </button>
               </div>

@@ -51,6 +51,30 @@ export interface EpisodeResult {
 
 const DEFAULT_COST_BUDGET = { files: 6, lines: 400 };
 
+function validMetrics(metrics: MetricDelta[]): boolean {
+  if (!metrics.length) return false;
+  const ids = new Set<string>();
+  return metrics.every((metric) => {
+    if (!metric.id.trim() || ids.has(metric.id) || !Number.isFinite(metric.delta)
+      || (metric.scale != null && (!Number.isFinite(metric.scale) || metric.scale <= 0))
+      || (metric.weight != null && (!Number.isFinite(metric.weight) || metric.weight <= 0))
+      || (metric.minDelta != null && !Number.isFinite(metric.minDelta))
+      || !Number.isFinite(scaledDelta(metric))) return false;
+    ids.add(metric.id);
+    return true;
+  });
+}
+
+function hasMeasuredGain(metrics: MetricDelta[], reference: Record<string, number> | undefined, epsilon: number): boolean {
+  return metrics.some((metric) => scaledDelta(metric) > (reference?.[metric.id] ?? 0) + epsilon);
+}
+
+export interface RewardIncumbent {
+  reward: number;
+  /** Scaled deltas from the same frozen baseline, when available. */
+  metrics?: Record<string, number>;
+}
+
 function clamp01(n: number): number {
   if (!Number.isFinite(n)) return 0;
   return Math.min(1, Math.max(0, n));
@@ -63,12 +87,15 @@ function clamp01(n: number): number {
  */
 export function computeReward(r: EpisodeResult): number {
   if (!r.externalPass) return REWARD_FAIL;
+  if (!validMetrics(r.metrics) || !Number.isFinite(r.filesTouched) || r.filesTouched < 0
+    || !Number.isFinite(r.linesChanged) || r.linesChanged < 0) return REWARD_FAIL;
   if (breachesHardFloor(r).length > 0) return REWARD_FAIL;
 
   let metricTerm = 0;
   let weightSum = 0;
+  const largestWeight = r.metrics.reduce((largest, metric) => Math.max(largest, metric.weight ?? 1), 1);
   for (const m of r.metrics) {
-    const w = m.weight ?? 1;
+    const w = (m.weight ?? 1) / largestWeight;
     // tanh-bounds a single NORMALIZED metric so one huge delta cannot
     // dominate forever. Normalization is per-metric: scale lives on the
     // MetricDelta because only the metric owner knows its units.
@@ -123,15 +150,26 @@ export type SelectDecision =
  */
 export function selectCandidate(
   candidate: EpisodeResult,
-  best: { reward: number } | null,
+  best: RewardIncumbent | null,
   baseline: { reward: number },
   /** Minimum improvement to count as progress (stops metric thrash). */
   epsilon = 1e-3,
 ): SelectDecision {
   if (!candidate.externalPass) return { accept: false, reason: 'external-fail' };
+  if (!validMetrics(candidate.metrics)) return { accept: false, reason: 'external-fail' };
   if (clamp01(candidate.judges.discipline) <= 0) return { accept: false, reason: 'discipline-veto' };
   if (breachesHardFloor(candidate).length > 0) return { accept: false, reason: 'hard-floor-breach' };
   const reward = computeReward(candidate);
+  if (reward === REWARD_FAIL) return { accept: false, reason: 'external-fail' };
+  if (best?.metrics && (Object.keys(best.metrics).length !== candidate.metrics.length
+    || candidate.metrics.some((metric) => !Number.isFinite(best.metrics![metric.id])))) {
+    return { accept: false, reason: 'external-fail' };
+  }
+  // Judge enthusiasm is not a measured improvement. Equal or uniformly worse
+  // metrics must not replace the incumbent just because a new panel is nicer.
+  if (!hasMeasuredGain(candidate.metrics, best?.metrics, epsilon)) {
+    return { accept: false, reason: best ? 'not-better-than-best' : 'not-better-than-baseline' };
+  }
   if (best == null) {
     if (reward > baseline.reward + epsilon) return { accept: true, reason: 'first-passing' };
     return { accept: false, reason: 'not-better-than-baseline' };
@@ -156,7 +194,7 @@ export type ArchiveVerdict =
 export function selectForArchive(
   candidate: EpisodeResult,
   candidateId: string,
-  best: { reward: number } | null,
+  best: RewardIncumbent | null,
   baseline: { reward: number },
   archive: ParetoCandidate[],
   epsilon = 1e-3,
@@ -165,15 +203,20 @@ export function selectForArchive(
   // double-register or flip the verdict. Recompute the same decision
   // deterministically instead of appending a duplicate frontier node.
   const already = archive.some((o) => o.id === candidateId);
+  if (already) return { action: 'reject', reason: 'not-better-than-best' };
   const d = selectCandidate(candidate, best, baseline, epsilon);
   if (d.accept) return { action: 'replace-best', reason: d.reason };
   if (d.reason !== 'not-better-than-best' && d.reason !== 'not-better-than-baseline') {
     return { action: 'reject', reason: d.reason };
   }
-  if (already) return { action: 'reject', reason: d.reason };
+  if (!hasMeasuredGain(candidate.metrics, undefined, epsilon)) return { action: 'reject', reason: d.reason };
   const metrics: Record<string, number> = {};
   for (const m of candidate.metrics) metrics[m.id] = scaledDelta(m);
   const node: ParetoCandidate = { id: candidateId, metrics };
+  const equivalent = archive.some((other) => Object.keys(other.metrics).length === candidate.metrics.length
+    && candidate.metrics.every((metric) => Number.isFinite(other.metrics[metric.id])
+      && Math.abs(other.metrics[metric.id] - metrics[metric.id]) <= epsilon));
+  if (equivalent) return { action: 'reject', reason: d.reason };
   const dominated = archive.some((o) => o.id !== candidateId && dominates(o, node));
   if (!dominated) return { action: 'retain-frontier', reason: 'pareto-nondominated' };
   return { action: 'reject', reason: d.reason };
@@ -201,7 +244,8 @@ export function pruneParetoArchive(archive: ParetoCandidate[], node: ParetoCandi
  * hard fails are a separate stop condition (broken oracle), not a plateau.
  */
 export function isConverged(rewardHistory: number[], window = 3, epsilon = 1e-3): boolean {
-  const hist = rewardHistory.filter((r) => r !== REWARD_FAIL);
+  if (!Number.isInteger(window) || window < 1 || !Number.isFinite(epsilon) || epsilon < 0) return false;
+  const hist = rewardHistory.filter((r) => Number.isFinite(r) && r !== REWARD_FAIL);
   if (hist.length < window + 1) return false;
   const tail = hist.slice(-window);
   const priorBest = Math.max(...hist.slice(0, -window));
@@ -237,10 +281,13 @@ export interface ParetoCandidate {
 export function dominates(a: ParetoCandidate, b: ParetoCandidate): boolean {
   const keys = new Set([...Object.keys(a.metrics), ...Object.keys(b.metrics)]);
   if (keys.size === 0) return false;
+  // Different or missing metric sets are not comparable experiments.
+  if (keys.size !== Object.keys(a.metrics).length || keys.size !== Object.keys(b.metrics).length) return false;
   let better = false;
   for (const k of keys) {
-    const av = a.metrics[k] ?? -Infinity;
-    const bv = b.metrics[k] ?? -Infinity;
+    const av = a.metrics[k];
+    const bv = b.metrics[k];
+    if (!Number.isFinite(av) || !Number.isFinite(bv)) return false;
     if (av < bv) return false;
     if (av > bv) better = true;
   }

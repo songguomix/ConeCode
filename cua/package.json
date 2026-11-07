@@ -1,0 +1,68 @@
+{
+  "name": "@conecode/computer-use-agent",
+  "version": "0.1.0",
+  "description": "Standalone, observable, recoverable computer-use agent runtime",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/postbuild.mjs && vite build --config console/vite.config.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:all": "npm run typecheck && vitest run",
+    "dev": "tsx src/cli.ts",
+    "start": "tsx src/cli.ts serve",
+    "serve": "tsx src/cli.ts serve",
+    "mcp": "tsx src/mcp-server.ts",
+    "console:build": "vite build --config console/vite.config.ts",
+    "console:dev": "vite --config console/vite.config.ts",
+    "demo:browser": "tsx src/cli.ts demo browser",
+    "demo:desktop": "tsx src/cli.ts demo desktop --yes",
+    "eval": "tsx src/cli.ts eval",
+    "install:browsers": "playwright install chromium",
+    "build:native": "node scripts/build-native.mjs",
+    "setup": "npm install && npm run install:browsers && npm run build:native",
+    "verify:delivery": "node scripts/verify-delivery.mjs",
+    "test:desktop": "CUA_RUN_DESKTOP=1 vitest run test/desktop.test.ts",
+    "eval:real": "tsx src/cli.ts eval --real"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "playwright": "1.65.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "22.10.5",
+    "@types/react": "18.3.18",
+    "@types/react-dom": "18.3.5",
+    "@vitejs/plugin-react": "4.3.4",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "tsx": "4.23.15",
+    "typescript": "5.7.3",
+    "vite": "6.4.5",
+    "vitest": "5.1.0"
+  },
+  "type": "module",
+  "private": true,
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./sdk": "./dist/sdk.js",
+    "./protocol": "./dist/protocol/schemas.js"
+  },
+  "bin": {
+    "cua": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "console/dist",
+    "native/desktop-agent.swift",
+    "README.md",
+    "docs"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

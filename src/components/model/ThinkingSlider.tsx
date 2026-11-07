@@ -10,6 +10,7 @@ interface ThinkingSliderProps {
   onChange: (value: ReasoningEffort) => void;
   /** Effort levels the selected model declares. undefined → show the full ladder. */
   levels?: ReasoningEffort[];
+  compact?: boolean;
 }
 
 const FULL_LADDER: readonly ReasoningEffort[] = ['low', 'medium', 'high'];
@@ -32,7 +33,7 @@ const SPAN = TRACK_W - THUMB;
  * declare are not shown, while Auto stays (it maps onto the declared levels at
  * send time). The deepest stop is an hourglass stopper with 流沙 running.
  */
-export default function ThinkingSlider({ value, onChange, levels }: ThinkingSliderProps) {
+export default function ThinkingSlider({ value, onChange, levels, compact = false }: ThinkingSliderProps) {
   const { t } = useLanguageStore();
   const [open, setOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -125,18 +126,20 @@ export default function ThinkingSlider({ value, onChange, levels }: ThinkingSlid
         aria-label={t('thinkingEffort')}
         aria-haspopup="dialog"
         aria-expanded={open}
-        className={`flex items-center h-8 pl-1.5 pr-2.5 rounded-full border transition-all backdrop-blur-md shadow-2xs ${
+        className={`flex items-center h-8 ${compact ? 'w-8 justify-center px-0' : 'pl-1.5 pr-2.5'} rounded-full border transition-all backdrop-blur-md shadow-2xs cursor-pointer ${
           open
-            ? 'bg-[var(--accent-soft)] border-[var(--accent)]/50 text-[var(--accent)] font-medium shadow-xs'
+            ? 'bg-[var(--accent-soft)] border-[color-mix(in_srgb,var(--accent)_50%,transparent)] text-[var(--accent)] font-medium shadow-xs'
             : 'bg-[var(--glass-card)] hover:bg-[var(--bg-2)] border-[var(--glass-border)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
         }`}
       >
         {/* keyed remount → the label pops on every level change (calm while dragging) */}
-        <span key={shown} className={`flex items-center gap-2 ${dragging ? '' : 'anim-pop'}`}>
-          <span className="w-5 h-5 rounded-full bg-[var(--accent-soft)] text-[var(--accent)] flex items-center justify-center shrink-0">
-            <Meta.Icon size={11} />
+        <span key={shown} className={`flex items-center ${compact ? 'justify-center' : 'gap-2'} ${dragging ? '' : 'anim-pop'}`}>
+          <span className={`w-5 h-5 rounded-full ${compact ? '' : 'bg-[var(--accent-soft)] text-[var(--accent)]'} flex items-center justify-center shrink-0`}>
+            <Meta.Icon size={compact ? 13 : 11} className={compact ? 'text-[var(--accent)]' : ''} />
           </span>
-          <span className="text-[11px] font-semibold whitespace-nowrap">{t(Meta.shortKey)}</span>
+          {!compact && (
+            <span className="text-[11px] font-semibold whitespace-nowrap">{t(Meta.shortKey)}</span>
+          )}
         </span>
       </button>
 
@@ -194,7 +197,7 @@ export default function ThinkingSlider({ value, onChange, levels }: ThinkingSlid
                   aria-hidden
                   className={`absolute w-3 h-5 rounded-[4px] border overflow-hidden transition-[border-color,box-shadow] duration-200 ${
                     atDeepEnd
-                      ? 'border-[var(--accent)]/70 shadow-[0_0_10px_-2px_var(--accent)] effort-flip'
+                      ? 'border-[color-mix(in_srgb,var(--accent)_70%,transparent)] shadow-[0_0_10px_-2px_var(--accent)] effort-flip'
                       : 'border-[var(--border)]'
                   }`}
                   style={{

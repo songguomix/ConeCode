@@ -45,7 +45,6 @@ export default function ShortcutCard({ t }: { t: (k: string) => string }) {
               </span>
             )}
           </div>
-          <p className="mt-0.5 text-xs text-[var(--text-muted)] leading-relaxed">{t('screenshotShortcutDesc')}</p>
           {failed && <p className="mt-1 text-xs text-[var(--error)] font-medium">{t('screenshotShortcutFailed')}</p>}
         </div>
 
@@ -62,7 +61,7 @@ export default function ShortcutCard({ t }: { t: (k: string) => string }) {
           ) : (
             <button
               onClick={() => { setFailed(false); setRecording(true); }}
-              className="px-3 py-1.5 rounded-xl bg-[var(--bg-1)] border border-[var(--border)] text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--accent)]/50 transition-all cursor-pointer shadow-2xs"
+              className="px-3 py-1.5 rounded-xl bg-[var(--bg-1)] border border-[var(--border)] text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[color-mix(in_srgb,var(--accent)_50%,transparent)] transition-all cursor-pointer shadow-2xs"
             >
               {t('screenshotChangeShortcut')}
             </button>
@@ -74,7 +73,7 @@ export default function ShortcutCard({ t }: { t: (k: string) => string }) {
               const ok = await applyShortcut(DEFAULT_SCREENSHOT_SHORTCUT);
               setFailed(!ok);
             })()}
-            className="px-3 py-1.5 rounded-xl bg-[var(--bg-1)] border border-[var(--border)] text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--accent)]/50 transition-all cursor-pointer shadow-2xs"
+            className="px-3 py-1.5 rounded-xl bg-[var(--bg-1)] border border-[var(--border)] text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[color-mix(in_srgb,var(--accent)_50%,transparent)] transition-all cursor-pointer shadow-2xs"
           >
             {t('screenshotResetShortcut')}
           </button>

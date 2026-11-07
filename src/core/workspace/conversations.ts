@@ -53,3 +53,60 @@ export function folderDisplayName(folderKey: string): string {
   if (!folderKey) return '';
   return folderKey.split('/').pop() || folderKey;
 }
+
+/**
+ * A conversation that has never been used: no messages, still carries the
+ * default title, and — for RSI — no configured direction or run history.
+ * Renaming or configuring an empty conversation marks it as intentional work,
+ * so it is never silently reopened by the "+" button.
+ */
+export function isBlankConversation(conv: Conversation, messageCount: number): boolean {
+  if (messageCount > 0) return false;
+  if (conv.title && conv.title !== 'New Chat') return false;
+  if (isRsiConversation(conv) && conv.rsi) {
+    if (conv.rsi.status !== 'idle' || conv.rsi.runs.length > 0) return false;
+    if (Object.values(conv.rsi.directionConfig).some((value) => value.trim())) return false;
+  }
+  return true;
+}
+
+/**
+ * Pick an existing unused conversation for the requested mode and folder.
+ *
+ * `messageCounts` is the persisted count per conversation. When it is null
+ * (older main process / tests), only the active conversation's in-memory
+ * transcript is trusted; every other conversation is treated as used so we
+ * never reopen a transcript whose contents we cannot verify.
+ */
+export function pickReusableConversation(
+  conversations: Conversation[],
+  mode: 'chat' | 'work' | 'rsi',
+  rootPath: string | null,
+  activeConversationId: string | null,
+  activeMessageCount: number,
+  messageCounts: Record<string, number> | null,
+): Conversation | null {
+  const candidates = conversations.filter((conv) => {
+    if (mode === 'rsi') {
+      if (!isRsiConversation(conv)) return false;
+    } else {
+      if (isRsiConversation(conv) || conv.agentMode === 'rsi') return false;
+      if (mode === 'chat' ? !isChatConversation(conv) : !isWorkConversation(conv)) return false;
+    }
+    if ((conv.rootPath || null) !== (rootPath || null)) return false;
+    const count = conv.id === activeConversationId
+      ? activeMessageCount
+      : messageCounts
+        ? (messageCounts[conv.id] ?? 0)
+        : 1;
+    return isBlankConversation(conv, count);
+  });
+
+  // The conversation already on screen wins (clicking + becomes a no-op);
+  // otherwise prefer the most recently touched blank row.
+  return candidates.sort((a, b) => {
+    if (a.id === activeConversationId) return -1;
+    if (b.id === activeConversationId) return 1;
+    return b.updatedAt - a.updatedAt;
+  })[0] ?? null;
+}

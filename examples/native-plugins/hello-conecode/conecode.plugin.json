@@ -1,0 +1,21 @@
+{
+  "name": "hello-conecode",
+  "version": "1.0.0",
+  "description": "A minimum ConeCode-native plugin: one tool, one host command and one skill with deterministic output.",
+  "author": "ConeCode",
+  "license": "MIT",
+  "homepage": "https://github.com/songguomix/ConeCode",
+  "readme": "README.md",
+  "conecode": {
+    "plugin": true,
+    "apiVersion": 1,
+    "entry": "./index.mjs",
+    "capabilities": ["tools", "commands", "skills"],
+    "config": {
+      "greeting": {
+        "type": "string",
+        "default": "Hello"
+      }
+    }
+  }
+}

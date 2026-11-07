@@ -145,18 +145,18 @@ export default function ImageGeneratorModal() {
       {/* Modal Container */}
       <div className="relative flex flex-col w-full max-w-4xl h-[90vh] max-h-[860px] rounded-3xl bg-[var(--glass-surface)] border border-[var(--glass-border)] shadow-[0_25px_60px_-15px_rgba(0,0,0,0.5)] overflow-hidden text-[var(--text-primary)]">
         {/* Ambient Top Glow */}
-        <div className="absolute top-0 inset-x-0 h-40 bg-gradient-to-b from-[var(--accent)]/15 via-[var(--accent)]/5 to-transparent pointer-events-none" />
+        <div className="absolute top-0 inset-x-0 h-40 bg-gradient-to-b from-[color-mix(in_srgb,var(--accent)_15%,transparent)] via-[color-mix(in_srgb,var(--accent)_5%,transparent)] to-transparent pointer-events-none" />
 
         {/* Header */}
-        <div className="relative flex items-center justify-between px-6 py-4 border-b border-[var(--glass-border)] bg-[var(--glass-card)]/50 backdrop-blur-md z-10 shrink-0">
-          <div className="flex items-center gap-3">
+        <div className="relative flex items-center justify-between px-4 sm:px-5 py-3.5 border-b border-[var(--glass-border)] bg-[color-mix(in_srgb,var(--glass-card)_50%,transparent)] backdrop-blur-md z-10 shrink-0">
+          <div className="flex min-w-0 items-center gap-3">
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-base sm:text-lg font-bold font-serif tracking-tight text-[var(--text-primary)]">
                   {t('imageStudio')}
                 </h2>
                 {config.model && (
-                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-[var(--accent-soft)] text-[var(--accent)] font-mono font-medium border border-[var(--accent)]/30">
+                  <span className="max-w-full truncate text-[11px] px-2 py-0.5 rounded-full bg-[var(--accent-soft)] text-[var(--accent)] font-mono font-medium border border-[color-mix(in_srgb,var(--accent)_30%,transparent)]" title={config.model}>
                     {config.model}
                   </span>
                 )}
@@ -168,10 +168,10 @@ export default function ImageGeneratorModal() {
           </div>
 
           {/* Navigation Tabs */}
-          <div className="flex items-center gap-1.5 p-1 rounded-2xl bg-[var(--bg-3)]/60 border border-[var(--glass-border)]">
+          <div className="flex items-center gap-1.5 p-1 rounded-xl bg-[color-mix(in_srgb,var(--bg-3)_60%,transparent)] border border-[var(--glass-border)]">
             <button
               onClick={() => setActiveTab('studio')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium transition-all ${
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium transition-all cursor-pointer ${
                 activeTab === 'studio'
                   ? 'bg-[var(--glass-card)] text-[var(--text-primary)] shadow-xs font-semibold'
                   : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
@@ -182,7 +182,7 @@ export default function ImageGeneratorModal() {
             </button>
             <button
               onClick={() => setActiveTab('gallery')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium transition-all ${
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium transition-all cursor-pointer ${
                 activeTab === 'gallery'
                   ? 'bg-[var(--glass-card)] text-[var(--text-primary)] shadow-xs font-semibold'
                   : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
@@ -193,7 +193,7 @@ export default function ImageGeneratorModal() {
             </button>
             <button
               onClick={() => setActiveTab('settings')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium transition-all ${
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium transition-all cursor-pointer ${
                 activeTab === 'settings'
                   ? 'bg-[var(--glass-card)] text-[var(--text-primary)] shadow-xs font-semibold'
                   : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
@@ -208,17 +208,17 @@ export default function ImageGeneratorModal() {
           <button
             onClick={closeModal}
             aria-label={t('close')}
-            className="w-8 h-8 rounded-full flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-3)] transition-colors"
+            className="w-8 h-8 rounded-full flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-3)] transition-colors cursor-pointer"
           >
             <FiX size={18} />
           </button>
         </div>
 
         {/* Content Body */}
-        <div className="relative flex-1 overflow-y-auto px-6 py-5 space-y-6">
+        <div className="relative flex-1 min-h-0 overflow-y-auto px-4 sm:px-5 py-4 space-y-5">
           {/* Global Alert Notification */}
           {error && (
-            <div className="p-3.5 rounded-2xl bg-[var(--error)]/10 border border-[var(--error)]/30 text-[var(--error)] text-xs flex items-center justify-between gap-3 anim-shake">
+            <div className="p-3.5 rounded-2xl bg-[color-mix(in_srgb,var(--error)_10%,transparent)] border border-[color-mix(in_srgb,var(--error)_30%,transparent)] text-[var(--error)] text-xs flex items-center justify-between gap-3 anim-shake">
               <div className="flex items-center gap-2 min-w-0">
                 <FiAlertCircle size={16} className="shrink-0" />
                 <span className="leading-snug break-words">{error}</span>
@@ -226,7 +226,7 @@ export default function ImageGeneratorModal() {
               {activeTab !== 'settings' && (
                 <button
                   onClick={() => setActiveTab('settings')}
-                  className="px-2.5 py-1 rounded-xl bg-[var(--error)] text-white text-[11px] font-medium shrink-0 hover:opacity-90"
+                  className="px-2.5 py-1 rounded-xl bg-[var(--error)] text-white text-[11px] font-medium shrink-0 hover:opacity-90 cursor-pointer"
                 >
                   {t('imageSettingsTab')}
                 </button>
@@ -236,7 +236,7 @@ export default function ImageGeneratorModal() {
 
           {/* TAB 1: STUDIO */}
           {activeTab === 'studio' && (
-            <div className="space-y-6">
+            <div className="space-y-5">
               {/* Prompt Editor Box */}
               <div className="rounded-3xl p-4 bg-[var(--glass-card)] border border-[var(--glass-border)] shadow-xs space-y-3">
                 <div className="flex items-center justify-between">
@@ -249,7 +249,7 @@ export default function ImageGeneratorModal() {
                       onClick={randomizePrompt}
                       type="button"
                       title={t('randomPrompt')}
-                      className="px-2.5 py-1 rounded-xl text-xs font-medium bg-[var(--bg-3)]/60 hover:bg-[var(--bg-3)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] border border-[var(--glass-border)] transition-colors flex items-center gap-1 cursor-pointer"
+                      className="px-2.5 py-1 rounded-xl text-xs font-medium bg-[color-mix(in_srgb,var(--bg-3)_60%,transparent)] hover:bg-[var(--bg-3)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] border border-[var(--glass-border)] transition-colors flex items-center gap-1 cursor-pointer"
                     >
                       <span>{t('randomPrompt')}</span>
                     </button>
@@ -258,7 +258,7 @@ export default function ImageGeneratorModal() {
                       disabled={!prompt.trim()}
                       type="button"
                       title={t('enhancePrompt')}
-                      className="px-2.5 py-1 rounded-xl text-xs font-medium bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[var(--accent)] hover:text-white border border-[var(--accent)]/30 transition-all disabled:opacity-40 flex items-center gap-1 cursor-pointer"
+                      className="px-2.5 py-1 rounded-xl text-xs font-medium bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[var(--accent)] hover:text-white border border-[color-mix(in_srgb,var(--accent)_30%,transparent)] transition-all disabled:opacity-40 flex items-center gap-1 cursor-pointer"
                     >
                       <SparklesIcon size={11} />
                       <span>{t('enhancePrompt')}</span>
@@ -281,7 +281,7 @@ export default function ImageGeneratorModal() {
                   onChange={(e) => setPrompt(e.target.value)}
                   placeholder={t('promptPlaceholder')}
                   rows={3}
-                  className="w-full bg-transparent text-[15px] leading-relaxed text-[var(--text-primary)] placeholder:text-[var(--text-muted)]/60 outline-none resize-none"
+                  className="w-full bg-transparent text-[15px] leading-relaxed text-[var(--text-primary)] placeholder:text-[color-mix(in_srgb,var(--text-muted)_60%,transparent)] outline-none resize-none"
                 />
               </div>
 
@@ -315,7 +315,7 @@ export default function ImageGeneratorModal() {
                         className={`flex flex-col items-start p-3 rounded-2xl border text-left transition-all ${
                           isSelected
                             ? 'bg-[var(--accent-soft)] border-[var(--accent)] shadow-md shadow-[var(--accent)]/15 scale-[1.02]'
-                            : 'bg-[var(--glass-card)]/80 hover:bg-[var(--glass-card)] border-[var(--glass-border)] hover:border-[var(--text-muted)]/40'
+                            : 'bg-[color-mix(in_srgb,var(--glass-card)_80%,transparent)] hover:bg-[var(--glass-card)] border-[var(--glass-border)] hover:border-[color-mix(in_srgb,var(--text-muted)_40%,transparent)]'
                         }`}
                       >
                         <div className="flex items-center justify-end w-full mb-1 min-h-[20px]">
@@ -351,7 +351,7 @@ export default function ImageGeneratorModal() {
                         className={`flex flex-col items-center justify-center p-3 rounded-2xl border transition-all cursor-pointer ${
                           isSelected
                             ? 'bg-[var(--accent-soft)] border-[var(--accent)] text-[var(--accent)] shadow-md shadow-[var(--accent)]/15 scale-[1.02]'
-                            : 'bg-[var(--glass-card)]/80 hover:bg-[var(--glass-card)] border-[var(--glass-border)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                            : 'bg-[color-mix(in_srgb,var(--glass-card)_80%,transparent)] hover:bg-[var(--glass-card)] border-[var(--glass-border)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
                         }`}
                       >
                         {/* Visual Ratio Box */}
@@ -363,8 +363,8 @@ export default function ImageGeneratorModal() {
                             }}
                             className={`rounded-md border-2 transition-colors ${
                               isSelected
-                                ? 'border-[var(--accent)] bg-[var(--accent)]/20'
-                                : 'border-[var(--text-muted)]/50 bg-[var(--bg-3)]'
+                                ? 'border-[var(--accent)] bg-[color-mix(in_srgb,var(--accent)_20%,transparent)]'
+                                : 'border-[color-mix(in_srgb,var(--text-muted)_50%,transparent)] bg-[var(--bg-3)]'
                             }`}
                           />
                         </div>
@@ -381,7 +381,7 @@ export default function ImageGeneratorModal() {
               </div>
 
               {/* Advanced Settings Collapsible */}
-              <div className="rounded-2xl border border-[var(--glass-border)] bg-[var(--glass-card)]/40 overflow-hidden">
+              <div className="rounded-2xl border border-[var(--glass-border)] bg-[color-mix(in_srgb,var(--glass-card)_40%,transparent)] overflow-hidden">
                 <button
                   type="button"
                   onClick={() => setShowAdvanced((v) => !v)}
@@ -560,7 +560,7 @@ export default function ImageGeneratorModal() {
               {/* Action Area: Generate Button or Generating Shimmer */}
               <div className="pt-2">
                 {isGenerating ? (
-                  <div className="p-6 rounded-3xl border border-[var(--accent)]/40 bg-gradient-to-r from-[var(--accent-soft)] via-[var(--bg-2)] to-[var(--accent-soft)] flex flex-col items-center justify-center gap-3 text-center animate-pulse shadow-lg">
+                  <div className="p-6 rounded-3xl border border-[color-mix(in_srgb,var(--accent)_40%,transparent)] bg-gradient-to-r from-[var(--accent-soft)] via-[var(--bg-2)] to-[var(--accent-soft)] flex flex-col items-center justify-center gap-3 text-center animate-pulse shadow-lg">
                     <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-[var(--accent)] to-[#f09375] text-white flex items-center justify-center shadow-lg shadow-[var(--accent)]/30 animate-spin">
                       <FiRefreshCw size={22} />
                     </div>
@@ -572,7 +572,7 @@ export default function ImageGeneratorModal() {
                     <button
                       type="button"
                       onClick={cancelGeneration}
-                      className="px-4 py-1.5 rounded-xl text-xs text-[var(--text-muted)] hover:text-[var(--error)] border border-[var(--glass-border)] hover:border-[var(--error)]/30 transition-colors mt-1 cursor-pointer"
+                      className="px-4 py-1.5 rounded-xl text-xs text-[var(--text-muted)] hover:text-[var(--error)] border border-[var(--glass-border)] hover:border-[color-mix(in_srgb,var(--error)_30%,transparent)] transition-colors mt-1 cursor-pointer"
                     >
                       {t('cancelGenerate')}
                     </button>
@@ -698,7 +698,7 @@ export default function ImageGeneratorModal() {
               </div>
 
               {history.length === 0 ? (
-                <div className="py-20 flex flex-col items-center justify-center text-center space-y-3">
+                <div className="py-10 flex flex-col items-center justify-center text-center space-y-3">
                   <div className="w-16 h-16 rounded-3xl bg-[var(--bg-3)] text-[var(--text-muted)] flex items-center justify-center">
                     <FiImage size={28} />
                   </div>
