@@ -29,6 +29,12 @@ it.each([false, true])('recovers after a real SIGKILL (write committed=%s) witho
       worker.once('error', (error) => { clearTimeout(timer); reject(error); });
       worker.once('exit', () => { clearTimeout(timer); reject(new Error(`Worker exited before crash: ${output}`)); });
     });
+    if (committed) {
+      // The worker observes the HTTP record, which can reflect the in-memory
+      // mutation before the fixture's atomic file rename completes. Establish
+      // the durable crash boundary independently before killing the worker.
+      await expect.poll(async () => (await fixture.readData()).projects[0]!.name, { timeout: 5_000 }).toBe('Demo');
+    }
     const exit = once(worker, 'exit');
     expect(worker.kill('SIGKILL')).toBe(true);
     const [, signal] = await exit;
