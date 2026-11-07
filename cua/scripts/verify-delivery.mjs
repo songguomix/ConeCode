@@ -16,8 +16,10 @@ const report = {
 const checks = [
   ['typecheck', 'npm', ['run', 'typecheck']],
   ...(desktop && process.platform === 'darwin' ? [['native', 'npm', ['run', 'build:native']]] : []),
-  ['tests', 'npm', ['test', '--', '--reporter=default', '--reporter=json', `--outputFile=${join(outputDir, 'tests.json')}`]],
+  // API tests exercise the built React console, including its injected token.
+  // Build first so a clean checkout never silently serves the fallback page.
   ['build', 'npm', ['run', 'build']],
+  ['tests', 'npm', ['test', '--', '--reporter=default', '--reporter=json', `--outputFile=${join(outputDir, 'tests.json')}`]],
   ['evaluation', process.execPath, ['dist/cli.js', 'eval', '--json']],
   ['browser-demo', process.execPath, ['dist/cli.js', 'demo', 'browser']],
   ['console', 'npx', ['--no-install', 'tsx', 'scripts/verify-console.ts']],

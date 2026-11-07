@@ -189,7 +189,7 @@ describe('real browser observation and actions', () => {
       const observation = await h.driver.observe();
       const field = observation.targets.find((t) => t.role === 'textbox' && t.name === 'Project name')!;
       await h.driver.execute({ ...h.proposal(observation, { tool: 'browser.click', targetId: field.targetId, button: 'left', clickCount: 1 }), observation } as any);
-      await h.driver.execute({ ...h.proposal(observation, { tool: 'browser.press', key: 'Meta+A' }), observation } as any);
+      await h.driver.execute({ ...h.proposal(observation, { tool: 'browser.press', key: process.platform === 'darwin' ? 'Meta+A' : 'Control+A' }), observation } as any);
       await h.driver.execute({ ...h.proposal(observation, { tool: 'browser.type', text: '键盘Demo ✅' }), observation } as any);
       await h.driver.execute({ ...h.proposal(observation, { tool: 'browser.press', key: 'Enter' }), observation } as any);
       const deadline = Date.now() + 4_000;
