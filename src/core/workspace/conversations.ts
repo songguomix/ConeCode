@@ -54,6 +54,22 @@ export function folderDisplayName(folderKey: string): string {
   return folderKey.split('/').pop() || folderKey;
 }
 
+/** Open directories define the project list, including projects with no chats. */
+export function groupOpenProjectConversations(
+  conversations: Conversation[],
+  openRoots: string[],
+): [folderKey: string, items: Conversation[]][] {
+  const groups = new Map<string, Conversation[]>(
+    [...new Set(openRoots.filter(Boolean))].map((path) => [path, []]),
+  );
+  for (const conversation of conversations) {
+    if (isWorkConversation(conversation)) {
+      groups.get(conversation.rootPath!)?.push(conversation);
+    }
+  }
+  return [...groups.entries()];
+}
+
 /**
  * A conversation that has never been used: no messages, still carries the
  * default title, and — for RSI — no configured direction or run history.

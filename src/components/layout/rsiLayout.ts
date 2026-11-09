@@ -6,8 +6,8 @@ import type { ViewMode } from '../../stores/ui.store';
  *
  * RSI keeps its conversations separate from Work: the file explorer is hidden,
  * a compact folder hint replaces it, and every leftover pixel goes to the RSI
- * conversation list. Work keeps its bounded conversation area plus the file
- * tree, and Chat keeps its full-height conversation list.
+ * conversation list. Work groups chats under open projects, and Chat keeps
+ * its full-height conversation list.
  */
 export function rsiSidebarLayout({ agentMode, viewMode }: {
   agentMode: AgentMode;
@@ -17,9 +17,9 @@ export function rsiSidebarLayout({ agentMode, viewMode }: {
   return {
     isRsi,
     showFolderHint: isRsi,
-    showFileExplorer: !isRsi && viewMode === 'work',
+    showFileExplorer: false,
     /** Conversation list owns all the remaining sidebar height. */
-    fillConversations: isRsi || viewMode === 'chat',
+    fillConversations: true,
   };
 }
 

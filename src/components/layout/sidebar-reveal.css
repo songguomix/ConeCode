@@ -1,0 +1,121 @@
+/* The intact menu button exits left, then the sidebar follows it in. */
+.sidebar-reveal-slot {
+  position: relative;
+  z-index: 20;
+  flex: 0 0 auto;
+  width: var(--sidebar-reveal-width);
+  margin-right: calc(-1 * var(--sidebar-reveal-width));
+  min-height: 0;
+  pointer-events: none;
+  transition: margin-right 260ms cubic-bezier(.22, 1, .36, 1);
+}
+.sidebar-reveal-slot[data-open='true'] {
+  margin-right: 0;
+  transition: margin-right 420ms cubic-bezier(.22, 1, .36, 1) 180ms;
+}
+.sidebar-reveal-slot[data-overlay='true'] {
+  position: absolute;
+  inset: 0 auto 0 0;
+  z-index: 40;
+}
+.sidebar-reveal-panel {
+  position: absolute;
+  inset: 0 auto 0 0;
+  display: flex;
+  width: var(--sidebar-reveal-width);
+  transform: translateX(-103%);
+  visibility: hidden;
+  animation: sidebar-recede 260ms cubic-bezier(.4, 0, .2, 1) both;
+}
+.sidebar-reveal-slot[data-open='true'] .sidebar-reveal-panel {
+  pointer-events: auto;
+  visibility: visible;
+  transform: translateX(0);
+  animation: sidebar-emerge 420ms cubic-bezier(.22, 1, .36, 1) 180ms both;
+}
+.sidebar-reveal-slot[data-overlay='true'] .sidebar-reveal-panel {
+  box-shadow: 18px 0 50px -24px rgb(0 0 0 / .3);
+}
+.sidebar-reveal-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  background: rgb(0 0 0 / .25);
+  backdrop-filter: blur(4px);
+  animation: sidebar-scrim-in 420ms ease 180ms both;
+}
+.sidebar-reveal-scrim[data-open='false'] {
+  pointer-events: none;
+  animation: sidebar-scrim-out 260ms ease both;
+}
+.sidebar-trigger-anchor {
+  position: absolute;
+  left: 12px;
+  top: calc(50% - 20px);
+  width: 40px;
+  height: 40px;
+  z-index: 40;
+  pointer-events: none;
+}
+.sidebar-reveal-trigger {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  color: var(--accent);
+  cursor: pointer;
+  pointer-events: auto;
+  box-shadow: 0 8px 24px rgb(0 0 0 / .12);
+  transition: background-color 180ms, color 180ms, border-color 180ms;
+  animation: sidebar-trigger-return 240ms cubic-bezier(.16, 1, .3, 1) 140ms backwards;
+  -webkit-app-region: no-drag;
+}
+.sidebar-reveal-trigger:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+.sidebar-reveal-trigger:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+.sidebar-trigger-anchor[data-open='true'] .sidebar-reveal-trigger {
+  pointer-events: none;
+  animation: sidebar-trigger-exit 180ms cubic-bezier(.4, 0, 1, 1) forwards;
+}
+@keyframes sidebar-trigger-exit {
+  from { transform: translateX(0); opacity: 1; }
+  to { transform: translateX(-56px); opacity: 0; visibility: hidden; }
+}
+@keyframes sidebar-trigger-return {
+  from { transform: translateX(-56px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+@keyframes sidebar-emerge {
+  from { transform: translateX(-103%); }
+  to { transform: translateX(0); }
+}
+@keyframes sidebar-recede {
+  0% { visibility: visible; transform: translateX(0); }
+  99% { visibility: visible; }
+  100% { visibility: hidden; transform: translateX(-103%); }
+}
+@keyframes sidebar-scrim-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes sidebar-scrim-out { from { opacity: 1; } to { opacity: 0; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-reveal-slot,
+  .sidebar-reveal-slot[data-open='true'] { transition: none; }
+  .sidebar-reveal-panel,
+  .sidebar-reveal-slot[data-open='true'] .sidebar-reveal-panel,
+  .sidebar-reveal-scrim,
+  .sidebar-reveal-scrim[data-open='false'],
+  .sidebar-reveal-trigger,
+  .sidebar-trigger-anchor[data-open='true'] .sidebar-reveal-trigger {
+    animation-duration: 1ms;
+    animation-delay: 0ms;
+  }
+}

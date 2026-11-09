@@ -19,13 +19,13 @@ describe('rsiSidebarLayout', () => {
     expect(layout.fillConversations).toBe(true);
   });
 
-  it('keeps the Work file tree and bounded conversation list', () => {
+  it('gives Work projects the full list without a separate file tree', () => {
     const layout = rsiSidebarLayout({ agentMode: 'standard', viewMode: 'work' });
     expect(layout).toMatchObject({
       isRsi: false,
       showFolderHint: false,
-      showFileExplorer: true,
-      fillConversations: false,
+      showFileExplorer: false,
+      fillConversations: true,
     });
   });
 
