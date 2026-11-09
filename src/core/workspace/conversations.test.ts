@@ -2,12 +2,37 @@ import { describe, it, expect } from 'vitest';
 import {
   groupConversationsByFolder, folderDisplayName, isChatConversation, isWorkConversation,
   isBlankConversation, pickReusableConversation,
+  groupOpenProjectConversations,
 } from './conversations';
 import { defaultRsiState } from '../agents/rsiConversation';
 import type { Conversation } from '../../types';
 
 const conv = (id: string, rootPath: string | null, updatedAt: number, isChatMode?: boolean): Conversation => ({
   id, title: id, providerId: 'p', modelId: 'm', rootPath, createdAt: updatedAt, updatedAt, isChatMode,
+});
+
+describe('groupOpenProjectConversations', () => {
+  it('keeps empty open folders and puts each chat under its own project', () => {
+    const a = conv('a', '/app', 3);
+    const b = conv('b', '/api', 2);
+    const c = conv('c', '/app', 1);
+    expect(groupOpenProjectConversations([a, b, c], ['/app', '/empty', '/api', '/app']))
+      .toEqual([['/app', [a, c]], ['/empty', []], ['/api', [b]]]);
+  });
+
+  it('keeps closed projects after the open ones so no chat is orphaned', () => {
+    const work = conv('work', '/app', 1);
+    const older = conv('older', '/closed', 2);
+    const newer = conv('newer', '/gone', 3);
+    const list = [work, older, newer, conv('chat', null, 4),
+      conv('chat-only', '/app', 5, true), { ...conv('rsi', '/app', 6), agentMode: 'rsi' as const }];
+    expect(groupOpenProjectConversations(list, ['/app'])).toEqual([
+      ['/app', [work]], ['/gone', [newer]], ['/closed', [older]],
+    ]);
+    expect(groupOpenProjectConversations(list, [])).toEqual([
+      ['/gone', [newer]], ['/closed', [older]], ['/app', [work]],
+    ]);
+  });
 });
 
 describe('groupConversationsByFolder', () => {

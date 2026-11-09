@@ -1,10 +1,10 @@
 import GithubPushDialog from '../plugins/GithubPushDialog';
 import GithubReleaseDialog from '../plugins/GithubReleaseDialog';
 import { useRef, useState, useEffect } from 'react';
-import { FiMenu } from 'react-icons/fi';
 import { useUIStore, useWorkspaceStore, useLanguageStore, useChatStore } from '../../stores';
 import { useScreenshotStore } from '../../stores/screenshot.store';
 import Sidebar from './Sidebar';
+import SidebarReveal from './SidebarReveal';
 import ChatView from '../chat/ChatView';
 import RsiView from '../rsi/RsiView';
 import EditorPanel from '../editor/EditorPanel';
@@ -21,7 +21,7 @@ import ScreenshotOverlay from '../screenshot/ScreenshotOverlay';
 import ImageGeneratorModal from '../chat/ImageGeneratorModal';
 import DshMarketPanel from '../dsh-market/DshMarketPanel';
 import ResizeHandle from './ResizeHandle';
-import { panelLayout } from './panelLayout';
+import { panelLayout, SIDEBAR_OVERLAY_WIDTH } from './panelLayout';
 import { workbenchVisible } from './rsiLayout';
 
 export default function AppShell() {
@@ -115,22 +115,12 @@ export default function AppShell() {
       <div className="ambient-glow-1" aria-hidden="true" />
       <div className="ambient-glow-2" aria-hidden="true" />
 
-      {sidebarOpen && (
-        <>
-          {layout.sidebarOverlay && <button aria-label={t('toggleSidebar')} onClick={toggleSidebar} className="absolute inset-0 z-30 bg-black/25 backdrop-blur-sm" />}
-          <div className={`${layout.sidebarOverlay ? 'absolute inset-y-0 left-0 z-40 shadow-2xl' : 'relative z-20'} shrink-0 flex min-h-0`} style={{ width: layout.sidebar }}>
-            <Sidebar />
-            <ResizeHandle label={t('dragResizeWidth')} value={layout.sidebar} min={200} max={Math.min(480, Math.max(200, viewport.width - 48))} reset={260} onChange={setSidebarWidthPx}
-              className="absolute inset-y-0 -right-[3px] w-[7px] cursor-col-resize z-30 flex justify-center" />
-          </div>
-        </>
-      )}
-      {!sidebarOpen && (
-        <button onClick={toggleSidebar} title={t('toggleSidebar')} aria-label={t('toggleSidebar')}
-          className="absolute left-3 top-1/2 -translate-y-1/2 z-40 w-10 h-10 rounded-full glass-dock flex items-center justify-center text-[var(--accent)] hover:bg-[var(--accent)] hover:text-white hover:border-[var(--accent)] hover:scale-105 active:scale-95 transition-all shadow-[0_8px_24px_rgba(0,0,0,0.12)]">
-          <FiMenu size={17} strokeWidth={2.2} />
-        </button>
-      )}
+      <SidebarReveal open={sidebarOpen} width={layout.sidebar} overlay={viewport.width < SIDEBAR_OVERLAY_WIDTH}
+        label={t('toggleSidebar')} onToggle={toggleSidebar}>
+        <Sidebar />
+        <ResizeHandle label={t('dragResizeWidth')} value={layout.sidebar} min={200} max={Math.min(480, Math.max(200, viewport.width - 48))} reset={260} onChange={setSidebarWidthPx}
+          className="absolute inset-y-0 -right-[3px] w-[7px] cursor-col-resize z-30 flex justify-center" />
+      </SidebarReveal>
       <div className="flex-1 flex flex-col min-w-0 min-h-0">
         <div className="flex-1 flex flex-col min-h-0">
           <div className="relative flex-1 flex min-h-0 min-w-0">

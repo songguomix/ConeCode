@@ -1,9 +1,12 @@
+/** Below this width the sidebar floats above the workspace instead of docking. */
+export const SIDEBAR_OVERLAY_WIDTH = 760;
+
 /** Fit the workbench without overwriting the user's saved panel sizes. */
 export function panelLayout({ width, height, sidebarOpen, sidebarWidth, previewOpen, previewWidth, editorOpen, terminalHeight }: {
   width: number; height: number; sidebarOpen: boolean; sidebarWidth: number;
   previewOpen: boolean; previewWidth: number; editorOpen: boolean; terminalHeight: number;
 }) {
-  const sidebarOverlay = sidebarOpen && width < 760;
+  const sidebarOverlay = sidebarOpen && width < SIDEBAR_OVERLAY_WIDTH;
   const sidebar = Math.min(sidebarWidth, Math.max(200, width - 48));
   const workspace = Math.max(0, width - (sidebarOpen && !sidebarOverlay ? sidebar : 0));
   const previewOverlay = previewOpen && workspace < (editorOpen ? 960 : 680);

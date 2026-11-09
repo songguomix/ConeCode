@@ -55,6 +55,39 @@ export function folderDisplayName(folderKey: string): string {
 }
 
 /**
+ * Open directories define the project list, including projects with no chats.
+ * Closed projects keep their chats in the list (after the open ones, newest
+ * first) so closing a folder never orphans a conversation: closing is
+ * memory-only, and opening one of its chats reopens the folder.
+ */
+export function groupOpenProjectConversations(
+  conversations: Conversation[],
+  openRoots: string[],
+): [folderKey: string, items: Conversation[]][] {
+  const groups = new Map<string, Conversation[]>(
+    [...new Set(openRoots.filter(Boolean))].map((path) => [path, []]),
+  );
+  const closed = new Map<string, Conversation[]>();
+  for (const conversation of conversations) {
+    if (!isWorkConversation(conversation)) continue;
+    const key = conversation.rootPath!;
+    const open = groups.get(key);
+    if (open) {
+      open.push(conversation);
+      continue;
+    }
+    const list = closed.get(key);
+    if (list) list.push(conversation);
+    else closed.set(key, [conversation]);
+  }
+  const latest = (items: Conversation[]) => items.reduce((m, c) => Math.max(m, c.updatedAt), 0);
+  return [
+    ...groups.entries(),
+    ...Array.from(closed.entries()).sort((a, b) => latest(b[1]) - latest(a[1])),
+  ];
+}
+
+/**
  * A conversation that has never been used: no messages, still carries the
  * default title, and — for RSI — no configured direction or run history.
  * Renaming or configuring an empty conversation marks it as intentional work,
