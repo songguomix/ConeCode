@@ -124,6 +124,12 @@ export interface SendMessageOptions {
   rsiExecution?: boolean;
   /** Internal continuation: preserve evidence and spend across user interaction. */
   rsiResume?: boolean;
+  /**
+   * Programmatic delivery (queued turn replay, one-click continue): the
+   * composer's attachments belong to the user's next manual send, so they must
+   * not ride along with—or be consumed by—this turn.
+   */
+  keepComposerImages?: boolean;
 }
 const rsiSpendBaselines = new Map<string, number>();
 interface RsiExecutionSession {
@@ -839,10 +845,14 @@ async function deliverToConversation(convId: string, content: string, providerId
   // Attached images belong to THIS turn: they ride the user message (rendered
   // in the transcript, replayed to the model) and leave the composer on send —
   // they must not linger in the box or re-upload on every later message.
+  // Queued/continue deliveries opt out: an image sitting in the box when the
+  // queue flushes is the user's next message, never this replay's attachment.
   const wsState = useWorkspaceStore.getState();
-  const attachedImages = wsState.contextFiles
-    .filter((f) => f.isImage && f.dataUrl)
-    .map((f) => f.dataUrl as string);
+  const attachedImages = options.keepComposerImages
+    ? []
+    : wsState.contextFiles
+      .filter((f) => f.isImage && f.dataUrl)
+      .map((f) => f.dataUrl as string);
   if (attachedImages.length) {
     useWorkspaceStore.setState((s) => ({
       contextFiles: s.contextFiles.filter((f) => !(f.isImage && f.dataUrl)),
@@ -4435,7 +4445,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           [conversationId]: (s.queuedMessages[conversationId] || []).slice(1),
         },
       }));
-      await deliverToConversation(conversationId, head.content, head.providerId, head.modelId);
+      await deliverToConversation(conversationId, head.content, head.providerId, head.modelId, { keepComposerImages: true });
     } finally {
       flushingQueues.delete(conversationId);
     }
@@ -4460,11 +4470,18 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     };
     await window.electronAPI.message.create(toolMsg);
 
-    // Only continue automatically when this conversation is the active one;
-    // otherwise just persist the outcome for when the user returns to it.
-    if (get().activeConversationId !== conversationId) return;
+    // The live array is a view, not the run's state: only touch it when the
+    // user is actually looking at this conversation.
+    if (get().activeConversationId === conversationId) {
+      set((s) => ({ messages: [...s.messages, toolMsg] }));
+    }
 
-    set((s) => ({ messages: [...s.messages, toolMsg] }));
+    // Continue the turn for `conversationId` even when another chat (or a
+    // freshly created one) is on screen. Returning early on that condition
+    // used to abandon the approval permanently: the outcome was persisted but
+    // nothing ever resumed the loop, so switching conversations mid-approval
+    // left the task stopped for good. Background runs are supported end to
+    // end, so the only thing the active view decides is where tokens render.
 
     // A stream is already in flight for THIS conversation (e.g. the user
     // approved a command while the loop kept going on info actions). The
@@ -4591,7 +4608,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       modelId = sel.id;
     }
     set({ error: null });
-    await deliverToConversation(convId, useLanguageStore.getState().t('continuePrompt'), providerId, modelId, { rsiExecution: resumeRsiExecution(convId), rsiResume: true });
+    await deliverToConversation(convId, useLanguageStore.getState().t('continuePrompt'), providerId, modelId, { rsiExecution: resumeRsiExecution(convId), rsiResume: true, keepComposerImages: true });
   },
 
   // Drop the tail of the transcript, in storage as well as in memory, so a

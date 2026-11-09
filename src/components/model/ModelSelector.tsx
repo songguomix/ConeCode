@@ -40,7 +40,7 @@ export default function ModelSelector() {
   const [tooltipKey, setTooltipKey] = useState<{ providerId: string; modelId: string } | null>(null);
   const [editingLimits, setEditingLimits] = useState<{ providerId: string; modelId: string } | null>(null);
   const [refreshingLimits, setRefreshingLimits] = useState(false);
-  const [limitDraft, setLimitDraft] = useState<{ context: string; maxOutput: string }>({ context: '', maxOutput: '' });
+  const [limitDraft, setLimitDraft] = useState<{ context: string }>({ context: '' });
   const [dropDirection, setDropDirection] = useState<'up' | 'down'>('up');
   const searchRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -193,7 +193,7 @@ export default function ModelSelector() {
       return;
     }
     setEditingLimits({ providerId: model.providerId, modelId: model.id });
-    setLimitDraft({ context: String(model.contextWindow ?? ''), maxOutput: String(model.maxOutputTokens ?? '') });
+    setLimitDraft({ context: String(model.contextWindow ?? '') });
   };
 
   useEffect(() => {
@@ -222,7 +222,7 @@ export default function ModelSelector() {
     if (!editingLimits) return;
     limitRequestRef.current += 1;
     setRefreshingLimits(false);
-    setModelLimits(editingLimits.providerId, editingLimits.modelId, { contextWindow: null, maxOutputTokens: null });
+    setModelLimits(editingLimits.providerId, editingLimits.modelId, { contextWindow: null });
     setEditingLimits(null);
   };
 
@@ -241,7 +241,6 @@ export default function ModelSelector() {
       // when Save is clicked, and an old request cannot edit a different model.
       setLimitDraft({
         context: String(apiModel.autoContextWindow ?? apiModel.contextWindow ?? ''),
-        maxOutput: String(apiModel.autoMaxOutputTokens ?? apiModel.maxOutputTokens ?? ''),
       });
     } finally {
       if (request === limitRequestRef.current) setRefreshingLimits(false);
@@ -406,24 +405,25 @@ export default function ModelSelector() {
                               <span className="text-[var(--text-muted)]">{t('contextWindow')}</span>
                               <input type="text" value={limitDraft.context} autoFocus
                                 disabled={refreshingLimits}
-                                aria-invalid={!!limitDraft.context.trim() && !parseModelLimitDraft({ context: limitDraft.context, maxOutput: '' })}
+                                aria-invalid={!!limitDraft.context.trim() && !parseModelLimitDraft(limitDraft)}
                                 onChange={(e) => setLimitDraft((d) => ({ ...d, context: e.target.value }))}
                                 onKeyDown={handleLimitKey}
                                 placeholder="128k / 20万 / 200000"
                                 className="w-full bg-[var(--bg-0)] border border-[var(--border)] rounded-lg px-2 py-1 outline-none focus:border-[var(--accent)]" />
                               <LimitInputHint raw={limitDraft.context} invalidLabel={t('limitInputInvalid')} />
                             </label>
-                            <label className="flex flex-col gap-0.5 flex-1 min-w-0">
+                            {/* Max output is read-only: it always mirrors the
+                                provider API, never a hand-typed cap. */}
+                            <div className="flex flex-col gap-0.5 flex-1 min-w-0">
                               <span className="text-[var(--text-muted)]">{t('maxOutput')}</span>
-                              <input type="text" value={limitDraft.maxOutput}
-                                disabled={refreshingLimits}
-                                aria-invalid={!!limitDraft.maxOutput.trim() && !parseModelLimitDraft({ context: '', maxOutput: limitDraft.maxOutput })}
-                                onChange={(e) => setLimitDraft((d) => ({ ...d, maxOutput: e.target.value }))}
-                                onKeyDown={handleLimitKey}
-                                placeholder="8k / 4096"
-                                className="w-full bg-[var(--bg-0)] border border-[var(--border)] rounded-lg px-2 py-1 outline-none focus:border-[var(--accent)]" />
-                              <LimitInputHint raw={limitDraft.maxOutput} invalidLabel={t('limitInputInvalid')} />
-                            </label>
+                              <div
+                                aria-readonly="true"
+                                className="w-full bg-[var(--bg-1)] border border-[var(--border)] rounded-lg px-2 py-1 text-[var(--text-secondary)] tabular-nums"
+                              >
+                                {formatLimitTokens(model.autoMaxOutputTokens ?? model.maxOutputTokens)}
+                              </div>
+                              <span className="text-[10px] leading-tight text-[var(--text-muted)]">{t('maxOutputFromApi')}</span>
+                            </div>
                           </div>
                           {/* Common context windows, tap-to-fill — most users
                               never need to type a number at all. */}

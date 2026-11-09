@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { FiDownload, FiCopy, FiMaximize2, FiX, FiCheck } from 'react-icons/fi';
 import SparklesIcon from '../common/SparklesIcon';
 import { isSafeImageUrl } from '../../core/markdown/markdown';
@@ -107,8 +108,10 @@ export default function ChatImage({ src, alt = '' }: { src: string; alt?: string
         </div>
       </div>
 
-      {/* Lightbox Modal */}
-      {lightboxOpen && (
+      {/* Lightbox Modal — portalled to <body>. Message rows animate with a
+          lingering transform (and blur), which would otherwise become the
+          containing block for `fixed` and clip/offset the zoomed image. */}
+      {lightboxOpen && typeof document !== 'undefined' && createPortal(
         <div
           onClick={() => setLightboxOpen(false)}
           className="fixed inset-0 z-60 bg-black/90 backdrop-blur-2xl flex items-center justify-center p-4 anim-scrim cursor-zoom-out"
@@ -142,7 +145,8 @@ export default function ChatImage({ src, alt = '' }: { src: string; alt?: string
             onClick={(e) => e.stopPropagation()}
             className="max-h-[92vh] max-w-[92vw] object-contain rounded-2xl shadow-2xl cursor-default"
           />
-        </div>
+        </div>,
+        document.body,
       )}
     </>
   );

@@ -70,13 +70,16 @@ function applyReasoningOverrides(models: AIModel[], overrides: string[]): AIMode
   return models.map((m) => (hasReasoningOverride(overrides, m) ? { ...m, userEnabledReasoning: true } : m));
 }
 
-// Manual per-model context-window / max-output overrides. The provider is part
-// of the key because several OpenAI-compatible providers can expose the same
-// model id with different limits.
+// Manual per-model context-window overrides. The provider is part of the key
+// because several OpenAI-compatible providers can expose the same model id with
+// different limits. Max output is intentionally absent: it always comes from
+// the provider API, and `maxOutputTokens` survives only to read and drop
+// legacy values saved by older builds.
 const LIMIT_OVERRIDES_KEY = 'modelLimitOverrides';
 
 export interface LimitOverride {
   contextWindow?: number;
+  /** Legacy only — never applied; `setModelLimits` deletes it on the next save. */
   maxOutputTokens?: number;
 }
 
@@ -113,7 +116,9 @@ function applyLimitOverrides(models: AIModel[], overrides: Record<string, LimitO
       autoContextWindow,
       autoMaxOutputTokens,
       contextWindow: o?.contextWindow ?? autoContextWindow,
-      maxOutputTokens: o?.maxOutputTokens ?? autoMaxOutputTokens,
+      // Max output is API-owned: the provider's declared value is always the
+      // effective one, so a legacy hand-typed cap can no longer shadow it.
+      maxOutputTokens: autoMaxOutputTokens,
     };
   });
 }
@@ -302,23 +307,24 @@ export const useModelStore = create<ModelStore>((set, get) => ({
     set({ models: newModels, reasoningOverrides: nextOverrides });
   },
 
-  // Set or clear a manual context-window / max-output override for a model. Pass
-  // a number to set, null to reset that field back to the auto value, or omit a
-  // field to leave it unchanged. Persisted and re-applied to the in-memory list.
+  // Set or clear the manual context-window override for a model. Pass a number
+  // to set, null to reset back to the auto value, or omit it to leave it
+  // unchanged. Max output is API-owned, so any legacy hand-typed cap is dropped
+  // here instead of being revived on save. Persisted and re-applied in memory.
   setModelLimits: (providerId, modelId, limits) => {
     set((s) => {
       const key = modelLimitKey(providerId, modelId);
       const next: LimitOverride = { ...(s.limitOverrides[key] ?? s.limitOverrides[modelId] ?? {}) };
+      // Max output is never a user override, even if an old build saved one.
+      delete next.maxOutputTokens;
       if (limits.contextWindow === null) delete next.contextWindow;
       else if (typeof limits.contextWindow === 'number') next.contextWindow = limits.contextWindow;
-      if (limits.maxOutputTokens === null) delete next.maxOutputTokens;
-      else if (typeof limits.maxOutputTokens === 'number') next.maxOutputTokens = limits.maxOutputTokens;
 
       const limitOverrides = { ...s.limitOverrides };
       // Remove the legacy global key during migration so it cannot leak to a
       // same-named model belonging to another provider.
       delete limitOverrides[modelId];
-      if (next.contextWindow == null && next.maxOutputTokens == null) delete limitOverrides[key];
+      if (next.contextWindow == null) delete limitOverrides[key];
       else limitOverrides[key] = next;
       saveLimitOverrides(limitOverrides);
 

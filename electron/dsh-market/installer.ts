@@ -85,10 +85,39 @@ export class InstallCancelledError extends Error {
   }
 }
 
+/**
+ * Where npm is allowed to cache downloads.
+ *
+ * npm otherwise uses the host cache (`~/.npm/_cacache`). On machines where that directory is
+ * root-owned or read-only — a well known state after an earlier `sudo npm` — every install dies
+ * with `npm error code EPERM` and the user only sees "Could not install the pinned DSH runtime".
+ * Keeping the cache inside ConeCode's own data directory makes plugin installs independent of
+ * the host cache's permissions. `CONECODE_NPM_CACHE` is an explicit escape hatch for operators.
+ */
+export function npmCacheDir(state: Pick<MarketStateStore, 'cacheDir'>): string {
+  const override = process.env.CONECODE_NPM_CACHE?.trim();
+  return override ? path.resolve(override) : path.join(state.cacheDir(), 'npm');
+}
+
+/** Environment for a child npm process; `npm_config_cache` points at our own cache when set. */
+export function npmEnv(cacheDir?: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    npm_config_update_notifier: 'false',
+    npm_config_fund: 'false',
+    npm_config_audit: 'false',
+    npm_config_loglevel: 'error',
+  };
+  if (cacheDir) env.npm_config_cache = cacheDir;
+  return env;
+}
+
 export class NpmRunner {
   private cachedPath: string | null = null;
   private cachedVersion: string | null = null;
   private children = new Set<ChildProcess>();
+
+  constructor(private readonly cacheDir?: string) {}
 
   async locate(): Promise<{ path: string; version: string }> {
     if (this.cachedPath && this.cachedVersion) return { path: this.cachedPath, version: this.cachedVersion };
@@ -114,17 +143,18 @@ export class NpmRunner {
   } = {}): Promise<{ code: number; stdout: string; stderr: string }> {
     const { path: npm } = await this.locate();
     if (options.signal?.aborted) throw new InstallCancelledError();
+    // npm cannot create a cache it has no permission for; fall back to its default in that case
+    // instead of failing the whole install on our own bookkeeping.
+    let cacheDir = this.cacheDir;
+    if (cacheDir) {
+      try { fs.mkdirSync(cacheDir, { recursive: true }); }
+      catch { cacheDir = undefined; }
+    }
     const child = spawn(npm, args, {
       cwd,
       shell: process.platform === 'win32',
       windowsHide: true,
-      env: {
-        ...process.env,
-        npm_config_update_notifier: 'false',
-        npm_config_fund: 'false',
-        npm_config_audit: 'false',
-        npm_config_loglevel: 'error',
-      },
+      env: npmEnv(cacheDir),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     this.children.add(child);
@@ -219,10 +249,12 @@ export function readNativeManifest(packageDir: string): NativeManifest | null {
 }
 
 export class PackageInstaller {
-  private runner = new NpmRunner();
+  private runner: NpmRunner;
   private currentProfile = 'default';
 
-  constructor(private state: MarketStateStore) {}
+  constructor(private state: MarketStateStore) {
+    this.runner = new NpmRunner(npmCacheDir(state));
+  }
 
   async npmInfo(): Promise<{ path: string; version: string } | null> {
     try {

@@ -22,16 +22,24 @@ const LEVEL_META: Record<ReasoningEffort, { shortKey: string; descKey: string; I
   high: { shortKey: 'effortDeep', descKey: 'effortDeep', Icon: FiLayers },
 };
 
-// Fixed pixel geometry so drag math stays exact without measuring the DOM.
+// Fixed pixel geometry so drag math stays exact. The knob is deliberately
+// larger than the track: its circle then fully swallows the fill's end cap, so
+// no colour leaks out around the handle — not at the far left on Auto, not at
+// the far right on the deepest stop.
 const TRACK_W = 216;
-const THUMB = 16;
+const TRACK_H = 32;
+const THUMB = 36;
 const SPAN = TRACK_W - THUMB;
 
 /**
  * Codex-style thinking intensity: a collapsed pill that opens a small popup
  * with a draggable slider. Stops follow the selected model — levels it doesn't
  * declare are not shown, while Auto stays (it maps onto the declared levels at
- * send time). The deepest stop is an hourglass stopper with 流沙 running.
+ * send time). The track is one thick pill filled up to the knob, with a dot per
+ * stop; the deepest stop turns it into a purple gradient with 流沙 drifting
+ * through it. The level list is whatever the provider API reports for the
+ * model — a level it doesn't declare is never shown, and a stored value that
+ * no longer exists is corrected to the nearest declared one.
  */
 export default function ThinkingSlider({ value, onChange, levels, compact = false }: ThinkingSliderProps) {
   const { t } = useLanguageStore();
@@ -61,8 +69,15 @@ export default function ThinkingSlider({ value, onChange, levels, compact = fals
     if (!open) return;
     // The model menu opens upward too — don't stack two popups.
     useUIStore.getState().closeModelSelector();
-    thumbRef.current?.focus({ preventScroll: true });
   }, [open]);
+
+  // The model's declared levels come from provider metadata; a size the model
+  // no longer declares must not stay stored, or the next send would ask for a
+  // level the API doesn't know. Correct it to the nearest declared level.
+  useEffect(() => {
+    if (value === 'auto' || stops.includes(value)) return;
+    onChange(clampEffort(value, stops));
+  }, [value, stops, onChange]);
 
   // A level picked under a previous model may be missing here; show the same
   // nearest level the send path will clamp to, so the UI never lies.
@@ -162,54 +177,48 @@ export default function ThinkingSlider({ value, onChange, levels, compact = fals
           <div className="w-[216px] mx-auto">
             <div
               ref={trackRef}
-              className="relative h-6 cursor-grab active:cursor-grabbing touch-none select-none effort-stagger-1"
+              className="relative h-8 cursor-grab active:cursor-grabbing touch-none select-none effort-stagger-1"
               onPointerDown={handlePointerDown}
               onPointerMove={handlePointerMove}
               onPointerUp={handlePointerUp}
               onPointerCancel={handlePointerUp}
             >
-              {/* rail + gradient fill */}
-              <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1.5 rounded-full bg-[var(--bg-4)] shadow-[inset_0_1px_2px_rgba(0,0,0,0.18)]" />
+              {/* Full-height pill rail: the whole bar is the control, like the
+                  reference card — thick track, no hairline groove. */}
+              <div className="absolute inset-0 rounded-full bg-[var(--bg-3)]" />
+              {/* Fill ends one half-knob past the knob's CENTRE, so its rounded
+                  cap is a true 16px semicircle tucked under the 18px knob.
+                  Ending exactly at the centre made the browser clamp the cap
+                  radius (a 18px-wide box cannot hold a 16px radius), and that
+                  squashed ellipse poked out above/below the knob — the stray
+                  colour left of the handle on Auto. */}
               <div
                 aria-hidden
-                className={`absolute left-0 top-1/2 -translate-y-1/2 h-1.5 rounded-full effort-fill ${dragging ? 'dragging' : ''}`}
+                className={`absolute left-0 top-0 h-full rounded-full overflow-hidden effort-fill ${dragging ? 'dragging' : ''}`}
                 style={{
-                  width: center(index),
-                  backgroundImage: 'linear-gradient(90deg, var(--accent-soft), var(--accent))',
-                  boxShadow: '0 0 10px -3px var(--accent)',
+                  width: center(index) + TRACK_H / 2,
+                  backgroundImage: atDeepEnd
+                    ? 'linear-gradient(90deg, #3b2ce6 0%, #6448ff 52%, #a78bfa 100%)'
+                    : 'none',
+                  backgroundColor: atDeepEnd ? 'transparent' : 'var(--accent)',
                 }}
-              />
-              {/* tick dots — tint warmer as they approach the deepest stop */}
-              {stops.map((stop, i) => i < n - 1 ? (
+              >
+                {/* Deepest stop: 流沙 — grains drifting sideways along the fill. */}
+                {atDeepEnd && <span aria-hidden className="effort-sand" />}
+              </div>
+              {/* Stop dots: pale on the filled part, faint grey on the rail. */}
+              {stops.map((stop, i) => (
                 <span
                   key={stop}
                   aria-hidden
-                  className="absolute top-1/2 -translate-y-1/2 w-1 h-1 rounded-full bg-[var(--border)]"
+                  className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 w-[5px] h-[5px] rounded-full pointer-events-none"
                   style={{
-                    left: center(i) - 2,
-                    backgroundColor: `color-mix(in srgb, var(--accent) ${Math.round((i / span) * 70)}%, var(--border))`,
+                    left: center(i),
+                    backgroundColor: i <= index ? 'rgba(255,255,255,0.72)' : 'color-mix(in srgb, var(--text-muted) 28%, transparent)',
                   }}
                 />
-              ) : null)}
-              {/* deepest stop: an hourglass stopper with 流沙 running, lit when reached */}
-              {n > 1 && (
-                <span
-                  aria-hidden
-                  className={`absolute w-3 h-5 rounded-[4px] border overflow-hidden transition-[border-color,box-shadow] duration-200 ${
-                    atDeepEnd
-                      ? 'border-[color-mix(in_srgb,var(--accent)_70%,transparent)] shadow-[0_0_10px_-2px_var(--accent)] effort-flip'
-                      : 'border-[var(--border)]'
-                  }`}
-                  style={{
-                    left: center(n - 1) - 6,
-                    top: 'calc(50% - 10px)',
-                    backgroundImage: 'linear-gradient(180deg, var(--bg-4), var(--bg-2))',
-                  }}
-                >
-                  <span className={`sand-fall ${atDeepEnd ? 'sand-fall-hot' : ''}`} />
-                </span>
-              )}
-              {/* knob */}
+              ))}
+              {/* Plain white knob — the accent lives in the track, not the thumb. */}
               <div
                 ref={thumbRef}
                 role="slider"
@@ -221,11 +230,9 @@ export default function ThinkingSlider({ value, onChange, levels, compact = fals
                 aria-valuenow={index}
                 aria-valuetext={t(Meta.shortKey)}
                 onKeyDown={handleThumbKey}
-                className={`absolute w-4 h-4 rounded-full bg-[var(--bg-0)] border-2 border-[var(--accent)] shadow-md ring-[3px] ring-[var(--accent-soft)] focus:outline-none focus:ring-[5px] focus:ring-[var(--accent)] effort-thumb ${dragging ? 'dragging' : ''}`}
-                style={{ left: center(index) - THUMB / 2, top: 'calc(50% - 8px)' }}
-              >
-                <span className="absolute inset-0 m-auto w-1 h-1 rounded-full bg-[var(--accent)]" />
-              </div>
+                className={`absolute rounded-full bg-white ring-1 ring-black/5 shadow-[0_2px_6px_rgba(15,23,42,0.25)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[color-mix(in_srgb,var(--accent)_60%,transparent)] effort-thumb ${dragging ? 'dragging' : ''}`}
+                style={{ left: center(index) - THUMB / 2, top: (TRACK_H - THUMB) / 2, width: THUMB, height: THUMB }}
+              />
             </div>
 
             {/* stop labels — active one becomes a soft pill that pops into place */}

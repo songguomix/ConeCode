@@ -331,13 +331,6 @@ input.search-input:focus-visible { outline: none; box-shadow: none; }
   80%      { transform: translate3d(2px, 0, 0); }
 }
 
-/* 流沙 — grains drift down through three offset layers (tile heights divide
-   the travel distance, so the loop is seamless; sizes differ for parallax). */
-@keyframes sand-fall {
-  from { background-position: 0 -26px, 4px -20px, 7px -32px; }
-  to   { background-position: 0 26px, 4px 20px, 7px 32px; }
-}
-
 /* Dialog / sheet panel: spring entrance. */
 .anim-modal {
   animation: anim-modal-in var(--dur-enter) var(--ease-spring) both;
@@ -365,7 +358,10 @@ input.search-input:focus-visible { outline: none; box-shadow: none; }
 
 /* Chat message mount (new bubble / conversation open). */
 .anim-message {
-  animation: anim-message-in var(--dur-enter) var(--ease-emphasized) both;
+  /* Fill backwards, not both: a lingering identity `transform` would make every
+     message row a containing block, trapping position:fixed descendants (the
+     image lightbox) inside the bubble and clipping them at the scroller. */
+  animation: anim-message-in var(--dur-enter) var(--ease-emphasized) backwards;
 }
 
 /* Pinned cards (command approval, question prompt): stronger slide-up entrance. */
@@ -404,30 +400,6 @@ input.search-input:focus-visible { outline: none; box-shadow: none; }
   animation: anim-check-pop var(--dur-slow) var(--ease-spring) both;
 }
 
-/* Flowing sand on the deepest thinking stop — hourglass grains falling.
-   Color follows currentColor so the active stop glows in the accent hue. */
-.sand-fall {
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  pointer-events: none;
-  color: var(--text-muted);
-  opacity: 0.4;
-  background-image:
-    radial-gradient(circle, currentColor 0.9px, transparent 1.2px),
-    radial-gradient(circle, currentColor 0.6px, transparent 0.9px),
-    radial-gradient(circle, currentColor 0.7px, transparent 1px);
-  background-size: 14px 26px, 9px 20px, 11px 32px;
-  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 30%, #000 72%, transparent);
-  mask-image: linear-gradient(to bottom, transparent, #000 30%, #000 72%, transparent);
-  animation: sand-fall 2.6s linear infinite;
-}
-.sand-fall-hot {
-  color: var(--accent);
-  opacity: 0.85;
-  animation-duration: 1.5s;
-}
-
 /* ── Thinking slider ─────────────────────────────────────────────────── */
 
 /* Popup: springy rise from its bottom-right anchor. */
@@ -445,27 +417,29 @@ input.search-input:focus-visible { outline: none; box-shadow: none; }
 .anim-effort-pop .effort-stagger-1 { animation: anim-fade-up 320ms var(--ease-emphasized) 70ms both; }
 .anim-effort-pop .effort-stagger-2 { animation: anim-fade-up 320ms var(--ease-emphasized) 140ms both; }
 
-/* Fill: a soft highlight gliding along the fill, like light on wet paint. */
-@keyframes fill-sweep {
-  from { background-position: 200% 0; }
-  to   { background-position: -200% 0; }
+/* Deepest stop: 流沙 — white grains drifting sideways along the gradient.
+   Three offset layers whose tile widths divide the travel distance keep the
+   horizontal loop seamless; the mask fades grains out at the pill's caps. */
+@keyframes effort-sand {
+  from { background-position: 0 5px, 0 12px, 0 2px; }
+  to   { background-position: 22px 5px, 18px 12px, 32px 2px; }
 }
-.effort-fill::after {
-  content: '';
+.effort-sand {
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  background-image: linear-gradient(105deg, transparent 35%, rgba(255, 255, 255, 0.4) 50%, transparent 65%);
-  background-size: 200% 100%;
-  animation: fill-sweep 2.6s linear infinite;
+  pointer-events: none;
+  color: #fff;
+  opacity: 0.55;
+  background-image:
+    radial-gradient(circle, currentColor 0.9px, transparent 1.2px),
+    radial-gradient(circle, currentColor 0.6px, transparent 0.9px),
+    radial-gradient(circle, currentColor 0.7px, transparent 1px);
+  background-size: 22px 12px, 18px 9px, 32px 16px;
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 14%, #000 90%, transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0, #000 14%, #000 90%, transparent 100%);
+  animation: effort-sand 2.6s linear infinite;
 }
-
-/* Hourglass stopper: a full tip-over turn when the deepest stop is reached. */
-@keyframes effort-flip {
-  from { transform: rotate(0deg); }
-  to   { transform: rotate(360deg); }
-}
-.effort-flip { animation: effort-flip 700ms var(--ease-spring); }
 
 /* Thumb and fill glide between stops; the knob swells while held — left
    snaps to the cursor, transform keeps its spring. */
@@ -520,11 +494,10 @@ input.search-input:focus-visible { outline: none; box-shadow: none; }
   .anim-shimmer,
   .anim-pop,
   .anim-shake,
-  .sand-fall,
   .anim-effort-pop,
   .effort-stagger-1,
   .effort-stagger-2,
-  .effort-flip,
+  .effort-sand,
   .animate-pulse,
   .animate-spin,
   .animate-bounce {
@@ -533,7 +506,6 @@ input.search-input:focus-visible { outline: none; box-shadow: none; }
   .anim-hover, .anim-press { transition: none; transform: none !important; box-shadow: none !important; }
   .effort-thumb, .effort-fill { transition: none !important; }
   .effort-thumb.dragging { transform: none !important; }
-  .effort-fill::after { animation: none !important; }
   .anim-modal, .anim-menu, .anim-scrim, .anim-message, .anim-slide-up {
     opacity: 1 !important;
     transform: none !important;

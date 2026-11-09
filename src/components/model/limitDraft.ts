@@ -1,17 +1,18 @@
 import { parseLimitInput } from '../../core/model/limitInput';
 
+/**
+ * Only the context window is user-editable. Max output is owned by the
+ * provider API and can never be typed in, so the draft has no field for it.
+ */
 export interface ModelLimitDraft {
   context: string;
-  maxOutput: string;
 }
 
-/** Empty fields reset an override; invalid nonempty fields must never erase it. */
+/** An empty field resets the override; an invalid nonempty one must never erase it. */
 export function parseModelLimitDraft(draft: ModelLimitDraft) {
   const contextWindow = parseLimitInput(draft.context);
-  const maxOutputTokens = parseLimitInput(draft.maxOutput);
-  if ((draft.context.trim() && (contextWindow == null || !Number.isSafeInteger(contextWindow))) ||
-      (draft.maxOutput.trim() && (maxOutputTokens == null || !Number.isSafeInteger(maxOutputTokens)))) {
+  if (draft.context.trim() && (contextWindow == null || !Number.isSafeInteger(contextWindow))) {
     return null;
   }
-  return { contextWindow, maxOutputTokens };
+  return { contextWindow };
 }

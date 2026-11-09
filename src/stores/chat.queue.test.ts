@@ -208,6 +208,45 @@ describe('mid-run message queue', () => {
     expect(useChatStore.getState().queuedMessages.conv1).toHaveLength(1);
   });
 
+  it('never drags the composer image into a queued turn', async () => {
+    const pastedImage = {
+      path: 'pasted-image.png',
+      content: '',
+      isImage: true,
+      dataUrl: 'data:image/png;base64,AAAA',
+    };
+    useWorkspaceStore.setState({ contextFiles: [pastedImage] });
+    useChatStore.setState({ streamingRuns: { conv1: fakeRun() } });
+    expect(useChatStore.getState().enqueueMessage('conv1', 'queued text only', 'p1', 'gpt-test')).toBe('queued');
+
+    queued = [textResponse('done')];
+    useChatStore.setState({ streamingRuns: {} });
+    await useChatStore.getState().flushQueue('conv1');
+
+    const userMsg = created.find((m) => m.role === 'user' && m.content === 'queued text only');
+    expect(userMsg).toBeTruthy();
+    expect(userMsg.images).toBeUndefined();
+    // The image stays in the composer, ready for the user's own next send.
+    expect(useWorkspaceStore.getState().contextFiles).toEqual([pastedImage]);
+  });
+
+  it('still sends the composer image with the turn the user actually sends', async () => {
+    const pastedImage = {
+      path: 'pasted-image.png',
+      content: '',
+      isImage: true,
+      dataUrl: 'data:image/png;base64,AAAA',
+    };
+    useWorkspaceStore.setState({ contextFiles: [pastedImage] });
+    queued = [textResponse('described')];
+    await useChatStore.getState().sendMessage('what is this?', 'p1', 'gpt-test');
+    await vi.waitFor(() => expect(streamCalls).toHaveLength(1));
+
+    const userMsg = created.find((m) => m.role === 'user' && m.content === 'what is this?');
+    expect(userMsg.images).toEqual(['data:image/png;base64,AAAA']);
+    expect(useWorkspaceStore.getState().contextFiles).toEqual([]);
+  });
+
   it('delivers straight away on the streaming race and dequeues by id', async () => {
     queued = [textResponse('race reply')];
     const verdict = useChatStore.getState().enqueueMessage('conv1', 'already free', 'p1', 'gpt-test');

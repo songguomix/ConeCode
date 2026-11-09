@@ -133,6 +133,28 @@ describe('model context limits', () => {
     expect(state.recentModels).toEqual(['b-2']);
   });
 
+  it('keeps max output API-owned even when a legacy override was saved', () => {
+    localStorage.setItem(
+      'modelLimitOverrides',
+      JSON.stringify({ [modelLimitKey('provider-a', 'shared-model')]: { maxOutputTokens: 4096 } }),
+    );
+    useModelStore.setState({
+      models: new Map([['provider-a', [model('provider-a', 128_000)]]]),
+      limitOverrides: {
+        [modelLimitKey('provider-a', 'shared-model')]: { maxOutputTokens: 4096 },
+      },
+    });
+
+    // A hand-typed cap never becomes the effective value...
+    expect(useModelStore.getState().models.get('provider-a')?.[0].maxOutputTokens).toBe(8192);
+
+    // ...and the next save drops it so it can never come back.
+    useModelStore.getState().setModelLimits('provider-a', 'shared-model', { maxOutputTokens: 7777 } as any);
+    const state = useModelStore.getState();
+    expect(state.limitOverrides).toEqual({});
+    expect(state.models.get('provider-a')?.[0].maxOutputTokens).toBe(8192);
+  });
+
   it('scopes learned reasoning capability to one provider', () => {
     useModelStore.setState({
       models: new Map([

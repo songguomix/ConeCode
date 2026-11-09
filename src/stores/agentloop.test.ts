@@ -553,14 +553,14 @@ describe('runAgentLoop with native tool calling', () => {
     expect(created.some((message) => message.content === 'main answer')).toBe(true);
   });
 
-  it('picks up a limit edit on the next turn of the same run', async () => {
-    // A context/max-output edit mid-run must reach the following turn without
-    // waiting for the user to send another message.
+  it('never lets a hand-typed max output cap reach the request', async () => {
+    // Max output belongs to the provider API. Even a legacy override saved by
+    // an older build must not change maxTokens for any turn of the run.
     useModelStore.setState({ models: new Map([['p1', [model]]]) });
     queued = [toolCallResponse('read_file', { path: '/proj/a.ts' }), textResponse('done')];
     const origRead = window.electronAPI.fs.readFile;
     window.electronAPI.fs.readFile = async (p: string) => {
-      useModelStore.getState().setModelLimits('p1', 'gpt-test', { maxOutputTokens: 7777 });
+      useModelStore.getState().setModelLimits('p1', 'gpt-test', { maxOutputTokens: 7777 } as any);
       return origRead(p);
     };
 
@@ -568,7 +568,7 @@ describe('runAgentLoop with native tool calling', () => {
 
     expect(streamCalls).toHaveLength(2);
     expect(streamCalls[0].maxTokens).toBe(8192);
-    expect(streamCalls[1].maxTokens).toBe(7777);
+    expect(streamCalls[1].maxTokens).toBe(8192);
   });
 
   it('lets the model drive a project push through the GitHub plugin tool', async () => {
