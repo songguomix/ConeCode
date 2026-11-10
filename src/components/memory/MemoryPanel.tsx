@@ -2,10 +2,11 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   FiActivity, FiAlertCircle, FiArchive, FiArrowRight, FiCheck, FiChevronRight,
   FiCloud, FiCloudOff, FiCpu, FiDatabase, FiDownload, FiEdit3, FiFileText,
-  FiHardDrive, FiClock, FiLink, FiLoader, FiPlus, FiRefreshCw, FiSearch,
+  FiBookOpen, FiHardDrive, FiClock, FiLink, FiLoader, FiMoon, FiPlus, FiRefreshCw, FiSearch,
   FiServer, FiSettings, FiShield, FiTag, FiTrash2, FiUpload, FiX, FiZap,
 } from 'react-icons/fi';
 import { useMemoryV2Store } from '../../stores/memoryV2.store';
+import { useModelStore } from '../../stores/model.store';
 import { useChatStore, useWorkspaceStore } from '../../stores';
 import type {
   CloudConfig, MemoryLayer, MemoryQuery, MemoryRecord, MemoryStatus,
@@ -15,7 +16,7 @@ import { securitySummary } from '../../core/memory/v2/security';
 import LegacyMemoryPanel from './MemoryPanelLegacy';
 
 type T = (key: string) => string;
-type Tab = 'overview' | 'explorer' | 'search' | 'cloud';
+type Tab = 'overview' | 'explorer' | 'search' | 'wiki' | 'cloud';
 
 const LAYERS: MemoryLayer[] = ['global', 'project', 'episodic', 'semantic', 'working'];
 const TYPES: MemoryType[] = [
@@ -138,6 +139,7 @@ function MemoryV2Panel({ t }: { t: T }) {
   const updateSettings = useMemoryV2Store((s) => s.updateSettings);
   const refreshHealth = useMemoryV2Store((s) => s.refreshHealth);
   const error = useMemoryV2Store((s) => s.error);
+  const wikiEntries = useMemoryV2Store((s) => s.wikiEntries);
   const busy = useMemoryV2Store((s) => s.busy);
   const [tab, setTab] = useState<Tab>('overview');
 
@@ -156,6 +158,7 @@ function MemoryV2Panel({ t }: { t: T }) {
     { id: 'overview', label: t('memoryTabOverview'), icon: <FiActivity size={12} /> },
     { id: 'explorer', label: t('memoryTabExplorer'), icon: <FiDatabase size={12} />, badge: activeRecords.length },
     { id: 'search', label: t('memoryTabSearch'), icon: <FiSearch size={12} /> },
+    { id: 'wiki', label: t('memoryWikiTab'), icon: <FiBookOpen size={12} />, badge: wikiEntries.length || undefined },
     { id: 'cloud', label: t('memoryTabCloud'), icon: <FiCloud size={12} />, badge: conflicts.length || undefined },
   ];
 
@@ -214,20 +217,23 @@ function MemoryV2Panel({ t }: { t: T }) {
       </div>
 
       {tab === 'overview' && (
-        <OverviewTab
-          t={t}
-          records={visible}
-          activeRecords={activeRecords}
-          stats={stats}
-          settings={settings}
-          syncStatus={syncStatus}
-          cloudHealth={cloudHealth}
-          cloudConfig={cloudConfig}
-          lastSync={lastSync}
-          migration={migration}
-          onOpen={openRecord}
-          onTab={setTab}
-        />
+        <div className="space-y-3">
+          <DreamCard t={t} onOpenWiki={() => setTab('wiki')} />
+          <OverviewTab
+            t={t}
+            records={visible}
+            activeRecords={activeRecords}
+            stats={stats}
+            settings={settings}
+            syncStatus={syncStatus}
+            cloudHealth={cloudHealth}
+            cloudConfig={cloudConfig}
+            lastSync={lastSync}
+            migration={migration}
+            onOpen={openRecord}
+            onTab={setTab}
+            />
+        </div>
       )}
       {tab === 'explorer' && (
         <ExplorerTab
@@ -242,6 +248,7 @@ function MemoryV2Panel({ t }: { t: T }) {
       {tab === 'search' && (
         <SearchTab t={t} projectId={projectId} cloudConfigured={!!cloudConfig?.enabled} onOpen={openRecord} />
       )}
+      {tab === 'wiki' && <WikiTab t={t} />}
       {tab === 'cloud' && (
         <CloudTab
           t={t}
@@ -258,6 +265,172 @@ function MemoryV2Panel({ t }: { t: T }) {
         />
       )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Dream wiki browser (read-only)
+function WikiTab({ t }: { t: T }) {
+  const entries = useMemoryV2Store((s) => s.wikiEntries);
+  const selected = useMemoryV2Store((s) => s.wikiSelected);
+  const loading = useMemoryV2Store((s) => s.wikiLoading);
+  const error = useMemoryV2Store((s) => s.wikiError);
+  const load = useMemoryV2Store((s) => s.loadWikiEntries);
+  const open = useMemoryV2Store((s) => s.openWikiEntry);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <h4 className="text-[11px] font-semibold text-[var(--text-secondary)] uppercase tracking-wider">
+            {t('memoryWikiTitle')}
+          </h4>
+          <p className="text-[10px] leading-relaxed text-[var(--text-muted)]">{t('memoryWikiReadonly')}</p>
+        </div>
+        <button
+          onClick={() => void load()}
+          disabled={loading}
+          aria-label={t('memoryWikiTitle')}
+          className="shrink-0 inline-flex items-center justify-center rounded-lg bg-[var(--bg-2)] border border-[var(--border)] p-1.5 text-[var(--text-secondary)] hover:text-[var(--text-primary)] disabled:opacity-50 cursor-pointer"
+        >
+          <FiRefreshCw size={11} className={loading ? 'animate-spin' : ''} />
+        </button>
+      </div>
+      {error && <p className="text-[10px] text-[var(--error)] [overflow-wrap:anywhere]">{error}</p>}
+      {loading && entries.length === 0 ? (
+        <p className="text-[11px] text-[var(--text-muted)]">{t('memoryWikiLoading')}</p>
+      ) : entries.length === 0 ? (
+        <p className="text-[11px] text-[var(--text-muted)]">{t('memoryWikiEmpty')}</p>
+      ) : (
+        <div className="grid gap-2">
+          <ul className="max-h-48 overflow-y-auto rounded-xl border border-[var(--border)] divide-y divide-[var(--border)]">
+            {entries.map((entry) => (
+              <li key={entry.slug}>
+                <button
+                  onClick={() => void open(entry.slug)}
+                  aria-pressed={selected?.slug === entry.slug}
+                  className={`w-full text-left px-2.5 py-1.5 transition-colors cursor-pointer ${
+                    selected?.slug === entry.slug ? 'bg-[var(--bg-3)]' : 'hover:bg-[var(--bg-2)]'
+                  }`}
+                >
+                  <span className="block truncate text-[11.5px] text-[var(--text-primary)]">{entry.name}</span>
+                  <span className="block text-[10px] text-[var(--text-muted)] truncate">
+                    {entry.domain} · {entry.description}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-2)] p-3 max-h-64 overflow-y-auto">
+            {selected ? (
+              <>
+                <h5 className="text-[12px] font-semibold text-[var(--text-primary)] break-words [overflow-wrap:anywhere]">
+                  {selected.name}
+                </h5>
+                <p className="text-[10px] text-[var(--text-muted)] mb-2">
+                  {selected.domain} · {t('memoryWikiUpdated')}{' '}
+                  {selected.updated ? new Date(selected.updated).toLocaleDateString() : '—'}
+                </p>
+                <p className="whitespace-pre-wrap text-[11px] leading-relaxed text-[var(--text-secondary)] [overflow-wrap:anywhere]">
+                  {selected.body}
+                </p>
+              </>
+            ) : (
+              <p className="text-[11px] text-[var(--text-muted)]">{t('memoryWikiSelect')}</p>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Dream
+function DreamCard({ t, onOpenWiki }: { t: T; onOpenWiki?: () => void }) {
+  const active = useMemoryV2Store((s) => s.active);
+  const dreaming = useMemoryV2Store((s) => s.dreaming);
+  const dreamError = useMemoryV2Store((s) => s.dreamError);
+  const dreamAuto = useMemoryV2Store((s) => s.dreamAuto);
+  const lastDream = useMemoryV2Store((s) => s.lastDream);
+  const runDream = useMemoryV2Store((s) => s.runDream);
+  const setDreamAuto = useMemoryV2Store((s) => s.setDreamAuto);
+  const wikiEntries = useMemoryV2Store((s) => s.wikiEntries);
+  const selectedModelId = useModelStore((s) => s.selectedModelId);
+  const models = useModelStore((s) => s.models);
+  const hasModel = Boolean(models.size > 0 && selectedModelId && useModelStore.getState().getSelectedModel());
+
+  const analyzed = lastDream?.sessions.filter((session) => session.status === 'analyzed').length ?? 0;
+  return (
+    <section className="rounded-xl border border-[var(--border)] bg-[var(--bg-1)] p-3">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="flex items-center gap-1.5 mb-1">
+            <FiMoon size={12} className="text-[var(--accent)]" />
+            <h4 className="text-[11px] font-semibold text-[var(--text-secondary)] uppercase tracking-wider">
+              {t('memoryDreamTitle')}
+            </h4>
+          </div>
+          <p className="text-[10px] leading-relaxed text-[var(--text-muted)]">{t('memoryDreamHint')}</p>
+        </div>
+        <button
+          onClick={() => void runDream()}
+          disabled={!active || !hasModel || dreaming}
+          className="shrink-0 inline-flex items-center gap-1 rounded-lg bg-[var(--bg-2)] border border-[var(--border)] px-2 py-1 text-[10px] text-[var(--text-secondary)] hover:text-[var(--text-primary)] disabled:opacity-50 cursor-pointer"
+        >
+          {dreaming ? <FiLoader size={10} className="animate-spin" /> : <FiRefreshCw size={10} />}
+          {dreaming ? t('memoryDreamRunning') : t('memoryDreamRun')}
+        </button>
+      </div>
+      <label className="mt-2 flex items-center gap-1.5 text-[10px] text-[var(--text-muted)] cursor-pointer">
+        <input
+          type="checkbox"
+          checked={dreamAuto}
+          onChange={(event) => setDreamAuto(event.target.checked)}
+          className="accent-[var(--accent)]"
+        />
+        {t('memoryDreamAuto')}
+      </label>
+      {onOpenWiki && wikiEntries.length > 0 && (
+        <button
+          onClick={onOpenWiki}
+          className="mt-1 inline-flex items-center gap-1 text-[10px] text-[var(--accent)] hover:underline cursor-pointer"
+        >
+          <FiBookOpen size={10} /> {t('memoryWikiOpen')} ({wikiEntries.length})
+        </button>
+      )}
+      {!hasModel && (
+        <p className="mt-1 text-[10px] text-[var(--text-muted)]">{t('memoryDreamNeedModel')}</p>
+      )}
+      {dreamError && (
+        <p className="mt-1 text-[10px] text-[var(--error)] [overflow-wrap:anywhere]">
+          {t('memoryDreamError')}: {dreamError}
+        </p>
+      )}
+      {lastDream ? (
+        <div className="mt-2 space-y-0.5 text-[10px] leading-relaxed text-[var(--text-muted)]">
+          <p>
+            {t('memoryDreamLast')}: {new Date(lastDream.startedAt).toLocaleString()} · {analyzed}{' '}
+            {t('memoryDreamSessions')} · {lastDream.changedFiles.length} {t('memoryDreamFiles')} ·{' '}
+            {lastDream.indexEntries} {t('memoryDreamTopics')} · {lastDream.merged.length} {t('memoryDreamMerged')}
+            {lastDream.prunedHistory > 0 ? ` · ${lastDream.prunedHistory} ${t('memoryDreamPruned')}` : ''}
+          </p>
+          {analyzed === 0 && <p>{t('memoryDreamNoSessions')}</p>}
+          {lastDream.warnings.length > 0 && (
+            <p className="text-[var(--warning)] [overflow-wrap:anywhere]">
+              {t('memoryDreamWarnings')}: {lastDream.warnings.slice(0, 2).join('; ')}
+            </p>
+          )}
+          <p>{t('memoryDreamReadonly')}</p>
+        </div>
+      ) : (
+        <p className="mt-2 text-[10px] text-[var(--text-muted)]">{t('memoryDreamEmpty')}</p>
+      )}
+    </section>
   );
 }
 

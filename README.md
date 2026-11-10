@@ -117,7 +117,7 @@ This makes RSI a disciplined improvement loop for a project—not a claim of ope
 
   | Plugin | What it does |
   |---|---|
-  | GitHub Sync | commits and pushes the open project to a GitHub repo with one token |
+  | GitHub Sync | commits and pushes the open project to a GitHub repo with one token, and includes an issue/PR reply assistant |
   | Performance Check | inspects this app for performance defects—reports only, never touches |
   | Security Review | reviews code for vulnerabilities, whole project or changed files only |
   | TODO Scan | sweeps the repository for TODO/FIXME sorted by how stale they are |
@@ -125,9 +125,10 @@ This makes RSI a disciplined improvement loop for a project—not a claim of ope
   | Repo Tour | newcomer map: boot chain, module list, which three files to read first |
   | AI Image Generation | in-chat image generation with gallery and studio |
 
+- **GitHub reply assistant.** The GitHub plugin has a second tab for issues and pull requests: it lists open threads, drafts a reply locally from the issue/PR context, and posts only after you confirm. It shares the plugin's owner/repo and token, so nothing is sent automatically. Continuous webhook replies remain available through the optional self-hosted service in [`github-reply-bot/`](github-reply-bot/README.md).
 - **Plugin Market (DSH compatible).** Open the puzzle-piece button in the sidebar. Discover, install and verify real DeepSeek Harness community plugins alongside ConeCode-native ones: pinned npm/Git/local sources, a Cordis-based host runtime for tools, commands and skills, per-plugin config and logs, enable/disable, update/rollback and uninstall. The market shows author-declared DSH ranges separately from recorded ConeCode verification, including partial and incompatible results. Web client halves of DSH plugins are detected but not mounted. See [`docs/dsh-market/`](docs/dsh-market/README.md) for the pinned DSH baseline, compatibility matrix and developer guide.
 - **Skills.** Install and run skills through dedicated run views; the skill editor keeps custom skills editable, and your approval mode and command sandbox still govern whatever a skill actually executes.
-- **Memory.** Standalone memory panel; `/memory` opens it. Long tasks also keep goals, TODO checklists, and context compaction so work survives across sessions.
+- **Memory.** Standalone memory panel; `/memory` opens it. Long tasks also keep goals, TODO checklists, and context compaction so work survives across sessions. A **Dream** pass reviews finished sessions offline and builds a read-only wiki (browsable in the panel) that future sessions mount.
 
 ### Background runs, notifications, and remote access
 

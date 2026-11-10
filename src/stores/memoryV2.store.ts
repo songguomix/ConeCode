@@ -10,6 +10,16 @@ import {
   GoogleDriveStorageProvider, type GoogleDriveBridge, CloudStorageProvider,
 } from '../core/memory/v2';
 import { useModelStore } from './model.store';
+import {
+  loadWikiContext,
+  loadWikiIndex,
+  parseWikiFile,
+  readLastDream,
+  runDream as runDreamPass,
+  sanitizeSlug,
+  wikiKey,
+} from '../core/memory/v2/dream';
+import type { DreamReport, DreamSession, DreamStorage, WikiFile, WikiIndexEntry } from '../core/memory/v2/dream';
 
 // The single place the rest of the app talks to Memory 2.0.
 // When the Electron bridge is absent (unit tests, preview harness) the store
@@ -37,6 +47,15 @@ interface MemoryV2State {
   conflicts: ReturnType<MemoryService['getConflicts']>;
   hits: SearchHit[];
   contextBlock: string;
+  wikiContext: string;
+  wikiEntries: WikiIndexEntry[];
+  wikiSelected: WikiFile | null;
+  wikiLoading: boolean;
+  wikiError: string | null;
+  dreaming: boolean;
+  dreamError: string | null;
+  lastDream: DreamReport | null;
+  dreamAuto: boolean;
   cloudHealth: StorageHealth | null;
   cloudConfig: CloudConfig | null;
   security: SecuritySummary | null;
@@ -55,6 +74,11 @@ interface MemoryV2State {
   refreshHealth: () => Promise<void>;
   setProject: (rootPath: string | null) => Promise<void>;
   beginTask: (taskText: string, sessionId?: string) => Promise<string>;
+  runDream: () => Promise<DreamReport | null>;
+  setDreamAuto: (enabled: boolean) => void;
+  refreshWikiContext: (taskText?: string) => Promise<void>;
+  loadWikiEntries: () => Promise<void>;
+  openWikiEntry: (slug: string) => Promise<void>;
   endTask: (opts: {
     messages: { role: string; content: string }[];
     sessionId?: string;
@@ -171,6 +195,120 @@ async function llm(req: { system: string; user: string }): Promise<string> {
   return extractText(result);
 }
 
+function dreamStorage(): DreamStorage {
+  const api = (globalThis as any).window?.electronAPI?.memory2;
+  if (!api?.putObject || !api?.getObject) throw new Error('Memory 2.0 object storage is unavailable.');
+  return {
+    putObject: async (key, content) => Boolean(await api.putObject(key, content)),
+    getObject: async (key) => (await api.getObject(key)) ?? null,
+    ...(api.listObjects
+      ? {
+          listObjects: async (prefix: string) => {
+            const keys = await api.listObjects(prefix);
+            return Array.isArray(keys) ? keys.filter((key): key is string => typeof key === 'string') : [];
+          },
+        }
+      : {}),
+    ...(api.deleteObject
+      ? { deleteObject: async (key: string) => Boolean(await api.deleteObject(key)) }
+      : {}),
+  };
+}
+
+async function dreamLlm(req: { system: string; user: string; maxTokens?: number }): Promise<string> {
+  const model = useModelStore.getState().getSelectedModel();
+  if (!model) return '';
+  const result = await (globalThis as any).window.electronAPI.chat.stream({
+    providerId: model.providerId,
+    modelId: model.id,
+    silent: true,
+    maxTokens: Math.min(Math.max(req.maxTokens ?? 4000, 500), 6000),
+    messages: [
+      { role: 'system', content: req.system },
+      { role: 'user', content: req.user },
+    ],
+  });
+  return extractText(result);
+}
+
+/**
+ * Exports finished conversations as dream transcripts. The active session is
+ * skipped by only taking conversations idle for at least the dream idle window.
+ */
+async function collectDreamSessions(now: number, rootPath: string | null): Promise<DreamSession[]> {
+  const api = (globalThis as any).window?.electronAPI;
+  if (!api?.conversation?.list || !api?.message?.list) return [];
+  const conversations = await api.conversation.list().catch(() => []);
+  if (!Array.isArray(conversations)) return [];
+  const sessions: DreamSession[] = [];
+  for (const conversation of conversations.slice(0, 30)) {
+    const id = typeof conversation?.id === 'string' ? conversation.id : '';
+    const updatedAt = Number(conversation?.updatedAt) || 0;
+    if (!id || !updatedAt || now - updatedAt < 10 * 60_000) continue;
+    // Keep every project's notes isolated: only sessions from this workspace.
+    const conversationRoot = typeof conversation?.rootPath === 'string' ? conversation.rootPath : null;
+    if (rootPath ? conversationRoot !== rootPath : conversationRoot !== null) continue;
+    const rows = await api.message.list(id).catch(() => []);
+    if (!Array.isArray(rows) || rows.length < 4) continue;
+    sessions.push({
+      id,
+      title: typeof conversation.title === 'string' ? conversation.title : '',
+      updatedAt,
+      messages: rows.map((message: any) => ({
+        role: message?.role === 'assistant' || message?.role === 'tool' || message?.role === 'system' ? message.role : 'user',
+        content: typeof message?.content === 'string' ? message.content : '',
+        toolName: typeof message?.toolName === 'string' ? message.toolName : undefined,
+        toolCalls: Array.isArray(message?.toolCalls)
+          ? message.toolCalls
+              .map((call: any) => {
+                if (typeof call === 'string') return call;
+                if (!call || typeof call !== 'object') return '';
+                const name = typeof call.name === 'string' ? call.name : '';
+                if (!name) return '';
+                let args = '';
+                try {
+                  if (call.arguments && typeof call.arguments === 'object') {
+                    args = JSON.stringify(call.arguments);
+                  }
+                } catch {
+                  args = '';
+                }
+                return `${name}(${args.slice(0, 300)})`;
+              })
+              .filter(Boolean)
+              .slice(0, 10)
+          : undefined,
+        createdAt: typeof message?.createdAt === 'number' ? message.createdAt : undefined,
+      })),
+    });
+    if (sessions.length >= 12) break;
+  }
+  return sessions;
+}
+
+let dreamTimer: ReturnType<typeof setInterval> | null = null;
+
+function scheduleAutoDream(get: () => MemoryV2State) {
+  if (dreamTimer) {
+    clearInterval(dreamTimer);
+    dreamTimer = null;
+  }
+  if (!get().dreamAuto || typeof window === 'undefined') return;
+  const tick = () => {
+    if (!get().active || get().dreaming) return;
+    let last = 0;
+    try {
+      last = Number(localStorage.getItem('memoryDreamLastAt') ?? 0);
+    } catch {
+      last = 0;
+    }
+    if (Date.now() - last < 24 * 3_600_000) return;
+    void get().runDream();
+  };
+  dreamTimer = setInterval(tick, 60 * 60_000);
+  setTimeout(tick, 90_000);
+}
+
 /**
  * Auto-sync uses a recursive timer, not setInterval: a failed attempt backs off
  * exponentially (1s → 2s → … capped at 5min) and the next attempt is scheduled
@@ -217,6 +355,21 @@ export const useMemoryV2Store = create<MemoryV2State>((set, get) => ({
   conflicts: [],
   hits: [],
   contextBlock: '',
+  wikiContext: '',
+  wikiEntries: [],
+  wikiSelected: null,
+  wikiLoading: false,
+  wikiError: null,
+  dreaming: false,
+  dreamError: null,
+  lastDream: null,
+  dreamAuto: (() => {
+    try {
+      return localStorage.getItem('memoryDreamAuto') === '1';
+    } catch {
+      return false;
+    }
+  })(),
   cloudHealth: null,
   cloudConfig: null,
   security: null,
@@ -260,6 +413,8 @@ export const useMemoryV2Store = create<MemoryV2State>((set, get) => ({
         get().refresh();
         await get().setProject(rootPath ?? null);
         scheduleAutoSync(get, set);
+        scheduleAutoDream(get);
+        void get().refreshWikiContext();
         void get().refreshHealth();
         // First-run migration is automatic but strictly additive and verified.
         if (durable) void get().runMigration(false);
@@ -312,7 +467,8 @@ export const useMemoryV2Store = create<MemoryV2State>((set, get) => ({
       await (globalThis as any).window?.electronAPI?.memory2?.setRoot?.(null).catch?.(() => undefined);
     }
     service.setProject(rootPath, resolved);
-    set({ contextBlock: '', hits: [], selectedId: null, projectId: service.getProjectId() });
+    set({ contextBlock: '', hits: [], selectedId: null, projectId: service.getProjectId(), wikiContext: '' });
+    void get().refreshWikiContext();
     // Opening a different workspace migrates that project's legacy rows (the
     // migration is idempotent and never touches the old files).
     if (previous !== rootPath && get().durable) void get().runMigration(false);
@@ -328,8 +484,113 @@ export const useMemoryV2Store = create<MemoryV2State>((set, get) => ({
       }
       const block = await service.beginTask(taskText);
       set({ contextBlock: block, hits: service.getLastHits() });
+      await get().refreshWikiContext(taskText);
       return block;
     } catch { return ''; }
+  },
+
+  refreshWikiContext: async (taskText = '') => {
+    if (!service || !get().active) {
+      set({ wikiContext: '' });
+      return;
+    }
+    try {
+      const scope = get().projectId || 'default';
+      const result = await loadWikiContext(dreamStorage(), scope, taskText);
+      const last = await readLastDream(dreamStorage(), scope);
+      set({
+        wikiContext: result.block,
+        wikiEntries: result.items,
+        ...(last ? { lastDream: last } : {}),
+      });
+    } catch {
+      set({ wikiContext: '' });
+    }
+  },
+
+  loadWikiEntries: async () => {
+    if (!service || !get().active) {
+      set({ wikiEntries: [], wikiSelected: null });
+      return;
+    }
+    set({ wikiLoading: true, wikiError: null });
+    try {
+      const entries = await loadWikiIndex(dreamStorage(), get().projectId || 'default');
+      const selected = get().wikiSelected;
+      set({
+        wikiEntries: entries,
+        wikiLoading: false,
+        ...(selected && !entries.some((entry) => entry.slug === selected.slug) ? { wikiSelected: null } : {}),
+      });
+    } catch (error) {
+      set({
+        wikiLoading: false,
+        wikiError: error instanceof Error ? error.message : String(error),
+      });
+    }
+  },
+
+  openWikiEntry: async (slug) => {
+    if (!service || !get().active) return;
+    const safe = sanitizeSlug(slug);
+    if (!safe) {
+      set({ wikiError: 'Invalid topic name.' });
+      return;
+    }
+    try {
+      const raw = await dreamStorage().getObject(wikiKey(get().projectId || 'default', safe));
+      const file = parseWikiFile(raw);
+      set({
+        wikiSelected: file,
+        wikiError: file ? null : 'Topic not found.',
+        wikiLoading: false,
+      });
+    } catch (error) {
+      set({ wikiError: error instanceof Error ? error.message : String(error) });
+    }
+  },
+
+  runDream: async () => {
+    if (!service || !get().active) {
+      set({ dreamError: 'Memory 2.0 is not active.' });
+      return null;
+    }
+    if (get().dreaming) return null;
+    if (!useModelStore.getState().getSelectedModel()) {
+      set({ dreamError: 'Select a model before running a dream.' });
+      return null;
+    }
+    set({ dreaming: true, dreamError: null });
+    try {
+      const now = Date.now();
+      const sessions = await collectDreamSessions(now, get().rootPath);
+      const scope = get().projectId || 'default';
+      const report = await runDreamPass(dreamStorage(), dreamLlm, { scope, sessions, now });
+      try {
+        localStorage.setItem('memoryDreamLastAt', String(now));
+      } catch {
+        // Non-fatal: auto-dream will simply try again next hour.
+      }
+      set({ dreaming: false, lastDream: report });
+      await get().refreshWikiContext();
+      return report;
+    } catch (error) {
+      set({
+        dreaming: false,
+        dreamError: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  },
+
+  setDreamAuto: (enabled) => {
+    try {
+      localStorage.setItem('memoryDreamAuto', enabled ? '1' : '0');
+    } catch {
+      // Non-fatal: applies for this session only.
+    }
+    set({ dreamAuto: enabled });
+    scheduleAutoDream(get);
   },
 
   endTask: async (opts) => {
@@ -610,5 +871,7 @@ export function isMemoryV2Active(): boolean {
 
 /** The block computed at task start, injected into the system prompt. */
 export function memoryV2ContextBlock(): string {
-  return useMemoryV2Store.getState().contextBlock;
+  const state = useMemoryV2Store.getState();
+  if (!state.active) return '';
+  return [state.contextBlock, state.wikiContext].filter(Boolean).join('\n\n');
 }

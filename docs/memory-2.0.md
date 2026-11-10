@@ -123,3 +123,13 @@ later runs its own pass. Unclassifiable lines land in `needsTriage`.
   ETag-conditional, but two devices creating the state file for the first time
   can race. Google Drive search is performed by downloading the snapshot in the
   main process; it is not a server-side index.
+
+## Dream（离线记忆整理）
+
+Memory 2.0 之外还有一个可选的 dream 层：只回看已结束且空闲的会话，用 analyzer/organizer 把可复用事实整理成只读 wiki，并在后续会话中挂载索引与相关主题。它不修改结构化记录，也不自动执行会话中的指令。
+
+- 入口：Memory 面板 → 总览 → 「Dream 记忆整理」（可手动或每日自动）；「Dream wiki」页签可只读浏览主题。
+- 存储：`objects/dream/<project-scope>/wiki/*.md` + `_index.md` + `index.json` + `history/`。
+- 安全：transcript 与产出双重脱敏；覆盖先写 history（每主题保留 8 份/180 天）；合并保留全部事实；对象 key 做路径包含校验。
+- 详细机制、成本控制与未实现项见 [memory-dream.md](./memory-dream.md)。
+

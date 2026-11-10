@@ -1,6 +1,14 @@
 import type { AIModel } from './model.types';
 import type { Conversation, Message } from './chat.types';
 import type { ProviderConfig } from './provider.types';
+import type {
+  ReplyContextRequest,
+  ReplyContextResult,
+  ReplyListRequest,
+  ReplyListResult,
+  ReplyPostRequest,
+  ReplyPostResult,
+} from './githubReply.types';
 // The preview's shapes are defined next to its logic and shared with main.
 import type { PreviewPlan, PreviewStatus, PreviewLog } from '../core/preview/preview';
 import type { ComputerRequest, DisplayGeometry } from '../core/computer/computer';
@@ -297,6 +305,12 @@ export interface ElectronAPI {
       target?: string;
     }) => Promise<{ ok: boolean; status?: string; diff?: string; error?: string; scope?: string; target?: string | null }>;
   };
+  /** GitHub plugin: manual reply assistant for open issues and pull requests. */
+  githubReply: {
+    list: (options: ReplyListRequest) => Promise<ReplyListResult>;
+    context: (options: ReplyContextRequest) => Promise<ReplyContextResult>;
+    post: (options: ReplyPostRequest) => Promise<ReplyPostResult>;
+  };
   worktree: {
     list: (cwd: string) => Promise<{ ok: boolean; mainPath?: string; currentPath?: string; managedRoot?: string; worktrees: GitWorktree[]; error?: string }>;
     create: (cwd: string, options: { ref?: string; name?: string }) => Promise<{ ok: boolean; path?: string; ref?: string; error?: string }>;
@@ -341,6 +355,8 @@ export interface ElectronAPI {
     restore: () => Promise<{ ok: boolean; state?: Memory2State; error?: string }>;
     putObject: (key: string, content: string) => Promise<boolean>;
     getObject: (key: string) => Promise<string | null>;
+    listObjects: (prefix: string) => Promise<string[]>;
+    deleteObject: (key: string) => Promise<boolean>;
     deviceId: () => Promise<string>;
     legacySnapshot: () => Promise<{ entries: any[]; files: { path: string; scope: string; content: string }[] }>;
     projectId: (rootPath: string) => Promise<string>;

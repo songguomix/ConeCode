@@ -38,6 +38,27 @@ afterEach(() => {
 });
 
 describe('FileMemory2Store', () => {
+  it('keeps object keys inside the objects directory', () => {
+    const dataDir = tempDir('conecode-memory2-');
+    const store = new FileMemory2Store(dataDir, tempDir('conecode-home-'));
+    expect(store.putObject('../../escape.txt', 'x')).toBe(false);
+    expect(store.getObject('../../escape.txt')).toBeNull();
+    expect(store.putObject('/absolute.txt', 'x')).toBe(false);
+    expect(store.putObject('dream/project/wiki/topic.md', 'ok')).toBe(true);
+    expect(store.getObject('dream/project/wiki/topic.md')).toBe('ok');
+    expect(fs.existsSync(path.join(dataDir, 'escape.txt'))).toBe(false);
+    expect(fs.existsSync(path.join(dataDir, 'objects', 'dream', 'project', 'wiki', 'topic.md'))).toBe(true);
+
+    expect(store.putObject('dream/project/history/topic-1700000000000.md', 'old')).toBe(true);
+    expect(store.listObjects('dream/project')).toEqual(
+      expect.arrayContaining(['dream/project/wiki/topic.md', 'dream/project/history/topic-1700000000000.md'])
+    );
+    expect(store.deleteObject('dream/project/history/topic-1700000000000.md')).toBe(true);
+    expect(store.getObject('dream/project/history/topic-1700000000000.md')).toBeNull();
+    expect(store.deleteObject('../outside.md')).toBe(false);
+    expect(store.listObjects('../')).toEqual([]);
+  });
+
   it('persists atomically and reloads the same records', () => {
     const dataDir = tempDir('conecode-memory2-');
     const store = new FileMemory2Store(dataDir, tempDir('conecode-home-'));

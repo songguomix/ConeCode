@@ -1,4 +1,5 @@
 import GithubReleaseView from './GithubReleaseView';
+import ReplyAssistantView from './ReplyAssistantView';
 import { useEffect, useState } from 'react';
 import { FiRefreshCw, FiKey, FiUpload, FiExternalLink } from 'react-icons/fi';
 import { useMarketStore } from '../../stores/market.store';
@@ -25,6 +26,7 @@ export default function SyncView() {
   const rootPath = useWorkspaceStore((s) => s.rootPath);
   const { t } = useLanguageStore();
   const [repoDraft, setRepoDraft] = useState(repo);
+  const [tab, setTab] = useState<'push' | 'reply'>('push');
   const [tokenDraft, setTokenDraft] = useState('');
 
   // Two SyncView instances can be mounted at once (RSI card + the settings
@@ -116,47 +118,75 @@ export default function SyncView() {
         </ol>
       </div>
 
-      {/* What will be pushed: the open project's branch and uncommitted count. */}
-      <div className="px-3 py-2 mb-2 rounded-xl bg-[var(--bg-2)] border border-[var(--border)] min-w-0">
-        {!rootPath ? (
-          <p className="text-[12px] text-[var(--text-muted)] break-words [overflow-wrap:anywhere]">{t('pluginNoProject')}</p>
-        ) : status && !status.isRepo ? (
-          <p className="text-[12px] text-[var(--text-muted)] break-words [overflow-wrap:anywhere]">{t('pluginNotGit')}</p>
-        ) : status ? (
-          <p className="text-[12px] text-[var(--text-secondary)] break-words [overflow-wrap:anywhere]">
-            {t('pluginBranch')}: <span className="text-[var(--text-primary)]">{status.branch}</span>
-            {' · '}
-            {status.dirty > 0 ? `${status.dirty} ${t('pluginChanges')}` : t('pluginClean')}
-          </p>
-        ) : (
-          <p className="text-[12px] text-[var(--text-muted)] break-words [overflow-wrap:anywhere]">{t('pluginChecking')}</p>
-        )}
+      <div
+        role="tablist"
+        aria-label="GitHub plugin sections"
+        className="flex gap-1 mb-2 p-0.5 rounded-xl bg-[var(--bg-2)] border border-[var(--border)]"
+      >
+        {(['push', 'reply'] as const).map((value) => (
+          <button
+            key={value}
+            role="tab"
+            aria-selected={tab === value}
+            onClick={() => setTab(value)}
+            className={`flex-1 px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors cursor-pointer ${
+              tab === value
+                ? 'bg-[var(--bg-4)] text-[var(--text-primary)] shadow-sm'
+                : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
+            }`}
+          >
+            {value === 'push' ? t('replyTabPush') : t('replyTabReply')}
+          </button>
+        ))}
       </div>
 
-      <button
-        onClick={() => { setRepo(repoDraft); void pushRepo(); }}
-        disabled={!canPush}
-        className="w-full mb-2 px-3 py-2 rounded-xl bg-[var(--accent)] text-white text-[13px] font-medium hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50 flex items-center justify-center gap-1.5 shrink-0 cursor-pointer disabled:cursor-not-allowed"
-      >
-        <FiUpload size={13} />
-        {pushing ? t('pluginPushing') : t('pluginPushProject')}
-      </button>
+      {tab === 'reply' ? (
+        <ReplyAssistantView onConfigureRepo={() => setTab('push')} />
+      ) : (
+        <>
+        {/* What will be pushed: the open project's branch and uncommitted count. */}
+        <div className="px-3 py-2 mb-2 rounded-xl bg-[var(--bg-2)] border border-[var(--border)] min-w-0">
+          {!rootPath ? (
+            <p className="text-[12px] text-[var(--text-muted)] break-words [overflow-wrap:anywhere]">{t('pluginNoProject')}</p>
+          ) : status && !status.isRepo ? (
+            <p className="text-[12px] text-[var(--text-muted)] break-words [overflow-wrap:anywhere]">{t('pluginNotGit')}</p>
+          ) : status ? (
+            <p className="text-[12px] text-[var(--text-secondary)] break-words [overflow-wrap:anywhere]">
+              {t('pluginBranch')}: <span className="text-[var(--text-primary)]">{status.branch}</span>
+              {' · '}
+              {status.dirty > 0 ? `${status.dirty} ${t('pluginChanges')}` : t('pluginClean')}
+            </p>
+          ) : (
+            <p className="text-[12px] text-[var(--text-muted)] break-words [overflow-wrap:anywhere]">{t('pluginChecking')}</p>
+          )}
+        </div>
 
-      {result && (
-        <p className={`px-3 py-2 mb-2 rounded-xl text-[12px] break-words [overflow-wrap:anywhere] ${
-          result.ok
-            ? 'bg-[color-mix(in_srgb,var(--success)_10%,transparent)] text-[var(--success)]'
-            : 'bg-[color-mix(in_srgb,var(--error)_10%,transparent)] text-[var(--error)]'
-        }`}>
-          {result.message}
-        </p>
-      )}
-      <GithubReleaseView />
+        <button
+          onClick={() => { setRepo(repoDraft); void pushRepo(); }}
+          disabled={!canPush}
+          className="w-full mb-2 px-3 py-2 rounded-xl bg-[var(--accent)] text-white text-[13px] font-medium hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50 flex items-center justify-center gap-1.5 shrink-0 cursor-pointer disabled:cursor-not-allowed"
+        >
+          <FiUpload size={13} />
+          {pushing ? t('pluginPushing') : t('pluginPushProject')}
+        </button>
 
-      {lastPushAt && (
-        <p className="px-1 text-[11px] text-[var(--text-muted)] break-words [overflow-wrap:anywhere]">
-          {t('pluginLastPush')}: {new Date(lastPushAt).toLocaleString()}
-        </p>
+        {result && (
+          <p className={`px-3 py-2 mb-2 rounded-xl text-[12px] break-words [overflow-wrap:anywhere] ${
+            result.ok
+              ? 'bg-[color-mix(in_srgb,var(--success)_10%,transparent)] text-[var(--success)]'
+              : 'bg-[color-mix(in_srgb,var(--error)_10%,transparent)] text-[var(--error)]'
+          }`}>
+            {result.message}
+          </p>
+        )}
+        <GithubReleaseView />
+
+        {lastPushAt && (
+          <p className="px-1 text-[11px] text-[var(--text-muted)] break-words [overflow-wrap:anywhere]">
+            {t('pluginLastPush')}: {new Date(lastPushAt).toLocaleString()}
+          </p>
+        )}
+        </>
       )}
     </div>
   );

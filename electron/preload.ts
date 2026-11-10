@@ -112,6 +112,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('git:pushProject', opts),
     review: (cwd: string, options: any) => ipcRenderer.invoke('git:review', cwd, options),
   },
+  githubReply: {
+    list: (options: { repo: string; token?: string }) => ipcRenderer.invoke('github-reply:list', options),
+    context: (options: { repo: string; token?: string; number: number }) =>
+      ipcRenderer.invoke('github-reply:context', options),
+    post: (options: { repo: string; token?: string; number: number; body: string }) =>
+      ipcRenderer.invoke('github-reply:post', options),
+  },
   worktree: {
     list: (cwd: string) => ipcRenderer.invoke('worktree:list', cwd),
     create: (cwd: string, options: any) => ipcRenderer.invoke('worktree:create', cwd, options),
@@ -148,6 +155,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     backup: () => ipcRenderer.invoke('memory2:backup'),
     restore: () => ipcRenderer.invoke('memory2:restore'),
     putObject: (key: string, content: string) => ipcRenderer.invoke('memory2:putObject', key, content),
+    listObjects: (prefix: string) => ipcRenderer.invoke('memory2:listObjects', prefix),
+    deleteObject: (key: string) => ipcRenderer.invoke('memory2:deleteObject', key),
     getObject: (key: string) => ipcRenderer.invoke('memory2:getObject', key),
     deviceId: () => ipcRenderer.invoke('memory2:deviceId'),
     legacySnapshot: () => ipcRenderer.invoke('memory2:legacySnapshot'),

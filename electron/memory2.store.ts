@@ -138,10 +138,73 @@ export class FileMemory2Store {
     return id;
   }
 
+  /**
+   * Resolves an object key under `objects/`, rejecting absolute paths, empty
+   * segments and `..` traversal. Dream file names come from model output, so
+   * containment is enforced here rather than trusted from callers.
+   */
+  private objectPath(key: string): string | null {
+    if (typeof key !== 'string') return null;
+    const trimmed = key.trim();
+    if (!trimmed || trimmed.length > 512 || trimmed.includes('\0')) return null;
+    const safe = trimmed.replace(/[^a-zA-Z0-9._/-]/g, '_');
+    if (safe.startsWith('/')) return null;
+    const segments = safe.split('/');
+    if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) return null;
+    const root = path.join(this.ensure(), OBJECTS_DIR);
+    const target = path.resolve(root, safe);
+    const relative = path.relative(root, target);
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return null;
+    return target;
+  }
+
+  /** Resolves a directory prefix for listing; same containment rules as objectPath. */
+  private objectDir(prefix: string): string | null {
+    const cleaned = String(prefix ?? '').replace(/\\/g, '/');
+    if (cleaned.includes('\0') || cleaned.startsWith('/')) return null;
+    const segments = cleaned.split('/').filter((segment) => segment !== '');
+    if (segments.some((segment) => segment === '.' || segment === '..')) return null;
+    const root = path.join(this.ensure(), OBJECTS_DIR);
+    const target = path.resolve(root, segments.join('/'));
+    const relative = path.relative(root, target);
+    if (relative.startsWith('..') || path.isAbsolute(relative)) return null;
+    return target;
+  }
+
+  listObjects(prefix = ''): string[] {
+    try {
+      const dir = this.objectDir(prefix);
+      const root = path.join(this.ensure(), OBJECTS_DIR);
+      if (!dir || !fs.existsSync(dir)) return [];
+      const out: string[] = [];
+      const walk = (current: string) => {
+        if (out.length >= 500) return;
+        for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+          if (out.length >= 500) return;
+          const full = path.join(current, entry.name);
+          if (entry.isSymbolicLink()) continue;
+          if (entry.isDirectory()) walk(full);
+          else if (entry.isFile()) out.push(path.relative(root, full).split(path.sep).join('/'));
+        }
+      };
+      walk(dir);
+      return out;
+    } catch { return []; }
+  }
+
+  deleteObject(key: string): boolean {
+    try {
+      const target = this.objectPath(key);
+      if (!target || !fs.existsSync(target)) return false;
+      fs.unlinkSync(target);
+      return true;
+    } catch { return false; }
+  }
+
   putObject(key: string, content: string): boolean {
     try {
-      const safe = key.replace(/[^a-zA-Z0-9._/-]/g, '_');
-      const target = path.join(this.ensure(), OBJECTS_DIR, safe);
+      const target = this.objectPath(key);
+      if (!target) return false;
       fs.mkdirSync(path.dirname(target), { recursive: true });
       const tmp = `${target}.${process.pid}.tmp`;
       fs.writeFileSync(tmp, content, 'utf-8');
@@ -152,8 +215,8 @@ export class FileMemory2Store {
 
   getObject(key: string): string | null {
     try {
-      const safe = key.replace(/[^a-zA-Z0-9._/-]/g, '_');
-      const target = path.join(this.ensure(), OBJECTS_DIR, safe);
+      const target = this.objectPath(key);
+      if (!target) return null;
       return fs.existsSync(target) ? fs.readFileSync(target, 'utf-8') : null;
     } catch { return null; }
   }

@@ -1,4 +1,5 @@
 import { publishGithubRelease } from './githubRelease';
+import { getReplyThread, listReplyThreads, postReply } from './githubReply';
 import { DshMarketService } from './dsh-market/market-service';
 import { registerDshMarketIpc } from './dsh-market/ipc';
 import { isDshChatServer } from '../src/core/dsh-market/naming';
@@ -1567,6 +1568,12 @@ function registerIPC() {
 
   ipcMain.handle('git:publishRelease', (_, options) => publishGithubRelease(options));
 
+  // GitHub plugin reply assistant: main-process requests avoid renderer CORS and
+  // keep the token out of any browser-level network layer.
+  ipcMain.handle('github-reply:list', (_, options) => listReplyThreads(options));
+  ipcMain.handle('github-reply:context', (_, options) => getReplyThread(options));
+  ipcMain.handle('github-reply:post', (_, options) => postReply(options));
+
   ipcMain.handle('git:branches', async (_, cwd?: string) => {
     const dir = cwd || process.cwd();
     const result = await runGit(
@@ -1890,6 +1897,12 @@ function registerIPC() {
   });
   ipcMain.handle('memory2:putObject', (_, key: string, content: string) => {
     try { return memory2Store().putObject(key, content); } catch { return false; }
+  });
+  ipcMain.handle('memory2:listObjects', (_, prefix: string) => {
+    try { return memory2Store().listObjects(prefix); } catch { return []; }
+  });
+  ipcMain.handle('memory2:deleteObject', (_, key: string) => {
+    try { return memory2Store().deleteObject(key); } catch { return false; }
   });
   ipcMain.handle('memory2:getObject', (_, key: string) => {
     try { return memory2Store().getObject(key); } catch { return null; }
