@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   BRIEF_CEILING_OUTPUT_TOKENS, BRIEF_FLOOR_OUTPUT_TOKENS, PROJECT_BRIEF_SYSTEM_PROMPT,
-  briefFinishReason, briefHasText, briefMaxTokens, parseProjectBrief, projectExecutionPrompt,
+  EXISTING_PROJECT_ADDENDUM, briefFinishReason, briefHasText, briefMaxTokens, briefSystemPrompt,
+  briefUserContent, parseProjectBrief, projectExecutionPrompt,
 } from './projectBrief';
 
 describe('parseProjectBrief', () => {
@@ -97,5 +98,27 @@ describe('projectExecutionPrompt', () => {
 describe('PROJECT_BRIEF_SYSTEM_PROMPT', () => {
   it('makes README.md a mandatory deliverable', () => {
     expect(PROJECT_BRIEF_SYSTEM_PROMPT).toMatch(/README\.md is mandatory/i);
+  });
+});
+
+describe('existing project brief prompt', () => {
+  it('appends project-mode rules without discarding the base prompt', () => {
+    const base = 'BASE BRIEF RULES';
+    const prompt = briefSystemPrompt(base, true);
+    expect(prompt).toContain(base);
+    expect(prompt).toContain(EXISTING_PROJECT_ADDENDUM.trim());
+    expect(prompt).toContain('read first');
+    expect(prompt).toContain('Never tell the implementation agent to create an empty folder');
+  });
+
+  it('keeps the original prompt when no folder is open', () => {
+    expect(briefSystemPrompt('BASE BRIEF RULES', false)).toBe('BASE BRIEF RULES');
+  });
+
+  it('puts the project snapshot before the requested change', () => {
+    const content = briefUserContent('Add dark mode', '## Existing project snapshot\n- package.json');
+    expect(content.indexOf('Existing project snapshot')).toBeLessThan(content.indexOf('## Requested change'));
+    expect(content).toContain('Add dark mode');
+    expect(briefUserContent('Add dark mode', '   ')).toBe('Add dark mode');
   });
 });

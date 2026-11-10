@@ -7,7 +7,7 @@ export default function ProjectBriefComposer() {
   const { t, locale } = useLanguageStore();
   const model = useModelStore((s) => s.getSelectedModel());
   const rootPath = useWorkspaceStore((s) => s.rootPath);
-  const { idea, brief, prompt, generating, starting, error, errorDetail, directory, setIdea, setPrompt, generate, start, cancel } = useProjectBriefStore();
+  const { idea, brief, prompt, generating, starting, projectContext, projectReadError, error, errorDetail, directory, setIdea, setPrompt, generate, start, cancel } = useProjectBriefStore();
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
   const outputRef = useRef<HTMLTextAreaElement>(null);
@@ -37,10 +37,10 @@ export default function ProjectBriefComposer() {
   };
 
   return (
-    <section className="mb-5 rounded-xl border border-[var(--glass-border)] bg-[var(--glass-card)] p-4 min-w-0 shadow-2xs" aria-label={t('briefTitle')}>
+    <section className="mb-5 rounded-xl border border-[var(--glass-border)] bg-[var(--glass-card)] p-4 min-w-0 shadow-2xs" aria-label={t(willReuseFolder ? 'briefTitleExisting' : 'briefTitle')}>
       <div className="flex flex-wrap items-center gap-2 mb-3 min-w-0">
         <FiMessageSquare size={15} className="text-[var(--accent)] shrink-0" />
-        <h2 className="text-[16px] font-bold text-[var(--text-primary)] font-serif tracking-tight truncate">{t('briefTitle')}</h2>
+        <h2 className="text-[16px] font-bold text-[var(--text-primary)] font-serif tracking-tight truncate">{t(willReuseFolder ? 'briefTitleExisting' : 'briefTitle')}</h2>
         <div className="ml-auto flex flex-wrap items-center gap-1.5 text-[10px] font-medium shrink-0" aria-hidden={!brief}>
           <Step label={t('briefStep1')} active={!brief} done={!!brief} />
           <span className="text-[var(--text-muted)]">→</span>
@@ -59,7 +59,7 @@ export default function ProjectBriefComposer() {
           {...compositionProps}
           disabled={busy}
           rows={2}
-          placeholder={t('briefPlaceholder')}
+          placeholder={t(willReuseFolder ? 'briefPlaceholderExisting' : 'briefPlaceholder')}
           className="block w-full resize-y min-h-[56px] max-h-64 bg-transparent text-[15px] font-[450] leading-relaxed text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)] disabled:opacity-60"
         />
         <div className="mt-2 flex items-center gap-2 flex-wrap">
@@ -73,6 +73,21 @@ export default function ProjectBriefComposer() {
           )}
         </div>
       </div>
+
+      {rootPath && (
+        <div className="mt-2 flex items-start gap-1.5 text-[10px] text-[var(--text-muted)] min-w-0">
+          <FiFolder size={11} className="mt-0.5 shrink-0" />
+          <span className="break-words min-w-0">
+            {projectReadError
+              ? t('briefProjectReadFailed')
+              : projectContext
+                ? `${t('briefProjectContext')}: ${projectContext.name} · ${projectContext.fileCount} ${t('briefFiles')}${projectContext.stack.length > 0 ? ` · ${projectContext.stack.slice(0, 3).join(', ')}` : ''}${projectContext.truncated ? ` · ${t('briefProjectTruncated')}` : ''}`
+                : generating
+                  ? t('briefProjectReading')
+                  : `${t('briefProjectWillRead')} · ${rootPath.split(/[\\/]/).filter(Boolean).pop() ?? rootPath}`}
+          </span>
+        </div>
+      )}
 
       {generating && (
         <div role="status" className="mt-3 flex items-center gap-2 text-xs text-[var(--text-secondary)]">

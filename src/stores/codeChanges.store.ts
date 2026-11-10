@@ -307,6 +307,63 @@ export async function undoEffect(change: CodeChange): Promise<{ success: boolean
   }
 }
 
+/** Preflight for a reversible undo: returns a conflict message without touching disk. */
+async function undoConflict(change: CodeChange): Promise<string | null> {
+  try {
+    const kind = change.kind || 'edit';
+    const name = change.filePath.split('/').pop() || change.filePath;
+    if (isIrreversible(change)) return null;
+
+    if (kind === 'create') {
+      const current = await window.electronAPI.fs.readFile(change.filePath);
+      if (current === null) return null; // already gone
+      if (current !== change.newCode) {
+        return `${name} was modified after it was created — delete it manually if you still want it gone.`;
+      }
+      return null;
+    }
+    if (kind === 'edit') {
+      const current = await window.electronAPI.fs.readFile(change.filePath);
+      if (current === null) return `Could not read ${name}`;
+      if (current === change.originalCode) return null;
+      if (reverseEdit(current, change.originalCode, change.newCode) === null) {
+        return `${name} changed after this edit was applied; revert it manually.`;
+      }
+      return null;
+    }
+    if (kind === 'delete') {
+      if (change.originalCode === '[Directory]') {
+        return `Folder contents cannot be restored automatically (${name}).`;
+      }
+      if (await window.electronAPI.fs.exists(change.filePath)) {
+        return `${name} exists again — not overwriting it.`;
+      }
+      return null;
+    }
+    if (kind === 'rename') {
+      const newPath = change.newCode.replace('Rename to: ', '');
+      if (!(await window.electronAPI.fs.exists(newPath))) {
+        return `${newPath.split('/').pop()} is no longer there — rename it back manually.`;
+      }
+      if (await window.electronAPI.fs.exists(change.filePath)) return `${name} already exists — not overwriting it.`;
+      return null;
+    }
+    if (kind === 'copy') {
+      const destPath = change.newCode.replace('Copy to: ', '');
+      const current = await window.electronAPI.fs.readFile(destPath);
+      if (current === null) return null;
+      const source = await window.electronAPI.fs.readFile(change.filePath);
+      if (source !== null && current !== source) {
+        return `${destPath.split('/').pop()} was modified after the copy — delete it manually.`;
+      }
+      return null;
+    }
+    return null;
+  } catch (error: any) {
+    return error?.message || String(error);
+  }
+}
+
 // After an undo, bring the open editor and file tree back in line with disk.
 async function resyncWorkspace(filePath: string) {
   const ws = useWorkspaceStore.getState();
@@ -323,6 +380,13 @@ interface CodeChangesStore {
   revertChange: (id: string) => Promise<{ success: boolean; error?: string }>;
   /** Roll reversible workspace effects and the conversation back to before `messageId`. */
   revertToMessage: (messageId: string) => Promise<{
+    success: boolean;
+    error?: string;
+    undone: number;
+    retainedEffects: number;
+  }>;
+  /** Undo applied effects for messages that are about to be discarded by an edit. */
+  revertChangesForMessages: (conversationId: string, messageIds: Set<string>) => Promise<{
     success: boolean;
     error?: string;
     undone: number;
@@ -530,10 +594,82 @@ export const useCodeChangesStore = create<CodeChangesStore>((set, get) => ({
     return { success: true, undone: undoneIds.size, retainedEffects };
   },
 
+  revertChangesForMessages: async (conversationId, messageIds) => {
+    // Editing a prompt rewrites history from that point on, so applied file
+    // changes made by the discarded turns must be unwound too — otherwise the
+    // workspace keeps code the conversation no longer describes.
+    const affected = get().changes
+      .filter(
+        (change) =>
+          change.messageId &&
+          messageIds.has(change.messageId) &&
+          (!change.conversationId || change.conversationId === conversationId)
+      )
+      .sort((a, b) => b.createdAt - a.createdAt);
+
+    const errors: string[] = [];
+    const undoneIds = new Set<string>();
+    let retainedEffects = 0;
+    // Check every reversible change before writing anything. A conflict must
+    // abort the edit with the workspace untouched, otherwise part of the
+    // discarded turn would be rolled back while its messages remain.
+    for (const change of affected) {
+      if (change.status !== 'applied' || isIrreversible(change)) continue;
+      const conflict = await undoConflict(change);
+      if (conflict) errors.push(conflict);
+    }
+    if (errors.length > 0) {
+      return { success: false, error: errors.join('\n'), undone: 0, retainedEffects };
+    }
+
+    for (const change of affected) {
+      if (change.status !== 'applied') continue;
+      // Commands and computer actions are historical facts; their external
+      // effects cannot be undone, so they stay applied.
+      if (isIrreversible(change)) {
+        retainedEffects += 1;
+        continue;
+      }
+      const undo = await undoEffect(change);
+      if (undo.success) {
+        undoneIds.add(change.id);
+        await resyncWorkspace(change.filePath);
+        try {
+          const { useAiHighlightsStore } = await import('./aiHighlights.store');
+          useAiHighlightsStore.getState().clearFile(change.filePath);
+        } catch {}
+      } else if (undo.error) {
+        errors.push(undo.error);
+      }
+    }
+
+    if (errors.length > 0) {
+      // Keep the partial truth visible: whatever was already restored stays
+      // reverted, and the caller leaves the conversation untouched so the user
+      // can resolve the conflicting files by hand.
+      set((s) => ({
+        changes: s.changes.map((c) => (undoneIds.has(c.id) ? { ...c, status: 'reverted' as const } : c)),
+      }));
+      return { success: false, error: errors.join('\n'), undone: undoneIds.size, retainedEffects };
+    }
+
+    set((s) => ({
+      changes: s.changes.map((change) => {
+        if (!change.messageId || !messageIds.has(change.messageId)) return change;
+        if (change.conversationId && change.conversationId !== conversationId) return change;
+        if (change.status !== 'applied') return change;
+        if (isIrreversible(change)) return change;
+        return { ...change, status: 'reverted' as const };
+      }),
+    }));
+    batchResults.delete(conversationId);
+    return { success: true, undone: undoneIds.size, retainedEffects };
+  },
+
   discardMessageApprovals: (conversationId, messageIds) => {
     batchResults.delete(conversationId);
-    // Editing chat does not undo applied file or external effects. Only drop
-    // unexecuted approvals belonging to the discarded transcript.
+    // Applied effects are unwound by revertChangesForMessages before the edit
+    // truncates history; this only drops unexecuted approvals from that range.
     set((s) => ({ changes: s.changes.filter((c) =>
       !(c.status === 'pending' && c.messageId && messageIds.has(c.messageId))) }));
   },

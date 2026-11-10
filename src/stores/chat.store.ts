@@ -4506,8 +4506,23 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     get().stopGeneration(convId);
     try {
       const { useCodeChangesStore } = await import('./codeChanges.store');
+      // Everything after the edited prompt is about to disappear. Undo its
+      // applied file changes FIRST, so the workspace matches the new history.
+      // If a file can't be restored safely, abort the edit entirely rather than
+      // leaving code that no message describes (or losing the user's own edits).
+      const removedIds = new Set(messages.slice(index + 1).map((m) => m.id));
+      const rollback = await useCodeChangesStore
+        .getState()
+        .revertChangesForMessages(convId, removedIds);
+      if (!rollback.success) {
+        if (get().activeConversationId === convId) {
+          set({
+            error: `Could not roll back the code from this part of the conversation. The edit was cancelled before changing anything; resolve these files first:\n${rollback.error ?? ''}`,
+          });
+        }
+        return;
+      }
       const replacement = await window.electronAPI.message.editAndTruncate(convId, messageId, content);
-      const removedIds = new Set(messages.slice(index).map((m) => m.id));
       useCodeChangesStore.getState().discardMessageApprovals(convId, removedIds);
       set((s) => s.activeConversationId === convId
         ? { messages: [...messages.slice(0, index), replacement] }

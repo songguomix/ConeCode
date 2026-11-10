@@ -73,6 +73,20 @@ function installStubs() {
       fs: {
         readFile: async (p: string) => files.get(p) ?? null,
         writeFile: async (p: string, c: string) => { files.set(p, c); return true; },
+        deleteFile: async (p: string) => files.delete(p),
+        rename: async (from: string, to: string) => {
+          const value = files.get(from);
+          if (value === undefined) return false;
+          files.delete(from);
+          files.set(to, value);
+          return true;
+        },
+        copyFile: async (from: string, to: string) => {
+          const value = files.get(from);
+          if (value === undefined) return false;
+          files.set(to, value);
+          return true;
+        },
         readDir: async () => [{ name: 'a.ts', path: '/proj/a.ts', isDirectory: false }],
         exists: async (p: string) => files.has(p),
         createDir: async () => true,
@@ -121,13 +135,26 @@ describe('runAgentLoop with native tool calling', () => {
     { id: 'later', conversationId: 'conv1', role: 'user', content: 'obsolete followup', createdAt: 4 },
   ];
 
-  it('edits a past prompt and regenerates with only the preceding context', async () => {
+  it('edits a past prompt, rolls back applied code, and regenerates with only preceding context', async () => {
+    files.set('/proj/a.ts', 'new');
     useChatStore.setState({ messages: editHistory() });
     const pending = {
       id: 'pending', kind: 'edit' as const, filePath: '/proj/a.ts', originalCode: 'old', newCode: 'new',
       description: '', status: 'pending' as const, createdAt: 1, conversationId: 'conv1', messageId: 'answer',
     };
-    useCodeChangesStore.setState({ changes: [pending, { ...pending, id: 'applied', status: 'applied' }] });
+    useCodeChangesStore.setState({
+      changes: [
+        pending,
+        { ...pending, id: 'applied', status: 'applied' as const },
+        {
+          ...pending,
+          id: 'earlier', status: 'applied' as const, createdAt: 0, messageId: 'earlier-answer',
+          filePath: '/proj/b.ts', originalCode: 'before', newCode: 'after',
+        },
+      ],
+    });
+    files.set('/proj/b.ts', 'after');
+
     await useChatStore.getState().editMessage('target', 'corrected prompt', 'p1', 'gpt-test');
 
     expect(window.electronAPI.message.editAndTruncate).toHaveBeenCalledWith('conv1', 'target', 'corrected prompt');
@@ -137,8 +164,96 @@ describe('runAgentLoop with native tool calling', () => {
     expect(context).toContain('corrected prompt');
     for (const removed of ['old prompt', 'obsolete answer', 'obsolete followup']) expect(context).not.toContain(removed);
     expect(useChatStore.getState().messages.map((m) => m.content)).toEqual(['keep this context', 'corrected prompt', 'done']);
-    expect(useCodeChangesStore.getState().changes.map((c) => c.id)).toEqual(['applied']);
-    expect(files.get('/proj/a.ts')).toBe('file body');
+    // Applied work from the discarded turn is undone; pending approvals are
+    // dropped; effects from earlier turns stay untouched.
+    expect(files.get('/proj/a.ts')).toBe('old');
+    expect(files.get('/proj/b.ts')).toBe('after');
+    const changes = useCodeChangesStore.getState().changes;
+    expect(changes.find((c) => c.id === 'pending')).toBeUndefined();
+    expect(changes.find((c) => c.id === 'applied')?.status).toBe('reverted');
+    expect(changes.find((c) => c.id === 'earlier')?.status).toBe('applied');
+  });
+
+  it('refuses the edit when discarded code can no longer be restored safely', async () => {
+    files.set('/proj/a.ts', 'user rewrite\n');
+    const history = editHistory();
+    useChatStore.setState({ messages: history });
+    useCodeChangesStore.setState({
+      changes: [{
+        id: 'applied', kind: 'edit', filePath: '/proj/a.ts', originalCode: 'old\n', newCode: 'new\n',
+        description: '', status: 'applied', createdAt: 1, conversationId: 'conv1', messageId: 'answer',
+      }],
+    });
+
+    await useChatStore.getState().editMessage('target', 'corrected', 'p1', 'gpt-test');
+
+    expect(window.electronAPI.message.editAndTruncate).not.toHaveBeenCalled();
+    expect(useChatStore.getState().messages).toEqual(history);
+    expect(useChatStore.getState().error).toContain('Could not roll back');
+    expect(files.get('/proj/a.ts')).toBe('user rewrite\n');
+    expect(useCodeChangesStore.getState().changes[0].status).toBe('applied');
+    expect(streamCalls).toHaveLength(0);
+  });
+
+  it('checks every discarded change before touching disk (no partial rollback)', async () => {
+    files.set('/proj/a.ts', 'new');
+    files.set('/proj/b.ts', 'user rewrite');
+    useChatStore.setState({ messages: editHistory() });
+    useCodeChangesStore.setState({
+      changes: [
+        {
+          id: 'newer', kind: 'edit', filePath: '/proj/a.ts', originalCode: 'old', newCode: 'new',
+          description: '', status: 'applied', createdAt: 2, conversationId: 'conv1', messageId: 'answer',
+        },
+        {
+          id: 'older', kind: 'edit', filePath: '/proj/b.ts', originalCode: 'before', newCode: 'after',
+          description: '', status: 'applied', createdAt: 1, conversationId: 'conv1', messageId: 'later',
+        },
+      ],
+    });
+
+    await useChatStore.getState().editMessage('target', 'corrected', 'p1', 'gpt-test');
+
+    // The conflicting change blocks the whole edit; the undoable one is not
+    // applied partially, so the transcript and workspace stay consistent.
+    expect(window.electronAPI.message.editAndTruncate).not.toHaveBeenCalled();
+    expect(files.get('/proj/a.ts')).toBe('new');
+    expect(files.get('/proj/b.ts')).toBe('user rewrite');
+    expect(useCodeChangesStore.getState().changes.map((c) => c.status)).toEqual(['applied', 'applied']);
+    expect(useChatStore.getState().error).toContain('Could not roll back');
+    expect(streamCalls).toHaveLength(0);
+  });
+
+  it('removes files created by the discarded turn when they are untouched', async () => {
+    files.set('/proj/created.ts', 'export const x = 1;');
+    useChatStore.setState({ messages: editHistory() });
+    useCodeChangesStore.setState({
+      changes: [{
+        id: 'created', kind: 'create', filePath: '/proj/created.ts', originalCode: '', newCode: 'export const x = 1;',
+        description: '', status: 'applied', createdAt: 1, conversationId: 'conv1', messageId: 'answer',
+      }],
+    });
+
+    await useChatStore.getState().editMessage('target', 'corrected', 'p1', 'gpt-test');
+
+    expect(window.electronAPI.message.editAndTruncate).toHaveBeenCalled();
+    expect(files.has('/proj/created.ts')).toBe(false);
+    expect(useCodeChangesStore.getState().changes[0].status).toBe('reverted');
+  });
+
+  it('keeps already-executed commands applied when editing a turn', async () => {
+    useChatStore.setState({ messages: editHistory() });
+    useCodeChangesStore.setState({
+      changes: [{
+        id: 'command', kind: 'exec', filePath: '[Command]', originalCode: '', newCode: 'npm test',
+        description: '', status: 'applied', createdAt: 1, conversationId: 'conv1', messageId: 'answer',
+      }],
+    });
+
+    await useChatStore.getState().editMessage('target', 'corrected', 'p1', 'gpt-test');
+
+    expect(window.electronAPI.message.editAndTruncate).toHaveBeenCalled();
+    expect(useCodeChangesStore.getState().changes[0].status).toBe('applied');
   });
 
   it('keeps the original transcript and reports a failed edit save', async () => {

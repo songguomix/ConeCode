@@ -1,9 +1,11 @@
 import { create } from 'zustand';
 import {
   BRIEF_CEILING_OUTPUT_TOKENS, BRIEF_FLOOR_OUTPUT_TOKENS, PROJECT_BRIEF_SYSTEM_PROMPT,
-  briefFinishReason, briefHasText, briefMaxTokens, parseProjectBrief, projectExecutionPrompt,
+  briefFinishReason, briefHasText, briefMaxTokens, briefSystemPrompt, briefUserContent,
+  parseProjectBrief, projectExecutionPrompt,
   type ProjectBrief,
 } from '../core/agenda/projectBrief';
+import { formatProjectSnapshot, readProjectSnapshot, type ProjectSnapshotFs } from '../core/agenda/projectSnapshot';
 import { createProjectDir } from './autopilot.store';
 import { useChatStore } from './chat.store';
 import { useWorkspaceStore } from './workspace.store';
@@ -24,12 +26,21 @@ function briefErrorKey(error: any): string {
   return 'briefGenerateFailed';
 }
 
+export interface BriefProjectContext {
+  name: string;
+  fileCount: number;
+  stack: string[];
+  truncated: boolean;
+}
+
 interface ProjectBriefStore {
   idea: string;
   brief: ProjectBrief | null;
   prompt: string;
   generating: boolean;
   starting: boolean;
+  projectContext: BriefProjectContext | null;
+  projectReadError: boolean;
   error: string | null;
   /** Raw failure text, shown under the friendly message so it is diagnosable. */
   errorDetail: string | null;
@@ -42,11 +53,15 @@ interface ProjectBriefStore {
 }
 
 export const useProjectBriefStore = create<ProjectBriefStore>((set, get) => ({
-  idea: '', brief: null, prompt: '', generating: false, starting: false, error: null, errorDetail: null, directory: null,
+  idea: '', brief: null, prompt: '', generating: false, starting: false, projectContext: null, projectReadError: false,
+  error: null, errorDetail: null, directory: null,
   setIdea: (idea) => {
     if (get().starting) return;
     generation++;
-    set({ idea, brief: null, prompt: '', generating: false, error: null, errorDetail: null });
+    set({
+      idea, brief: null, prompt: '', generating: false, error: null, errorDetail: null,
+      projectContext: null, projectReadError: false,
+    });
   },
   setPrompt: (prompt) => { if (!get().starting) set({ prompt }); },
   cancel: () => { generation++; set({ generating: false }); },
@@ -54,8 +69,36 @@ export const useProjectBriefStore = create<ProjectBriefStore>((set, get) => ({
     const idea = get().idea.trim();
     if (!idea || !providerId || !modelId || get().generating || get().starting) return;
     const request = ++generation;
-    set({ generating: true, error: null, errorDetail: null });
+    set({ generating: true, error: null, errorDetail: null, projectContext: null, projectReadError: false });
     try {
+      // Existing folder: read the real project before the model designs the prompt,
+      // so the brief is grounded in the current code instead of new-project boilerplate.
+      const rootPath = useWorkspaceStore.getState().rootPath;
+      let snapshotText = '';
+      if (rootPath) {
+        try {
+          const fsAdapter: ProjectSnapshotFs = {
+            readDir: (dirPath) => window.electronAPI.fs.readDir(dirPath),
+            readFile: (filePath) => window.electronAPI.fs.readFile(filePath),
+            join: (dirPath, name) => `${dirPath.replace(/[\\/]+$/, '')}/${name}`,
+          };
+          const snapshot = await readProjectSnapshot(rootPath, fsAdapter);
+          if (request !== generation) return;
+          snapshotText = formatProjectSnapshot(snapshot);
+          set({
+            projectContext: {
+              name: snapshot.name,
+              fileCount: snapshot.fileCount,
+              stack: snapshot.stack,
+              truncated: snapshot.truncated,
+            },
+          });
+        } catch (snapshotError) {
+          console.warn('[brief] project snapshot failed:', snapshotError);
+          if (request !== generation) return;
+          set({ projectReadError: true });
+        }
+      }
       let model: { maxOutputTokens?: number } | null = null;
       try {
         const { useModelStore } = await import('./model.store');
@@ -66,11 +109,15 @@ export const useProjectBriefStore = create<ProjectBriefStore>((set, get) => ({
       // return nothing, which surfaced as the misleading "check your model
       // connection" message. Size the budget from the model itself.
       let maxTokens = briefMaxTokens(model);
+      const systemPrompt = briefSystemPrompt(
+        usePromptStore.getState().getPrompt('project_brief'),
+        Boolean(snapshotText)
+      );
       const call = (tokens: number) => window.electronAPI.chat.stream({
         providerId, modelId, silent: true, maxTokens: tokens,
         messages: [
-          { role: 'system', content: `${usePromptStore.getState().getPrompt('project_brief')}\nWrite the title and prompt in ${locale === 'zh' ? 'Simplified Chinese' : locale === 'zhHant' ? 'Traditional Chinese' : locale === 'ja' ? 'Japanese' : 'English'}, unless the user explicitly requests another language.` },
-          { role: 'user', content: idea },
+          { role: 'system', content: `${systemPrompt}\nWrite the title and prompt in ${locale === 'zh' ? 'Simplified Chinese' : locale === 'zhHant' ? 'Traditional Chinese' : locale === 'ja' ? 'Japanese' : 'English'}, unless the user explicitly requests another language.` },
+          { role: 'user', content: briefUserContent(idea, snapshotText) },
         ],
       });
       let result = await call(maxTokens);
