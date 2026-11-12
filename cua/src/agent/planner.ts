@@ -391,7 +391,12 @@ RULES
 8. Keep screenshots rare and use structured targets when the observation provides them. Unicode typing is supported.
 9. The runtime tracks UNKNOWN outcomes. After a timeout or disconnect, observe and verify before retrying a write; never blindly resubmit.
 10. Do not exfiltrate secrets or browse outside the authorized origins.
-
+${driverKind === 'desktop' ? `
+DESKTOP SCOPE
+- The observation covers exactly one app window. Its screenshot and target coordinates are window-local points; never compute points outside that window and never assume what other apps or windows show.
+- Prefer desktop_press and desktop_set_value with a targetId from the CURRENT observation over guessing click coordinates.
+- A stale/target error means the window moved, resized, changed or lost focus: observe again (desktop_screenshot) instead of retrying the same coordinates.
+` : ''}
 MODEL CAPABILITIES (explicit): ${JSON.stringify(capabilities)}
 Be concise, deterministic and evidence-oriented.`;
 }

@@ -174,7 +174,8 @@ export const TOOL_DEFINITIONS: Array<ModelTool & { actionTool?: string }> = [
   },
   {
     name: 'desktop_click',
-    description: 'Click at screenshot coordinates from the latest desktop observation (the driver converts via recorded scale metadata).',
+    description:
+      'Click a point on the latest window screenshot (image pixels of the scoped app window, not the whole screen). The driver refuses points outside that window.',
     parameters: {
       type: 'object',
       properties: {
@@ -187,6 +188,36 @@ export const TOOL_DEFINITIONS: Array<ModelTool & { actionTool?: string }> = [
       additionalProperties: false,
     },
     actionTool: 'desktop.click',
+  },
+  {
+    name: 'desktop_press',
+    description:
+      'Activate an element through the accessibility API without moving the pointer. Prefer this over clicking when the observation lists a matching target: pass its targetId, or x/y coordinates from the latest window screenshot.',
+    parameters: {
+      type: 'object',
+      properties: {
+        targetId: { type: 'string' },
+        x: { type: 'number' },
+        y: { type: 'number' },
+      },
+      additionalProperties: false,
+    },
+    actionTool: 'desktop.press',
+  },
+  {
+    name: 'desktop_set_value',
+    description:
+      'Write text into a text field of the scoped app through the accessibility API. The value is read back and the action reports whether it matched.',
+    parameters: {
+      type: 'object',
+      properties: {
+        targetId: { type: 'string' },
+        value: { type: 'string' },
+      },
+      required: ['targetId', 'value'],
+      additionalProperties: false,
+    },
+    actionTool: 'desktop.set_value',
   },
   {
     name: 'desktop_type',
@@ -254,7 +285,7 @@ export const TOOL_DEFINITIONS: Array<ModelTool & { actionTool?: string }> = [
   },
   {
     name: 'desktop_screenshot',
-    description: 'Capture the current desktop display and refresh coordinates.',
+    description: 'Capture the scoped app window again and refresh coordinates (does not read other apps).',
     parameters: { type: 'object', properties: {}, additionalProperties: false },
     actionTool: 'desktop.screenshot',
   },

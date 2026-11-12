@@ -22,8 +22,8 @@ npm run demo:desktop
 # 或在完整证据链中执行：npm run verify:delivery -- --desktop
 ```
 
-首次显式桌面测试因自动化授权等待超时，失败证据保留于 `artifacts/desktop-attempt/`。用户允许后，6 项桌面用例通过，包括原生点击/Unicode/Meta+A、焦点切换与窗口移动。最后由完整验收重跑，核对同一源码指纹。
-默认测试将四个桌面交互用例标为跳过；显式 `--desktop` 执行它们。
+首次显式桌面测试因自动化授权等待超时，失败证据保留于 `artifacts/desktop-attempt/`。用户允许后，7 项桌面用例通过：单 app 单窗口观察（窗口截图 + 无障碍子树）、窗口内原生点击/Unicode/Meta+A、焦点切换与窗口移动、AX 写值与独立 AppleScript 重读、窗口外坐标拒绝、AX 点按。最后由完整验收重跑，核对同一源码指纹。
+默认测试将桌面硬件用例标为跳过；显式 `CUA_RUN_DESKTOP=1`（或 `--desktop`）执行它们。纯逻辑（窗口选择、窗口局部坐标、AX 树裁剪与目标映射）在 `test/app-scope.test.ts` 中始终运行，不需要屏幕录制权限。
 
 分层与证据：
 

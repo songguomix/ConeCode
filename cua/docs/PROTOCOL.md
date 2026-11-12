@@ -41,6 +41,9 @@ are carried where relevant.
     maxWallClockMs, maxCostUsd, maxInputTokens, maxOutputTokens
   },
   environment: BrowserEnvironment | DesktopEnvironment,
+  // DesktopEnvironment: { scope: 'app'|'display', appName?, bundleId?,
+  //                       windowTitle?, windowId?, workdir? }
+  // 'app' (default) reads exactly one app window; 'display' is opt-in.
   status: TaskStatus,
   statusReason?, createdAt, updatedAt, version,
   sessionId?, lastObservationId?, terminalReason?,
@@ -89,7 +92,7 @@ Actions are a discriminated union on `tool`:
 
 - `browser.navigate/open_tab/switch_tab/close_tab`
 - `browser.click/fill/type/press/scroll/hover/drag/wait_for/screenshot/observe`
-- `desktop.click/move/drag/type/key/scroll/screenshot/focus_app/open_app/edit_document`
+- `desktop.click/move/drag/type/key/scroll/screenshot/press/set_value/focus_app/open_app/edit_document`
 - `code.run`
 - `task.finish` (handled by the controller/verifier, never the executor driver)
 

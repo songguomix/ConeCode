@@ -116,13 +116,38 @@ func status(_ id: String) -> [String: Any] {
 func screenshot(_ id: String, _ req: [String: Any]) -> [String: Any] {
     let path = string(req, "path")
     if path.isEmpty { return fail(id, "PROTOCOL", "screenshot requires path") }
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-    var args = ["-x", "-m", "-C", "-t", "png"]
-    if let windowId = req["windowId"] as? NSNumber {
-        args.append(contentsOf: ["-l", String(windowId.intValue)])
+    let windowId = int(req, "windowId", 0)
+    var args = ["-x", "-t", "png"]
+    var logicalWidth = 0.0
+    var logicalHeight = 0.0
+    var originX = 0.0
+    var originY = 0.0
+    var scale = 1.0
+    if windowId > 0 {
+        guard let record = windowRecords(onScreenOnly: false).first(where: { $0.windowId == windowId }) else {
+            return fail(id, "TARGET_NOT_FOUND", "window \(windowId) is no longer available")
+        }
+        // -o drops the window shadow. With the shadow the captured pixels no
+        // longer start at the window frame, which would shift every coordinate.
+        args.append(contentsOf: ["-o", "-l", String(windowId)])
+        logicalWidth = Double(record.bounds.width)
+        logicalHeight = Double(record.bounds.height)
+        originX = Double(record.bounds.origin.x)
+        originY = Double(record.bounds.origin.y)
+        scale = record.scale
+    } else {
+        args.append(contentsOf: ["-m", "-C"])
+        let screen = NSScreen.main
+        logicalWidth = Double(screen?.frame.width ?? 0)
+        logicalHeight = Double(screen?.frame.height ?? 0)
+        scale = Double(screen?.backingScaleFactor ?? 1)
+    }
+    if logicalWidth <= 0 || logicalHeight <= 0 {
+        return fail(id, "DRIVER", "could not determine the capture area")
     }
     args.append(path)
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
     process.arguments = args
     do {
         try process.run()
@@ -139,21 +164,406 @@ func screenshot(_ id: String, _ req: [String: Any]) -> [String: Any] {
           let height = props[kCGImagePropertyPixelHeight as String] as? NSNumber else {
         return fail(id, "DRIVER", "could not read screenshot dimensions")
     }
-    let screen = NSScreen.main
-    let logicalWidth = screen?.frame.width ?? 0
-    let logicalHeight = screen?.frame.height ?? 0
     return ok(id, [
         "path": path,
         "width": width.intValue,
         "height": height.intValue,
         "logicalWidth": logicalWidth,
         "logicalHeight": logicalHeight,
-        "scaleX": logicalWidth > 0 ? Double(width.intValue) / logicalWidth : 1,
-        "scaleY": logicalHeight > 0 ? Double(height.intValue) / logicalHeight : 1,
-        "scale": screen?.backingScaleFactor ?? 1,
+        "scaleX": Double(width.intValue) / logicalWidth,
+        "scaleY": Double(height.intValue) / logicalHeight,
+        "scale": scale,
+        "windowId": windowId,
+        "origin": ["x": originX, "y": originY],
         "screenRecording": screenAccess(),
     ])
 }
+
+// ---------------------------------------------------------------------------
+// Window and accessibility-tree observation for single-app computer use.
+// ---------------------------------------------------------------------------
+
+struct WindowRecord {
+    let windowId: Int
+    let pid: Int
+    let appName: String
+    let bundleId: String
+    /// Bundle display name without .app, e.g. "TextEdit" on a Chinese system
+    /// where the window owner name is localised ("文本编辑").
+    let bundleName: String
+    let title: String
+    let bounds: CGRect
+    let scale: Double
+}
+
+func screenFor(rect: CGRect) -> NSScreen? {
+    let center = CGPoint(x: rect.midX, y: rect.midY)
+    return NSScreen.screens.first { $0.frame.contains(center) } ?? NSScreen.main
+}
+
+/// Layer-0 windows in front-to-back order. Callers pick exactly one.
+func windowRecords(onScreenOnly: Bool) -> [WindowRecord] {
+    var options: CGWindowListOption = [.excludeDesktopElements]
+    if onScreenOnly { options.insert(.optionOnScreenOnly) }
+    guard let raw = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else { return [] }
+    var seen = Set<Int>()
+    var records: [WindowRecord] = []
+    for entry in raw {
+        guard let number = (entry[kCGWindowNumber as String] as? NSNumber)?.intValue else { continue }
+        let layer = (entry[kCGWindowLayer as String] as? NSNumber)?.intValue ?? -1
+        if layer != 0 { continue }
+        let pid = (entry[kCGWindowOwnerPID as String] as? NSNumber)?.intValue ?? -1
+        if pid <= 0 || seen.contains(number) { continue }
+        var bounds = CGRect.zero
+        if let dict = entry[kCGWindowBounds as String] as? NSDictionary,
+           let parsed = CGRect(dictionaryRepresentation: dict as CFDictionary) {
+            bounds = parsed
+        }
+        if bounds.width < 1 || bounds.height < 1 { continue }
+        seen.insert(number)
+        let appName = entry[kCGWindowOwnerName as String] as? String ?? ""
+        let running = NSRunningApplication(processIdentifier: pid_t(pid))
+        let bundleId = running?.bundleIdentifier ?? ""
+        let bundleName = running?.bundleURL?.deletingPathExtension().lastPathComponent ?? ""
+        let title = entry[kCGWindowName as String] as? String ?? ""
+        let scale = Double(screenFor(rect: bounds)?.backingScaleFactor ?? 1)
+        records.append(WindowRecord(
+            windowId: number,
+            pid: pid,
+            appName: appName,
+            bundleId: bundleId,
+            bundleName: bundleName,
+            title: title,
+            bounds: bounds,
+            scale: scale
+        ))
+    }
+    return records
+}
+
+func windows(_ id: String, _ req: [String: Any]) -> [String: Any] {
+    let pid = int(req, "pid", 0)
+    let appFilter = string(req, "appName").lowercased()
+    let bundleFilter = string(req, "bundleId").lowercased()
+    let limit = max(1, min(200, int(req, "limit", 60)))
+    var list: [[String: Any]] = []
+    for record in windowRecords(onScreenOnly: true) {
+        if pid > 0 && record.pid != pid { continue }
+        let name = record.appName.lowercased()
+        let bundle = record.bundleId.lowercased()
+        let bundleName = record.bundleName.lowercased()
+        if !appFilter.isEmpty && !name.contains(appFilter) && !bundle.contains(appFilter) && !bundleName.contains(appFilter) { continue }
+        if !bundleFilter.isEmpty && !bundle.contains(bundleFilter) && !name.contains(bundleFilter) && !bundleName.contains(bundleFilter) { continue }
+        if list.count >= limit { break }
+        list.append([
+            "windowId": record.windowId,
+            "pid": record.pid,
+            "appName": record.appName,
+            "bundleId": record.bundleId,
+            "bundleName": record.bundleName,
+            "title": record.title,
+            "bounds": [
+                "x": Double(record.bounds.origin.x),
+                "y": Double(record.bounds.origin.y),
+                "width": Double(record.bounds.size.width),
+                "height": Double(record.bounds.size.height),
+            ],
+            "scale": record.scale,
+        ])
+    }
+    return ok(id, ["count": list.count, "windows": list])
+}
+
+func axAttributes(_ element: AXUIElement, _ names: [String]) -> [String: Any] {
+    var values: CFArray?
+    let status = AXUIElementCopyMultipleAttributeValues(
+        element,
+        names as CFArray,
+        AXCopyMultipleAttributeOptions(rawValue: 0),
+        &values
+    )
+    guard status == .success, let array = values as? [Any] else { return [:] }
+    var result: [String: Any] = [:]
+    for (index, value) in array.enumerated() where index < names.count {
+        if let text = value as? String {
+            result[names[index]] = text
+        } else if let number = value as? NSNumber {
+            result[names[index]] = number
+        }
+    }
+    return result
+}
+
+func axAttribute(_ element: AXUIElement, _ name: String) -> String {
+    guard let value = axAttributes(element, [name])[name] as? String else { return "" }
+    return value
+}
+
+func axFrame(_ element: AXUIElement) -> CGRect? {
+    var positionRef: CFTypeRef?
+    var sizeRef: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &positionRef) == .success,
+          AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeRef) == .success,
+          let positionValue = positionRef, let sizeValue = sizeRef,
+          CFGetTypeID(positionValue) == AXValueGetTypeID(),
+          CFGetTypeID(sizeValue) == AXValueGetTypeID() else { return nil }
+    var origin = CGPoint.zero
+    var size = CGSize.zero
+    guard AXValueGetValue(unsafeBitCast(positionValue, to: AXValue.self), .cgPoint, &origin),
+          AXValueGetValue(unsafeBitCast(sizeValue, to: AXValue.self), .cgSize, &size) else { return nil }
+    return CGRect(origin: origin, size: size)
+}
+
+func axChildren(_ element: AXUIElement) -> [AXUIElement] {
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &value) == .success,
+          let children = value as? [AXUIElement] else { return [] }
+    return children
+}
+
+func axWindows(_ application: AXUIElement) -> [AXUIElement] {
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &value) == .success,
+          let windows = value as? [AXUIElement] else { return [] }
+    return windows
+}
+
+func axActions(_ element: AXUIElement) -> [String] {
+    var names: CFArray?
+    guard AXUIElementCopyActionNames(element, &names) == .success, let list = names as? [String] else { return [] }
+    return list
+}
+
+func axElement(_ application: AXUIElement, path: String) -> AXUIElement? {
+    if path.isEmpty { return application }
+    var current = application
+    for part in path.split(separator: "/") {
+        guard let index = Int(part) else { return nil }
+        let children = axChildren(current)
+        guard index >= 0 && index < children.count else { return nil }
+        current = children[index]
+    }
+    return current
+}
+
+func axTree(_ id: String, _ req: [String: Any]) -> [String: Any] {
+    if !accessibilityTrusted() {
+        return fail(id, "PERMISSION", "Accessibility permission is missing; the app accessibility tree cannot be read.")
+    }
+    let pid = int(req, "pid", 0)
+    if pid <= 0 { return fail(id, "PROTOCOL", "ax_tree requires pid") }
+    let maxDepth = max(1, min(20, int(req, "maxDepth", 10)))
+    let maxNodes = max(1, min(2_000, int(req, "maxNodes", 320)))
+    // When the caller scopes to one window, do not even walk other windows of
+    // the same app or its menu bar: the tree stays about the scoped interface.
+    let wantedFrame = (req["bounds"] as? [String: Any]).flatMap { rectFrom($0) }
+    func windowMatches(_ element: AXUIElement) -> Bool {
+        guard let wanted = wantedFrame, let frame = axFrame(element) else { return wantedFrame == nil }
+        return abs(frame.origin.x - wanted.origin.x) <= 8 &&
+            abs(frame.origin.y - wanted.origin.y) <= 8 &&
+            abs(frame.size.width - wanted.size.width) <= 8 &&
+            abs(frame.size.height - wanted.size.height) <= 8
+    }
+    let names = [
+        kAXRoleAttribute as String,
+        kAXSubroleAttribute as String,
+        kAXTitleAttribute as String,
+        kAXValueAttribute as String,
+        kAXDescriptionAttribute as String,
+        kAXIdentifierAttribute as String,
+        kAXEnabledAttribute as String,
+        kAXFocusedAttribute as String,
+        kAXSelectedAttribute as String,
+    ]
+    let application = AXUIElementCreateApplication(pid_t(pid))
+    var nodes: [[String: Any]] = []
+    var truncated = false
+    func walk(_ element: AXUIElement, _ path: String, _ depth: Int) {
+        if nodes.count >= maxNodes { truncated = true; return }
+        let values = axAttributes(element, names)
+        var node: [String: Any] = ["path": path, "depth": depth]
+        node["role"] = (values[kAXRoleAttribute as String] as? String).map { String($0.prefix(200)) } ?? ""
+        if let subrole = values[kAXSubroleAttribute as String] as? String, !subrole.isEmpty {
+            node["subrole"] = String(subrole.prefix(200))
+        }
+        if let identifier = values[kAXIdentifierAttribute as String] as? String, !identifier.isEmpty {
+            node["identifier"] = String(identifier.prefix(200))
+        }
+        if let title = values[kAXTitleAttribute as String] as? String, !title.isEmpty {
+            node["title"] = String(title.prefix(200))
+        }
+        if let description = values[kAXDescriptionAttribute as String] as? String, !description.isEmpty {
+            node["description"] = String(description.prefix(200))
+        }
+        if let value = values[kAXValueAttribute as String] as? String, !value.isEmpty {
+            node["value"] = String(value.prefix(200))
+        }
+        if let enabled = values[kAXEnabledAttribute as String] as? NSNumber {
+            node["enabled"] = enabled.boolValue
+        }
+        if let focused = values[kAXFocusedAttribute as String] as? NSNumber {
+            node["focused"] = focused.boolValue
+        }
+        if let selected = values[kAXSelectedAttribute as String] as? NSNumber {
+            node["selected"] = selected.boolValue
+        }
+        if let frame = axFrame(element) {
+            node["x"] = Double(frame.origin.x)
+            node["y"] = Double(frame.origin.y)
+            node["width"] = Double(frame.size.width)
+            node["height"] = Double(frame.size.height)
+        }
+        let actions = axActions(element)
+        if !actions.isEmpty { node["actions"] = actions }
+        nodes.append(node)
+        guard depth < maxDepth else { return }
+        let children = axChildren(element)
+        for (index, child) in children.enumerated() {
+            let childPath = path.isEmpty ? String(index) : "\(path)/\(index)"
+            if depth == 0 {
+                let role = axAttribute(child, kAXRoleAttribute as String)
+                if role == (kAXMenuBarRole as String) { continue }
+                if role == "AXMenuBar" || role == "AXWindow" || role == "AXSheet" || role == "AXDialog" {
+                    if !windowMatches(child) { continue }
+                }
+            }
+            walk(child, childPath, depth + 1)
+            if nodes.count >= maxNodes { truncated = true; break }
+        }
+    }
+    walk(application, "", 0)
+    return ok(id, ["pid": pid, "count": nodes.count, "truncated": truncated, "nodes": nodes])
+}
+
+func axPress(_ id: String, _ req: [String: Any]) -> [String: Any] {
+    if !accessibilityTrusted() {
+        return fail(id, "PERMISSION", "Accessibility permission is missing; no accessibility action was performed.")
+    }
+    let pid = int(req, "pid", 0)
+    if pid <= 0 { return fail(id, "PROTOCOL", "ax_press requires pid") }
+    let application = AXUIElementCreateApplication(pid_t(pid))
+    var target: AXUIElement?
+    let path = string(req, "path")
+    if !path.isEmpty {
+        guard let resolved = axElement(application, path: path) else {
+            return fail(id, "TARGET_NOT_FOUND", "accessibility element \(path) is gone; observe the app again")
+        }
+        target = resolved
+    } else if req["x"] != nil && req["y"] != nil {
+        var hit: AXUIElement?
+        let status = AXUIElementCopyElementAtPosition(application, Float(double(req, "x")), Float(double(req, "y")), &hit)
+        guard status == .success, let resolved = hit else {
+            return fail(id, "TARGET_NOT_FOUND", "no accessibility element at that point")
+        }
+        target = resolved
+    } else {
+        return fail(id, "PROTOCOL", "ax_press requires path or x/y")
+    }
+    guard let element = target else { return fail(id, "TARGET_NOT_FOUND", "element could not be resolved") }
+    let actions = axActions(element)
+    guard let action = [kAXPressAction as String, "AXConfirm", "AXOpen"].first(where: { actions.contains($0) }) else {
+        return fail(id, "ACTION_UNSUPPORTED", "element exposes no press-like action (actions: \(actions.joined(separator: ",")))")
+    }
+    let status = AXUIElementPerformAction(element, action as CFString)
+    guard status == .success else {
+        return fail(id, "ACTION", "AX action \(action) failed with code \(status.rawValue)")
+    }
+    let values = axAttributes(element, [
+        kAXRoleAttribute as String,
+        kAXTitleAttribute as String,
+        kAXDescriptionAttribute as String,
+        kAXValueAttribute as String,
+    ])
+    var result: [String: Any] = ["performed": action]
+    if let role = values[kAXRoleAttribute as String] as? String, !role.isEmpty { result["role"] = String(role.prefix(200)) }
+    if let title = values[kAXTitleAttribute as String] as? String, !title.isEmpty { result["title"] = String(title.prefix(200)) }
+    if let description = values[kAXDescriptionAttribute as String] as? String, !description.isEmpty {
+        result["description"] = String(description.prefix(200))
+    }
+    if let value = values[kAXValueAttribute as String] as? String, !value.isEmpty { result["value"] = String(value.prefix(200)) }
+    return ok(id, result)
+}
+
+func axSetValue(_ id: String, _ req: [String: Any]) -> [String: Any] {
+    if !accessibilityTrusted() {
+        return fail(id, "PERMISSION", "Accessibility permission is missing; no value was written.")
+    }
+    let pid = int(req, "pid", 0)
+    let path = string(req, "path")
+    if pid <= 0 || path.isEmpty { return fail(id, "PROTOCOL", "ax_set_value requires pid and path") }
+    let application = AXUIElementCreateApplication(pid_t(pid))
+    guard let target = axElement(application, path: path) else {
+        return fail(id, "TARGET_NOT_FOUND", "accessibility element \(path) is gone; observe the app again")
+    }
+    var settable = DarwinBoolean(false)
+    let settableStatus = AXUIElementIsAttributeSettable(target, kAXValueAttribute as CFString, &settable)
+    guard settableStatus == .success, settable.boolValue else {
+        return fail(id, "ACTION_UNSUPPORTED", "element does not accept accessibility value writes")
+    }
+    let text = string(req, "value")
+    let status = AXUIElementSetAttributeValue(target, kAXValueAttribute as CFString, text as CFString)
+    guard status == .success else {
+        return fail(id, "ACTION", "AX value write failed with code \(status.rawValue)")
+    }
+    let after = axAttribute(target, kAXValueAttribute as String)
+    return ok(id, ["value": after, "matches": after == text])
+}
+
+func rectFrom(_ dict: [String: Any]) -> CGRect? {
+    func number(_ key: String) -> Double? {
+        if let value = dict[key] as? NSNumber { return value.doubleValue }
+        if let value = dict[key] as? Double { return value }
+        if let value = dict[key] as? Int { return Double(value) }
+        return nil
+    }
+    guard let x = number("x"), let y = number("y"),
+          let width = number("width"), let height = number("height") else { return nil }
+    return CGRect(x: x, y: y, width: width, height: height)
+}
+
+/// Bring one app (and, when a frame is supplied, one of its windows) to the
+/// front so a scoped input action reaches the window it was planned against.
+func activate(_ id: String, _ req: [String: Any]) -> [String: Any] {
+    let pid = int(req, "pid", 0)
+    if pid <= 0 { return fail(id, "PROTOCOL", "activate requires pid") }
+    guard let app = NSRunningApplication(processIdentifier: pid_t(pid)) else {
+        return fail(id, "TARGET_NOT_FOUND", "process \(pid) is not running")
+    }
+    var raised = false
+    var matchedTitle = ""
+    if accessibilityTrusted(), let dict = req["bounds"] as? [String: Any], let wanted = rectFrom(dict) {
+        let application = AXUIElementCreateApplication(pid_t(pid))
+        for window in axWindows(application) {
+            guard let frame = axFrame(window) else { continue }
+            let close = abs(frame.origin.x - wanted.origin.x) <= 2 &&
+                abs(frame.origin.y - wanted.origin.y) <= 2 &&
+                abs(frame.size.width - wanted.size.width) <= 2 &&
+                abs(frame.size.height - wanted.size.height) <= 2
+            if close {
+                raised = AXUIElementPerformAction(window, kAXRaiseAction as CFString) == .success
+                matchedTitle = axAttribute(window, kAXTitleAttribute as String)
+                break
+            }
+        }
+    }
+    let activated = app.activate(options: [.activateAllWindows])
+    var frontmost = false
+    for _ in 0..<12 {
+        if NSWorkspace.shared.frontmostApplication?.processIdentifier == pid_t(pid) {
+            frontmost = true
+            break
+        }
+        usleep(50_000)
+    }
+    return ok(id, [
+        "pid": pid,
+        "activated": activated,
+        "raised": raised,
+        "frontmost": frontmost,
+        "title": matchedTitle,
+    ])
+}
+
 
 enum MouseButton {
     case left, right, middle
@@ -373,6 +783,11 @@ while let line = readLine() {
     case "key": response = key(id, request)
     case "type": response = typeText(id, request)
     case "focus": response = focusApp(id, request)
+    case "windows": response = windows(id, request)
+    case "activate": response = activate(id, request)
+    case "ax_tree": response = axTree(id, request)
+    case "ax_press": response = axPress(id, request)
+    case "ax_set_value": response = axSetValue(id, request)
     case "panic": response = panic(id)
     default: response = fail(id, "PROTOCOL", "unknown op \(op)")
     }

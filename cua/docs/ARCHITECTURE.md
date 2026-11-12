@@ -26,7 +26,7 @@ The central rule is:
 | Verifier | Programmatic conditions, task/recovery verification, evidence | `src/agent/verifier.ts` |
 | RuntimeManager | Persistent code child, UI RPC bridge, timeout/termination | `src/runtime/` |
 | BrowserDriver | Playwright Chromium session, tabs, snapshots, actions | `src/drivers/browser/` |
-| MacDesktopDriver | CGEvent helper, screenshots, TextEdit scripting fallback | `src/drivers/desktop/` |
+| MacDesktopDriver | One-app window observation (window screenshot + accessibility subtree), CGEvent helper, accessibility press/value, TextEdit scripting fallback | `src/drivers/desktop/` |
 | SessionStore / EventLog | SQLite WAL, tasks/sessions/actions/observations/verifications/checkpoints/leases/workflows | `src/store/` |
 | Coordinator | Queue, concurrency, resource serialization, leases | `src/service/runtime-service.ts` |
 | Monitor | Read-only event consumer, repeated actions/failures/stalls | `src/agent/monitor.ts` |
@@ -153,8 +153,12 @@ reused; the next run starts fresh.
    create a document, set its text and save to an authorized path. This is
    labelled as app scripting, not raw input. It has a file-content acceptance check and passed after the user allowed system Automation. Native input and app-scripting save are separate channels.
 
-Screenshots cover the main display and report logical/pixel scale. Multi-display
-coordinates and window movement are not claimed as verified.
+Observations are single-app by default: `scope: 'app'` captures exactly one
+window (window-only screenshot with its screen origin and scale) plus that
+window's accessibility subtree, and refuses input outside it. `scope: 'display'`
+is the opt-in legacy whole-main-display capture, kept for debugging and without
+structured targets. Screenshots report logical/pixel scale; multi-display
+capture and window movement are not claimed as verified.
 
 ## Persistence and recovery
 

@@ -8,6 +8,7 @@
 - 已完成：协议/状态机、SQLite 日志与恢复、浏览器/桌面驱动、受控代码运行时、调度器、React 控制台、CLI/SDK/MCP；本轮增加权限、生命周期、旧引用、UNKNOWN 和接口回归修复。
 - 模型：无 `OPENAI_API_KEY`；真实模型 smoke 与浏览器闭环保留为显式待运行，HTTP 替身只验证接口。
 - 桌面：用户已允许系统自动化授权。最新录屏/事件权限为 true；原生点击、Unicode、Meta+A、焦点切换、窗口移动检测以及 TextEdit 应用脚本保存/文件读回均通过。当前为宿主专属文稿，不是隔离 guest。
+  本轮改为默认单 app 单窗口：观察只取目标窗口截图与其无障碍子树（其他 app/窗口不读），`desktop.press`/`desktop.set_value` 直接操作 AX 目标，窗口外坐标拒绝，输入前校验目标 app 在前台；`scope: "display"` 保留为排障用的全屏 opt-in。
 - Docker：CLI 存在、daemon 不可连接；镜像启动配置尚未实测。
 - 当前验收与准确状态：见 [交付报告](DELIVERY.zh-CN.md)、[阶段记录](PHASES.md)。最终代码版本使用 `artifacts/delivery/report.json` 中的源码 SHA-256 清单识别，不能只用基线 Git HEAD。
 

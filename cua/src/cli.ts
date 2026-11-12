@@ -47,6 +47,8 @@ async function main(): Promise<void> {
       goal: { type: 'string' },
       acceptance: { type: 'string' },
       url: { type: 'string' },
+      app: { type: 'string' },
+      scope: { type: 'string' },
       script: { type: 'string' },
       model: { type: 'string' },
       'base-url': { type: 'string' },
@@ -156,7 +158,13 @@ async function task(args: string[], values: Record<string, any>): Promise<void> 
       const acceptance = JSON.parse(values.acceptance) as Condition[];
       const environment = values.url
         ? { kind: 'browser' as const, startUrl: values.url, headless: true, profile: 'default' }
-        : { kind: 'desktop' as const };
+        : {
+            kind: 'desktop' as const,
+            // Desktop computer use reads exactly one app window unless the
+            // caller explicitly opts into whole-display capture.
+            scope: values.scope === 'display' ? ('display' as const) : ('app' as const),
+            ...(values.app ? { appName: values.app } : {}),
+          };
       const input: CreateTaskInput = {
         goal: values.goal,
         constraints: [],

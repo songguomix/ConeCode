@@ -37,6 +37,7 @@ authorization and tenant isolation.
 | Secret leakage | Event payload redaction; token files 0600; no API key in task/events; minimal child env | Page text/screenshot may contain secrets; user must not expose them to a model |
 | Two agents writing one session | One controller per session, resource scheduler, DB lease/fencing, takeover waits for in-flight action | Multi-worker deployment is not fully tested |
 | Monitor disturbing the screen | Monitor only reads events; no focus/action APIs | A separate user/process can still change the desktop |
+| Reading/acting on the wrong app | Desktop observations are single-app by default: one window's screenshot + accessibility subtree, input refused outside it and only sent to a verified frontmost app | The app itself may show data from elsewhere; `scope: 'display'` (opt-in) reads the whole display |
 
 ## Explicit non-goals
 

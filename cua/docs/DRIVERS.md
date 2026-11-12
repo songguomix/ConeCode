@@ -73,26 +73,62 @@ controller does not assume a page is ready merely because an action returned.
 
 ## macOS desktop driver
 
+The driver is **single-app by default** (`scope: 'app'`). Every observation reads
+exactly one window of one app: a window-only screenshot plus that window's
+accessibility subtree. Other applications, other windows of the same app and the
+app menu bar are not read, and clicks outside that window are refused.
+
+```ts
+{ kind: 'desktop', scope: 'app' | 'display', appName?, bundleId?, windowTitle?, windowId? }
+```
+
+- `appName` (localised name, case-insensitive) or `bundleId` selects the app.
+  Without either, the scope is the frontmost application's front window.
+- `windowTitle` (substring) and `windowId` (CGWindowID) disambiguate windows.
+- `scope: 'display'` keeps the legacy whole-main-display capture for debugging
+  only; it is opt-in because it reads pixels of every app.
+
 The Swift helper (`native/desktop-agent.swift`) is a JSON-lines process. It
 reports:
 
 - `AXIsProcessTrusted`, event access and screen-recording status;
 - screens with logical size/scale;
-- frontmost application/window;
-- screenshot geometry.
+- layer-0 windows (`windows`) with pid, bundle id, bundle name, title, frame and
+  backing scale, front-to-back;
+- window-only screenshots (`screenshot {windowId}`), `-o` so no shadow shifts
+  coordinates, with the window's screen origin and scale;
+- the accessibility tree of one app/window (`ax_tree {pid, bounds}`), pruned
+  natively to the requested window;
+- accessibility operations (`ax_press`, `ax_set_value`) and app/window focus
+  (`activate {pid, bounds}`, which raises the matching window and verifies the
+  app became frontmost).
+
+Observation coordinates are **window-local image pixels**. The driver converts
+them with the recorded scale, refuses points outside the captured window
+(`AUTHORIZATION_DENIED`), then adds the window origin to post real input. Input
+is only sent after the scoped app is verified frontmost; otherwise the action
+fails without posting. If the window moves, resizes, is replaced or loses
+focus between observation and action, freshness bumps the generation
+(`TARGET_STALE`) and the model must observe again.
+
+`desktop.press` and `desktop.set_value` prefer accessibility targets
+(`targetId` → `ax:<path>`), so controls are operated without pointer movement;
+`desktop.press` also accepts a screenshot point (AX hit-test).
 
 Raw input uses CGEvent posts. **macOS silently discards synthetic input without
 Accessibility/Input Monitoring permission**, so the helper checks permission and
 verifies cursor movement; the driver returns `DRIVER_UNAVAILABLE` instead of
-claiming success. The latest status reports event access true; a full isolated native input/save test is still pending.
+claiming success.
 
 `desktop.edit_document` is a separate app-scripting channel restricted to
 TextEdit and an authorized file root. It creates a new document, writes text
 (including Unicode), saves to the exact path, and reads the file back. It is not
 raw keyboard/mouse input and is labelled as such in capabilities/events.
 
-Desktop limitations: main display only, no verified multi-display coordinates,
-no verified window move/drag gesture, no structured accessibility tree.
+Desktop limitations: main display only (window frames may sit on another
+display but no multi-display capture is claimed), no verified window move/drag
+gesture, accessibility coverage depends on what the app exposes (custom-drawn
+canvases expose nothing), and `scope: 'display'` has no structured targets.
 
 ## Adding another driver
 

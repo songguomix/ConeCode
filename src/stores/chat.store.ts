@@ -797,7 +797,6 @@ export async function runGithubReleaseText(args: GithubReleaseArgs): Promise<str
   return outcome.url ? `${outcome.message}\n${outcome.url}` : outcome.message;
 }
 
-const MAX_ITERATIONS = 200;
 const MAX_STREAM_RETRIES = 2;
 /**
  * Whole-iteration retries granted when the per-stream budget runs out on a
@@ -2246,7 +2245,8 @@ async function autoCompactIfNeeded(convId: string, providerId: string, modelId: 
 /**
  * Run the agentic loop for the active conversation: stream an assistant turn,
  * parse any json actions, execute/propose them, feed results back as a user
- * turn, and repeat (capped at MAX_ITERATIONS). Deferred actions (edit/exec/...)
+ * turn, and repeat until the model stops asking for tools (no tool-turn cap;
+ * only the user's stop or an error ends the run). Deferred actions (edit/exec/...)
  * stop the loop and wait for the user; their outcome is later fed back via
  * feedToolResults.
  */
@@ -2376,8 +2376,6 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
   let stitch = freshStitch();
   /** Extra segments allowed after the first before a turn must finalize. */
   const MAX_CONTINUATIONS = 3;
-  /** True only when the loop exits on MAX_ITERATIONS while the model kept asking for tools. */
-  let capCandidate = false;
   /** Whole-iteration auto-retries used after the per-stream budget ran out. */
   let turnRetries = 0;
   try {
@@ -2391,9 +2389,8 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
       if (ownsRun()) rsiSpendBaselines.set(convId, rsiSession.startSpendUsd);
     }
     await refreshRsiHistory();
-    for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
+    for (let iteration = 0; ; iteration++) {
       if (abortController.signal.aborted || !ownsRun()) break;
-      capCandidate = false;
       if (rsiExecuting) {
         rsiCause = rsiCostStopReason();
         if (rsiCause) break;
@@ -3584,32 +3581,13 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
         break;
       }
       if (rsiExecuting) await refreshRsiHistory();
-      // Reaching this line on the FINAL iteration means the loop exits on the
-      // iteration cap with the model still asking for tools — historically the
-      // run then just disappeared ("无征兆中断"). capCandidate survives the loop
-      // only when that exact case happened (reset each iteration above).
-      capCandidate = true;
     }
-    // Exit after the cap: leave a persistable trace on the transcript, not just
-    // isStreaming=false. The notice is local-only (never sent to the model).
-    if (capCandidate && ownsRun()) {
-      if (rsiExecuting) rsiCause = 'RSI reached the tool-turn limit; execution is not complete.';
-      const capNotice: Message = {
-        id: uuidv4(),
-        conversationId: convId,
-        role: 'assistant',
-        content: `⚙️ ${useLanguageStore.getState().t('turnLimitNotice')}`,
-        createdAt: Date.now(),
-        isLocalNotice: true,
-      };
-      await window.electronAPI.message.create(capNotice);
-      set((s) => s.activeConversationId === convId ? { messages: [...s.messages, capNotice] } : {});
-      set({ continuableConvId: convId });
-    }
+    // No tool-turn cap: the loop only leaves above via an explicit break
+    // (model finished, asked the user, awaits an action, or was stopped).
     // A stop between turns exits the loop without an exception — the RSI run
     // record must say "stopped", not "completed".
     if (abortController.signal.aborted) { rsiOutcome = 'stopped'; rsiCause = 'Stopped by the user.'; }
-    if (rsiExecuting && !waitingForUser && !capCandidate && !abortController.signal.aborted && rsiOutcome !== 'completed' && ownsRun()) {
+    if (rsiExecuting && !waitingForUser && !abortController.signal.aborted && rsiOutcome !== 'completed' && ownsRun()) {
       const notice: Message = { id: uuidv4(), conversationId: convId, role: 'assistant', content: rsiCause || 'RSI stopped before verified completion.', createdAt: Date.now(), isLocalNotice: true };
       await persistMessage(notice);
       set((s) => s.activeConversationId === convId ? { messages: [...s.messages, notice], continuableConvId: convId } : {});

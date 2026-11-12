@@ -3,6 +3,7 @@ import {
   ActionSchema,
   ConditionSchema,
   DEFAULT_BUDGET,
+  EnvironmentSchema,
   TaskSchema,
   nowIso,
 } from '../src/protocol/schemas.js';
@@ -12,6 +13,7 @@ import { assertObservationFresh, observationForModel } from '../src/protocol/obs
 import { screenshotToViewport, viewportToScreenshot, pngDimensions } from '../src/drivers/browser/coordinates.js';
 import { parseMacKeyCombo } from '../src/drivers/desktop/macos-keys.js';
 import { CuaError } from '../src/protocol/errors.js';
+import { actionToolFor, toolsForCapabilities } from '../src/model/tools.js';
 
 describe('protocol schemas', () => {
   it('validates conditions and rejects malformed ones', () => {
@@ -26,6 +28,37 @@ describe('protocol schemas', () => {
     expect(ActionSchema.safeParse({ tool: 'browser.fill', value: 'x' }).success).toBe(false);
     expect(ActionSchema.safeParse({ tool: 'browser.navigate', url: 'file:///etc/passwd' }).success).toBe(false);
     expect(ActionSchema.safeParse({ tool: 'code.run', code: 'return 1;' }).success).toBe(true);
+  });
+
+  it('scopes desktop observation to one app window by default', () => {
+    expect(EnvironmentSchema.parse({ kind: 'desktop' })).toMatchObject({ scope: 'app' });
+    expect(EnvironmentSchema.parse({ kind: 'desktop', scope: 'display' }).scope).toBe('display');
+    expect(EnvironmentSchema.safeParse({ kind: 'desktop', scope: 'screen' }).success).toBe(false);
+    expect(EnvironmentSchema.parse({ kind: 'desktop', appName: 'TextEdit', windowTitle: 'notes' })).toMatchObject({
+      scope: 'app',
+      appName: 'TextEdit',
+      windowTitle: 'notes',
+    });
+  });
+
+  it('accepts accessibility desktop actions and rejects address-less presses', () => {
+    expect(ActionSchema.parse({ tool: 'desktop.press', targetId: 'ax:0/1' })).toMatchObject({
+      tool: 'desktop.press',
+      targetId: 'ax:0/1',
+    });
+    expect(ActionSchema.safeParse({ tool: 'desktop.press', x: 10, y: 20 }).success).toBe(true);
+    expect(ActionSchema.safeParse({ tool: 'desktop.press' }).success).toBe(false);
+    expect(ActionSchema.safeParse({ tool: 'desktop.press', x: 10 }).success).toBe(false);
+    expect(ActionSchema.safeParse({ tool: 'desktop.set_value', targetId: 'ax:0/1', value: 'text' }).success).toBe(true);
+    expect(ActionSchema.safeParse({ tool: 'desktop.set_value', targetId: 'ax:0/1' }).success).toBe(false);
+  });
+
+  it('exposes the accessibility desktop tools to the model', () => {
+    const tools = toolsForCapabilities({ browser: false, desktop: true, code: false, images: false });
+    expect(tools.map((tool) => tool.name)).toContain('desktop_press');
+    expect(tools.map((tool) => tool.name)).toContain('desktop_set_value');
+    expect(actionToolFor('desktop_press')).toBe('desktop.press');
+    expect(actionToolFor('desktop_set_value')).toBe('desktop.set_value');
   });
 
   it('requires non-empty user acceptance criteria', () => {

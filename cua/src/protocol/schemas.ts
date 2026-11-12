@@ -157,7 +157,19 @@ export const EnvironmentSchema = z.discriminatedUnion('kind', [
   }),
   z.object({
     kind: z.literal('desktop'),
+    /**
+     * `app` (default) observes and operates exactly one window of one app.
+     * `display` keeps the legacy whole-main-display behaviour and is opt-in
+     * because it reads pixels and posts clicks outside the task's app.
+     */
+    scope: z.enum(['app', 'display']).default('app'),
+    /** App name or bundle id to scope to. Defaults to the frontmost app. */
     appName: z.string().optional(),
+    bundleId: z.string().optional(),
+    /** Substring filter when the app has several windows. */
+    windowTitle: z.string().optional(),
+    /** Exact CGWindowID, bypassing name matching. */
+    windowId: z.number().int().positive().optional(),
     workdir: z.string().optional(),
   }),
 ]);
@@ -247,6 +259,10 @@ export const ObservationSchema = z.object({
     title: z.string().optional(),
     appName: z.string().optional(),
     windowTitle: z.string().optional(),
+    bundleId: z.string().optional(),
+    windowId: z.number().int().positive().optional(),
+    /** Screen-space frame of the captured window; screenshot coordinates are local to it. */
+    windowBounds: BBoxSchema.optional(),
     displayId: z.string().optional(),
     tabs: z
       .array(z.object({ tabId: z.string(), url: z.string(), title: z.string(), active: z.boolean() }))
@@ -369,6 +385,21 @@ export const DesktopActionSchema = z.discriminatedUnion('tool', [
     y: z.number().nonnegative().optional(),
   }),
   z.object({ tool: z.literal('desktop.screenshot') }),
+  z.object({
+    tool: z.literal('desktop.press'),
+    /** Target id from the latest observation; preferred over raw coordinates. */
+    targetId: z.string().min(1).optional(),
+    /** Fallback: point on the latest window screenshot, in image pixels. */
+    x: z.number().nonnegative().optional(),
+    y: z.number().nonnegative().optional(),
+  }).refine((value) => value.targetId !== undefined || (value.x !== undefined && value.y !== undefined), {
+    message: 'desktop.press requires targetId or both x and y',
+  }),
+  z.object({
+    tool: z.literal('desktop.set_value'),
+    targetId: z.string().min(1),
+    value: z.string().max(10_000),
+  }),
   z.object({ tool: z.literal('desktop.focus_app'), appName: z.string().min(1) }),
   z.object({ tool: z.literal('desktop.open_app'), appName: z.string().min(1) }),
   z.object({

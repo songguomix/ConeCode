@@ -21,8 +21,8 @@ For the current audit, commands, and exact source fingerprint, see [delivery rep
 | Action-level and task-level verification, false-success rejection | Implemented and verified |
 | SQLite event log, checkpoints, crash recovery, UNKNOWN reconciliation | Implemented and verified |
 | Persistent code runtime with UI RPCs and macOS sandbox | Implemented and verified |
-| macOS desktop | After user authorization: native input + TextEdit app-scripting save/file read-back verified in a dedicated host fixture |
-| macOS raw mouse/keyboard | Native click, Unicode and shortcut verified; focus/window changes tested; isolated guest and full gesture set pending |
+| macOS desktop | Single-app by default: one window screenshot + its accessibility subtree, AX press/value-write, native input, TextEdit save/file read-back verified in a dedicated host fixture |
+| macOS raw mouse/keyboard | Native click (window-local), Unicode and shortcut verified; out-of-window points refused; focus/window changes tested; isolated guest and full gesture set pending |
 | OpenAI-compatible model calls | Adapter implemented and HTTP-mock verified; **real-provider run pending a credential** |
 | React console, CLI, typed SDK, MCP stdio server | Implemented and verified |
 | Docker/Compose deployment | Provided, **not built** (Docker daemon was unavailable) |
@@ -156,6 +156,9 @@ cua task pause|resume|cancel|takeover|release|recover <taskId>
 cua task input <taskId> --kind approval --text approve
 cua demo browser
 cua demo desktop --yes
+# Desktop tasks read exactly one app window by default:
+cua task create --goal "Summarise the open note" \
+  --acceptance '[{"kind":"window_title","contains":"notes"}]' --app TextEdit
 cua eval [--json]
 cua eval --real --model MODEL [--json]
 ```
@@ -215,7 +218,7 @@ Key files:
 - `src/agent/executor.ts` — preflight, intent-first execution, action evidence
 - `src/agent/verifier.ts` — action/task/recovery verification
 - `src/drivers/browser/` — Playwright driver, snapshot registry, coordinate math
-- `src/drivers/desktop/` — macOS CGEvent driver + TextEdit app-scripting channel
+- `src/drivers/desktop/` — one-app window observation (screenshot + accessibility subtree), CGEvent driver, AX press/value, TextEdit app-scripting channel
 - `src/runtime/code-runtime.ts` — persistent child process under OS sandbox
 - `src/store/` — SQLite store, leases, checkpoints, artifacts, workflows
 - `src/service/` — runtime service + local HTTP/SSE server
@@ -237,6 +240,10 @@ Key files:
 - Code runs in a separate process under macOS `sandbox-exec` and Node's
   permission model, with no `require`/`process`/`fetch` in the VM. UI access is
   only through RPCs that go back through the executor.
+- Desktop computer use reads one app window at a time (window screenshot plus
+  that window's accessibility subtree), refuses input outside it, and only
+  posts input after verifying the scoped app is frontmost. Whole-display
+  observation is an explicit opt-in.
 
 See [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md) for the limits of those claims.
 

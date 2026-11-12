@@ -14,8 +14,8 @@
 | macOS 代码运行时 | Seatbelt + 单独进程，持久 globalThis、受控 RPC、串行 drain、超时/输出/堆限制已实际验证 |
 | Linux 代码运行时 | bwrap 分支已实现，实际 Linux 隔离尚未验证；缺失隔离时拒绝执行，测试明确跳过 |
 | Windows 代码运行时 | 不支持 |
-| macOS 桌面 | 用户授权后 helper 编译、主屏截图、TextEdit 保存与独立文件重读通过；受控宿主 fixture，不是隔离 VM |
-| macOS 原生键鼠 | 真点击、中文/Unicode、Meta+A 以及焦点切换/窗口移动后的观察失效已测；修复 Command 继承。保存通过应用脚本，不是原生 Save As 流程 |
+| macOS 桌面 | 默认单 app 单窗口：窗口截图 + 该窗口无障碍子树，点按/写值走 AX，越界输入拒绝，TextEdit 保存与独立文件重读通过；受控宿主 fixture，不是隔离 VM |
+| macOS 原生键鼠 | 窗口内真点击（截图坐标即窗口坐标）、中文/Unicode、Meta+A 以及焦点切换/窗口移动后的观察失效已测；输入前校验目标 app 在前台，否则不投递。保存通过应用脚本，不是原生 Save As 流程 |
 | 中文/Unicode | 浏览器、Swift CGEvent 输入及 TextEdit 文件内容独立验证通过；主屏实际 2×缩放 |
 | Linux/Windows 原生桌面 | 未实现、不支持，不提供假适配器 |
 | ModelAdapter | OpenAI-compatible Chat Completions 函数工具、图片 opt-in、结构化输出 opt-in、错误/取消/用量解析已 HTTP 替身验证 |
@@ -42,3 +42,4 @@
 10. 负载裁剪对照不是任务速度或模型 token/费用改善。完整控制器的确定性 full/projected 对照 4/4 成功、每次 3 请求/2 动作；真实模型比较仍需凭证，不能据此宣称速度改善。
 
 11. 桌面测试使用当前 macOS 上的专属测试文稿，键鼠和焦点仍是共享资源；全局执行锁不能阻止用户/其他进程干预。隔离 guest、额外显示器/实际缩放切换、原生 Save As、drag/double-click/scroll 全链路仍待额外环境验证。
+12. 单 app 观察依赖目标应用暴露的无障碍树：自绘画布/自定义控件不暴露，AX 节点可能被应用截断（maxNodes/maxDepth 有上限）；窗口被最小化或位于其他 Space 时不可解析，会显式失败而不是退回全屏。`scope: 'display'` 仍会读取主屏其他 app 的像素，仅作排障 opt-in。
