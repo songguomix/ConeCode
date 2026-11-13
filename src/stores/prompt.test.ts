@@ -52,7 +52,7 @@ async function prompt(settings: Partial<Record<string, any>> = {}): Promise<stri
 const countOf = (haystack: string, needle: string) => haystack.split(needle).length - 1;
 const lastCacheBreakpointIndex = (messages: any[]) => {
   for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i]?.cacheControl?.type === 'ephemeral') return i;
+    if (messages[i]?.role === 'system' && messages[i].cacheControl?.type === 'ephemeral') return i;
   }
   return -1;
 };
@@ -199,9 +199,9 @@ describe('behaviour rules that were missing', () => {
     expect(p).toContain('never repeat the same failing call');
   });
 
-  it('gives the platform and date', async () => {
-    const p = await prompt();
-    expect(p).toMatch(/Environment: macOS · \d{4}-\d{2}-\d{2}/);
+  it('gives the platform and date in request context', async () => {
+    const messages = await requestMessages();
+    expect(JSON.stringify(messages[messages.length - 1]?.content)).toMatch(/Environment: macOS · \d{4}-\d{2}-\d{2}/);
   });
 });
 
@@ -254,7 +254,7 @@ describe('workspace context', () => {
       memoryFiles: [],
     });
     const messages = await requestMessages();
-    const breakpoints = messages.filter((m: any) => m.cacheControl?.type === 'ephemeral');
+    const breakpoints = messages.filter((m: any) => m.role === 'system' && m.cacheControl?.type === 'ephemeral');
 
     // BP1 core, BP2 tool protocol, BP3 workspace tail.
     expect(breakpoints).toHaveLength(3);
@@ -271,18 +271,24 @@ describe('workspace context', () => {
     expect(toolBlock.content).toContain('SANDBOXED');
   });
 
-  it('places volatile runtime state after the stable cache breakpoint', async () => {
-    useWorkspaceStore.setState({ selectedFile: '/proj/src/a.ts' });
-    const messages = await requestMessages();
-    const breakpoint = lastCacheBreakpointIndex(messages);
-    const runtime = messages.findIndex((m: any) =>
-      typeof m.content === 'string' && m.content.startsWith('Runtime context'),
-    );
-
-    expect(breakpoint).toBeGreaterThanOrEqual(0);
-    expect(runtime).toBeGreaterThan(breakpoint);
-    expect(messages[breakpoint].content).not.toContain('/proj/src/a.ts');
-    expect(messages[runtime].content).toContain('Open file: /proj/src/a.ts');
+  it('reuses the transcript prefix when time and the open file change', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-11-14T08:00:00Z'));
+    try {
+      useWorkspaceStore.setState({ selectedFile: '/proj/src/a.ts', fileContent: 'old editor text' });
+      const first = await requestMessages({ autoIncludeFileContext: true });
+      clock.mockReturnValue(Date.parse('2026-11-14T08:05:00Z'));
+      useWorkspaceStore.setState({ selectedFile: '/proj/src/b.ts', fileContent: 'new editor text' });
+      const second = await requestMessages({ autoIncludeFileContext: true });
+      const { cacheControl: firstMarker, ...historyMessage } = first[first.length - 2];
+      expect(firstMarker).toEqual({ type: 'ephemeral' });
+      expect(second.slice(0, first.length - 1)).toEqual([...first.slice(0, -2), historyMessage]);
+      expect(JSON.stringify(first[first.length - 1])).toContain('old editor text');
+      expect(JSON.stringify(second[second.length - 1])).toContain('new editor text');
+      expect(JSON.stringify(second.slice(0, -1))).not.toContain('old editor text');
+      expect(second[second.length - 1]).toMatchObject({ role: 'user' });
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it('keeps a paused goal after the workspace cache breakpoint', async () => {
@@ -304,15 +310,15 @@ describe('workspace context', () => {
 
   it('reports the open folder and file', async () => {
     useWorkspaceStore.setState({ selectedFile: '/proj/src/a.ts' });
-    const p = await prompt();
-    expect(p).toContain('Workspace: /proj');
-    expect(p).toContain('Open file: /proj/src/a.ts');
+    const context = JSON.stringify((await requestMessages()).slice(-1)[0]?.content);
+    expect(context).toContain('Workspace: /proj');
+    expect(context).toContain('Open file: /proj/src/a.ts');
   });
 
   it('says so plainly when no folder is open', async () => {
     useWorkspaceStore.setState({ rootPath: null, selectedFile: null });
-    const p = await prompt();
-    expect(p).toContain('Workspace: No folder opened');
-    expect(p).toContain('Open file: None');
+    const context = JSON.stringify((await requestMessages()).slice(-1)[0]?.content);
+    expect(context).toContain('Workspace: No folder opened');
+    expect(context).toContain('Open file: None');
   });
 });

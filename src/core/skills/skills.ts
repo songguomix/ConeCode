@@ -136,7 +136,8 @@ export function serializeSkill(skill: Pick<Skill, 'name' | 'description' | 'body
  * bodies stay out of context until `use_skill` asks for one.
  */
 export function formatSkillsPrompt(skills: SkillMeta[]): string {
-  const active = skills.filter((s) => s.enabled !== false);
+  const active = skills.filter((s) => s.enabled !== false)
+    .sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
   if (!active.length) return '';
   const lines = active.map((s) => `- ${s.id}: ${(s.description || s.name).slice(0, MAX_DESCRIPTION)}`);
   return `Installed skills — reusable expertise for specific kinds of work. When a task matches one, call use_skill with its id FIRST and follow what it says; the instructions you get back take precedence over your defaults for that task. Do not guess at a skill's contents without loading it.

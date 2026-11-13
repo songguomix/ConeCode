@@ -41,6 +41,8 @@ export interface Message {
   /** Split counts for cost math; older turns only carry the total above. */
   promptTokens?: number;
   completionTokens?: number;
+  /** Prompt tokens read from the provider cache, if reported for the whole turn. */
+  cacheHitTokens?: number;
   createdAt: number;
   isQuestion?: boolean;
   questionOptions?: string[];

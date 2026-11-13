@@ -106,14 +106,15 @@ describe('memory learning', () => {
 
     await useChatStore.getState().sendMessage('hello', 'p1', 'm1');
 
-    const systemText = streamCalls[0].messages
-      .filter((m: any) => m.role === 'system')
-      .map((m: any) => m.content)
-      .join('\n');
-    expect(systemText).toContain('Prefers blunt, very short answers');
-    expect(systemText).toContain('Often forgets to await async calls');
+    const messages = streamCalls[0].messages;
+    const runtime = messages[messages.length - 1];
+    expect(runtime.role).toBe('user');
+    expect(runtime.content).toContain('Prefers blunt, very short answers');
+    expect(runtime.content).toContain('Often forgets to await async calls');
+    const prefix = JSON.stringify(messages.slice(0, -1));
+    expect(prefix).not.toContain('Prefers blunt, very short answers');
     // Another project's memory must not leak into this workspace.
-    expect(systemText).not.toContain('Belongs to a different project');
+    expect(JSON.stringify(messages)).not.toContain('Belongs to a different project');
   });
 
   it('stays out of the prompt entirely when switched off', async () => {

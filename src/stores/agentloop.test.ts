@@ -588,6 +588,19 @@ describe('runAgentLoop with native tool calling', () => {
     expect(toolResult!.content).toContain('file body');
   });
 
+  it('keeps Auto effort tied to the user through a prompt-mode tool result', async () => {
+    useSettingsStore.setState({ toolCallMode: 'prompt' });
+    useChatStore.setState({ reasoningEffort: 'auto' });
+    files.set('/proj/a.ts', 'analyze and refactor this long tool result '.repeat(30));
+    queued.push(textResponse('look\n\n```json\n{"action":"read_file","path":"/proj/a.ts"}\n```'));
+    queued.push(textResponse('done'));
+
+    await useChatStore.getState().sendMessage('Read this file', 'p1', 'gpt-test');
+
+    expect(streamCalls).toHaveLength(2);
+    expect(streamCalls.map((p) => p.reasoningEffort)).toEqual(['low', 'low']);
+  });
+
   it('reports a malformed prompt-mode call and lets the model retry', async () => {
     useSettingsStore.setState({ toolCallMode: 'prompt' });
     queued = [textResponse('```json\n{"action":"read_file"}\n```'), textResponse('fixed')];
@@ -684,6 +697,26 @@ describe('runAgentLoop with native tool calling', () => {
     expect(state.activeConversationId).toBe('conv2');
     expect(state.messages).toEqual([conv2Message]);
     expect(created.some((message) => message.conversationId === 'conv1' && message.role === 'assistant' && message.content === 'belongs to chat one')).toBe(true);
+  });
+
+  it('does not compact a history whose wire payload already elides old tool output and inline images', async () => {
+    useModelStore.setState({ models: new Map([['p1', [{ ...model, contextWindow: 18_000 }]]]) });
+    const image = 'data:image/png;base64,' + 'A'.repeat(60_000);
+    useChatStore.setState({
+      messages: [
+        { id: 'image', conversationId: 'conv1', role: 'user', content: `![attachment](${image})`, images: [image], createdAt: 0 },
+        ...Array.from({ length: 24 }, (_, index) => ({
+          id: `result-${index}`, conversationId: 'conv1', role: 'user' as const,
+          content: 'x'.repeat(3500), isToolResult: true, createdAt: index + 1,
+        })),
+      ],
+    });
+
+    await useChatStore.getState().sendMessage('continue', 'p1', 'gpt-test');
+
+    expect(streamCalls).toHaveLength(1);
+    expect(streamCalls[0].messages.some((m: { content: unknown }) => Array.isArray(m.content))).toBe(true);
+    expect(created.some((message) => message.isSummary)).toBe(false);
   });
 
   it('continues with the main answer after automatic compaction succeeds', async () => {
@@ -867,7 +900,8 @@ describe('runAgentLoop with native tool calling', () => {
     );
     const resolvers = new Map<string, (value: any) => void>();
     window.electronAPI.chat.stream = vi.fn(async (params: any) => {
-      const last = params.messages[params.messages.length - 1].content;
+      const last = [...params.messages].reverse()
+        .find((m: any) => m.role === 'user' && m.cacheControl)?.content;
       streamCalls.push(params);
       return new Promise((resolve) => { resolvers.set(last, resolve); });
     });
@@ -932,12 +966,17 @@ describe('runAgentLoop with native tool calling', () => {
   });
 
   it('stitches a length-truncated reply seamlessly instead of stopping', async () => {
-    const lengthResponse = (content: string) => ({
-      choices: [{ message: { role: 'assistant', content }, finish_reason: 'length' }],
-    });
+    const firstResponse = {
+      choices: [{ message: { role: 'assistant', content: 'part one ' }, finish_reason: 'length' }],
+      usage: { prompt_tokens: 1_000, completion_tokens: 20, prompt_cache_hit_tokens: 0 },
+    };
+    const secondResponse = {
+      ...textResponse('part two'),
+      usage: { prompt_tokens: 1_100, completion_tokens: 40, prompt_cache_hit_tokens: 1_000 },
+    };
     window.electronAPI.chat.stream = vi.fn(async (params: any) => {
       streamCalls.push(params);
-      return streamCalls.length === 1 ? lengthResponse('part one ') : textResponse('part two');
+      return streamCalls.length === 1 ? firstResponse : secondResponse;
     });
 
     await useChatStore.getState().sendMessage('write a long answer', 'p1', 'gpt-test');
@@ -949,7 +988,10 @@ describe('runAgentLoop with native tool calling', () => {
     // One stitched message, no truncation error, no extra scaffolding saved.
     const assistants = useChatStore.getState().messages.filter((m) => m.role === 'assistant');
     expect(assistants).toHaveLength(1);
-    expect(assistants[0].content).toBe('part one part two');
+    expect(assistants[0]).toMatchObject({
+      content: 'part one part two', promptTokens: 2_100, completionTokens: 60, cacheHitTokens: 1_000,
+    });
+    expect(created.find((m) => m.role === 'assistant')?.cacheHitTokens).toBe(1_000);
     expect(useChatStore.getState().error).toBeNull();
     expect(useChatStore.getState().continuableConvId).toBeNull();
   });

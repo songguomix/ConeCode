@@ -159,7 +159,7 @@ describe('mid-run message queue', () => {
     finish(textResponse('first step complete'));
 
     await vi.waitFor(() => expect(streamCalls).toHaveLength(2));
-    expect(streamCalls[1].messages.at(-1)).toMatchObject({ role: 'user', content: 'change direction' });
+    expect(streamCalls[1].messages.at(-2)).toMatchObject({ role: 'user', content: 'change direction' });
     expect(useChatStore.getState().queuedMessages.conv1.map((item) => item.content)).toEqual(['normal follow-up']);
     expect(window.electronAPI.chat.stop).not.toHaveBeenCalled();
     finishSteered(textResponse('updated direction complete'));

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { DshMarketService } from './market-service';
 
 const workerBuilt = fs.existsSync(path.join(process.cwd(), 'dist-electron', 'dsh-worker.js'));
@@ -31,6 +31,17 @@ describe.skipIf(!workerBuilt)('DshMarketService native flow', () => {
     const detail = await service.detail('hello-conecode');
     expect(detail.plugin.demo).toBe(true);
     expect(detail.version.version).toBe('1.0.0');
+
+    // A staging probe may pass while activation at the final path fails.
+    const activate = vi.spyOn(service.runtime, 'load').mockResolvedValueOnce({
+      id: 'hello-conecode', status: 'load-failed', error: 'final path failed',
+    });
+    try {
+      await expect(service.install('default', 'hello-conecode', '1.0.0')).rejects.toThrow('final path failed');
+      expect((await service.snapshot()).installed).toEqual([]);
+    } finally {
+      activate.mockRestore();
+    }
 
     const installed = await service.install('default', 'hello-conecode', '1.0.0');
     expect(installed.status).toBe('loaded');

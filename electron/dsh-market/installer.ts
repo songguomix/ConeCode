@@ -354,7 +354,10 @@ export class PackageInstaller {
     validatePackageName(name);
     validateExactVersion(version);
     this.state.ensureProfileDirs(profileId);
-    await this.provisionRuntime(profileId, onLog, signal);
+    const nativeSource = source.type === 'bundled-example' ||
+      (source.type === 'local' && !!source.path && fs.existsSync(source.path) &&
+        fs.statSync(source.path).isDirectory() && !!readNativeManifest(source.path));
+    if (!nativeSource) await this.provisionRuntime(profileId, onLog, signal);
     const directoryName = pluginDirectoryName(name);
     const stagingDir = assertInside(
       this.state.stagingDir(profileId),

@@ -82,6 +82,46 @@ describe('Cordis runtime host', () => {
     await host.dispose();
   });
 
+  it('runs a bundle with a private service, including while probing an update', async () => {
+    const dir = tempDir();
+    const provider = path.join(dir, 'provider.mjs');
+    const consumer = path.join(dir, 'consumer.mjs');
+    fs.writeFileSync(provider, `
+      export default function setup(ctx) {
+        ctx.provide('bundleState', { value: 'from bundle' })
+      }
+    `);
+    fs.writeFileSync(consumer, `
+      export const inject = { bundleState: null, tools: null }
+      export function apply(ctx) {
+        ctx.tools.register({
+          name: 'read_bundle', description: 'Read private service',
+          execute: async () => ctx.bundleState.value,
+        })
+      }
+    `);
+    const rows = [provider, consumer].map((entryPath, index) => ({
+      id: String(index), name: path.basename(entryPath), entryPath, config: {}, disabled: false,
+    }));
+    const spec: RuntimePluginSpec = {
+      id: 'bundle', name: 'bundle', title: 'Bundle', format: 'dsh', packageDir: dir, rows, enabled: true,
+    };
+    const host = new RuntimeHost();
+    try {
+      expect((await host.load(spec)).status).toBe('loaded');
+      expect((await host.probe(spec)).ok).toBe(true);
+      expect(await host.invokeTool('bundle', '1', 'read_bundle', {})).toMatchObject({
+        ok: true, value: 'from bundle',
+      });
+      const unrelated = await host.load({ ...spec, id: 'unrelated', rows: [rows[1]] });
+      expect(unrelated).toMatchObject({ status: 'missing-capability', missing: ['bundleState'] });
+      await host.unload('bundle');
+      expect(host.contributions().tools).toEqual([]);
+    } finally {
+      await host.dispose();
+    }
+  });
+
   it('reports an activation throw as load-failed and leaves no contribution behind', async () => {
     const dir = tempDir();
     fs.writeFileSync(path.join(dir, 'broken.mjs'), `

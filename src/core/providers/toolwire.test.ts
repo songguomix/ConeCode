@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { OpenAIAdapter } from './openai.adapter';
+import { OpenRouterAdapter } from './openrouter.adapter';
 import { AnthropicAdapter } from './anthropic.adapter';
 import { GeminiAdapter } from './gemini.adapter';
 import type { ChatMessage, ProviderConfig, SendMessageParams } from '../../types';
@@ -109,6 +110,34 @@ describe('OpenAI wire format', () => {
   });
 });
 
+describe('OpenRouter cache routing', () => {
+  it('marks stable Claude content and keeps other model requests on their normal wire format', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('{}'));
+    try {
+      const adapter = new OpenRouterAdapter({ ...config, type: 'openrouter' });
+      const marker = { type: 'ephemeral' as const };
+      const messages = exchange.slice(0, 4);
+      messages[0] = { ...messages[0], cacheControl: marker };
+      messages[3] = { ...messages[3], cacheControl: marker };
+      messages.push({ role: 'user', content: 'Current time and editor context' });
+      await adapter.sendMessage({ model: 'anthropic/claude-sonnet', messages, conversationId: 'chat-1' });
+      await adapter.sendMessage({ model: 'deepseek/deepseek-v4', messages, conversationId: 'chat-1' });
+      const [claude, deepseek] = fetchMock.mock.calls.map(([, init]) => JSON.parse(String(init?.body)));
+      expect(claude.session_id).toBe('chat-1');
+      expect(claude.cache_control).toBeUndefined();
+      expect(claude.messages[0].content[0].cache_control).toEqual(marker);
+      expect(claude.messages[1].content[0].cache_control).toEqual(marker);
+      expect(claude.messages[3]).toEqual({ role: 'tool', tool_call_id: 'c1', content: 'file body' });
+      expect(claude.messages[4].content).toEqual([{ type: 'text', text: 'Current time and editor context' }]);
+      expect(deepseek.session_id).toBe('chat-1');
+      expect(deepseek.cache_control).toBeUndefined();
+      expect(deepseek.messages[0].content).toBe('be helpful');
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+});
+
 describe('Anthropic wire format', () => {
   it('preserves explicit cache breakpoints on stable system blocks', () => {
     const out = anthropic.system([
@@ -120,6 +149,46 @@ describe('Anthropic wire format', () => {
       { type: 'text', text: 'stable instructions', cache_control: { type: 'ephemeral' } },
       { type: 'text', text: 'volatile runtime context' },
     ]);
+  });
+
+  it('caches through the last tool result before dynamic context in the same Anthropic turn', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{}'));
+    try {
+      const marker = { type: 'ephemeral' as const };
+      const transcript = exchange.slice(0, 4);
+      transcript[3] = { ...transcript[3], cacheControl: marker };
+      await anthropic.sendMessage({
+        model: 'm',
+        messages: [...transcript, { role: 'user', content: 'Current editor selection' }],
+      });
+      const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+      expect(body.cache_control).toBeUndefined();
+      expect(body.messages[2]).toEqual({
+        role: 'user',
+        content: [
+          { type: 'tool_result', tool_use_id: 'c1', content: 'file body', cache_control: marker },
+          { type: 'text', text: 'Current editor selection' },
+        ],
+      });
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  it('keeps extended-thinking tool continuations free of repeated runtime context', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{}'));
+    try {
+      const messages = exchange.slice(0, 4);
+      messages[2] = { ...messages[2], thinking_blocks: [{ thinking: 'read it', signature: 'signed' }] };
+      messages[3] = { ...messages[3], cacheControl: { type: 'ephemeral' } };
+      messages.push({ role: 'user', content: 'Current time', runtimeContext: true });
+      await anthropic.sendMessage({ model: 'm', messages, reasoningEffort: 'medium' });
+      const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+      expect(body.messages[1].content[0]).toEqual({ type: 'thinking', thinking: 'read it', signature: 'signed' });
+      expect(body.messages[2].content.map((block: any) => block.type)).toEqual(['tool_result']);
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 
   it('puts tool_use in the assistant turn and tool_result in the next user turn', () => {

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { Context } from '@deepseek-ai/cordis';
+import { Context, Inject } from '@deepseek-ai/cordis';
 import {
   type CommandContribution,
   type InvokeResult,
@@ -77,13 +77,6 @@ interface PluginRuntime {
   spec: RuntimePluginSpec;
   rows: RowRuntime[];
   state: RuntimePluginState;
-}
-
-function normalizeInject(value: unknown): string[] {
-  if (!value) return [];
-  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string');
-  if (typeof value === 'object') return Object.keys(value as Record<string, unknown>);
-  return [];
 }
 
 function errorText(error: unknown): string {
@@ -217,36 +210,63 @@ export class RuntimeHost {
     }
     if (spec.format === 'native') return this.loadNative(plugin);
 
-    for (const row of spec.rows) {
-      if (row.disabled) continue;
-      try {
-        const rowRuntime = await this.mountRow(spec, row);
-        plugin.rows.push(rowRuntime);
-      } catch (error) {
-        const missing = error instanceof HostCapabilityError ? error.missing : [];
-        plugin.state = {
-          id: spec.id,
-          status: missing.length ? 'missing-capability' : 'load-failed',
-          error: errorText(error),
-          ...(missing.length ? { missing } : {}),
-          contributions: collect(plugin.rows),
-          requiredServices: [...new Set(plugin.rows.flatMap((row) => row.requiredServices))],
-        };
-        this.log(`[${spec.name}] ${plugin.state.error}`, 'error');
-        await this.unloadRows(plugin);
+    try {
+      const activeRows = spec.rows.filter((row) => !row.disabled);
+      if (!activeRows.length) {
+        plugin.state = { id: spec.id, status: 'disabled', contributions: emptyContributions() };
         return plugin.state;
       }
+      // Resolve dependencies before creating fibers so a bundle can use a
+      // private service supplied by an earlier row without borrowing it from
+      // another installed plugin.
+      const rows = [];
+      const shared = new Set<string>([...SUPPORTED_HOST_SERVICES, ...CORDIS_BUILTIN_SERVICES]);
+      let bundleScope = this.ensureRoot().extend();
+      const privateServices = new Set<string>();
+      for (const row of activeRows) {
+        const module = await import(pathToFileURL(row.entryPath).href);
+        const exported = module.default;
+        const entry = typeof exported === 'function' || typeof exported?.apply === 'function' ? exported : module;
+        if (typeof entry !== 'function' && typeof entry.apply !== 'function') {
+          throw new Error(`${row.name} has no Cordis plugin export`);
+        }
+        const inject = Object.keys(Inject.resolve(entry.inject));
+        for (const name of inject) {
+          if (!shared.has(name) && !name.startsWith('storage.backend.')) privateServices.add(name);
+        }
+        rows.push({ row, entry, inject });
+      }
+      for (const name of privateServices) bundleScope = bundleScope.isolate(name);
+      for (const { row, entry, inject } of rows) {
+        plugin.rows.push(await this.mountRow(spec, row, bundleScope, entry, inject));
+      }
+    } catch (error) {
+      const missing = error instanceof HostCapabilityError ? error.missing : [];
+      const requiredServices = [...new Set([...plugin.rows.flatMap((row) => row.requiredServices), ...missing])];
+      await this.unloadRows(plugin);
+      plugin.state = {
+        id: spec.id,
+        status: missing.length ? 'missing-capability' : 'load-failed',
+        error: errorText(error),
+        ...(missing.length ? { missing } : {}),
+        contributions: emptyContributions(),
+        requiredServices,
+      };
+      this.log(`[${spec.name}] ${plugin.state.error}`, 'error');
+      return plugin.state;
     }
     plugin.state = { id: spec.id, status: 'loaded', contributions: collect(plugin.rows), requiredServices: [...new Set(plugin.rows.flatMap((row) => row.requiredServices))] };
     this.log(`[${spec.name}] loaded ${plugin.rows.length} row(s)`);
     return plugin.state;
   }
 
-  private async mountRow(spec: RuntimePluginSpec, row: RuntimeRowSpec): Promise<RowRuntime> {
-    const root = this.ensureRoot();
+  private async mountRow(
+    spec: RuntimePluginSpec, row: RuntimeRowSpec, bundleScope: Context,
+    plugin: Parameters<Context['plugin']>[0], inject: string[],
+  ): Promise<RowRuntime> {
     const generation = ++this.generation;
     const label = `${spec.id}:${row.id}:${generation}`;
-    const scope = root
+    const scope = bundleScope
       .isolate('tools', Symbol(`${label}:tools`))
       .isolate('commands', Symbol(`${label}:commands`))
       .isolate('skills', Symbol(`${label}:skills`))
@@ -277,45 +297,27 @@ export class RuntimeHost {
         });
       },
     };
-    rowRuntime.hostFiber = scope.plugin(host);
-    await rowRuntime.hostFiber;
-
-    const module = await import(pathToFileURL(row.entryPath).href);
-    const plugin: any = module.default && typeof module.default.apply === 'function' ? module.default : module;
-    if (!plugin || typeof plugin.apply !== 'function') {
-      throw new Error(`${row.name} has no Cordis apply() export`);
-    }
-    rowRuntime.requiredServices = normalizeInject(plugin.inject);
-    const inject = rowRuntime.requiredServices;
-    const storageReady = this.storage.ready;
-    const supported = new Set<string>([
-      ...SUPPORTED_HOST_SERVICES.filter((name) => !name.startsWith('storage') || storageReady),
-      ...CORDIS_BUILTIN_SERVICES,
-    ]);
-    if (storageReady) {
-      for (const name of inject) {
-        if (name.startsWith('storage.backend.') && root.get(name) !== undefined) supported.add(name);
-      }
-    }
-    const missing = inject.filter((name) => !supported.has(name));
-    if (missing.length) throw new HostCapabilityError(missing);
-
-    const fiber = scope.plugin(plugin, row.config ?? {});
-    rowRuntime.fiber = fiber;
+    rowRuntime.requiredServices = inject;
     try {
+      rowRuntime.hostFiber = scope.plugin(host);
+      await rowRuntime.hostFiber;
+      const missing = inject.filter((name) => !CORDIS_BUILTIN_SERVICES.some((builtin) => builtin === name) &&
+        ((name === 'storage' || name === 'storageDomain' || name.startsWith('storage.backend.')) && !this.storage.ready ||
+          scope.get(name) === undefined));
+      if (missing.length) throw new HostCapabilityError(missing);
+
+      const fiber = scope.plugin(plugin, row.config ?? {});
+      rowRuntime.fiber = fiber;
       await withTimeout(Promise.resolve(fiber), 30_000, `loading ${row.name}`);
+      if (fiber.state !== ACTIVE) {
+        const absent = Object.keys(Inject.resolve(fiber.inject)).filter((name) => scope.get(name) === undefined);
+        if (absent.length) throw new HostCapabilityError(absent);
+        throw new Error(`${row.name} stayed in Cordis state ${fiber.state}; an injected service never became available`);
+      }
     } catch (error) {
       await rowRuntime.fiber?.dispose().catch(() => {});
       await rowRuntime.hostFiber?.dispose().catch(() => {});
       throw error;
-    }
-    if (fiber.state !== ACTIVE) {
-      const dynamicInject = normalizeInject(fiber.inject);
-      const absent = dynamicInject.filter((name) => !supported.has(name));
-      await rowRuntime.fiber?.dispose().catch(() => {});
-      await rowRuntime.hostFiber?.dispose().catch(() => {});
-      if (absent.length) throw new HostCapabilityError(absent);
-      throw new Error(`${row.name} stayed in Cordis state ${fiber.state}; an injected service never became available`);
     }
     return rowRuntime;
   }

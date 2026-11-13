@@ -801,7 +801,8 @@ export class DshMarketService {
 
   private async loadAllEnabled(profileId: string): Promise<void> {
     const installed = this.state.installed(profileId);
-    if (installed.length) {
+    const hasDshPlugins = installed.some((plugin) => plugin.format === 'dsh');
+    if (hasDshPlugins) {
       try {
         await this.installer.provisionRuntime(
           profileId,
@@ -812,7 +813,11 @@ export class DshMarketService {
         this.warnings.push(`Shared DSH runtime upgrade failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
-    await this.runtime.ensureStarted(profileId, this.dshHome, installed.length > 0);
+    await this.runtime.ensureStarted(profileId, this.dshHome, hasDshPlugins);
+    await this.restoreInstalledPlugins(profileId, installed);
+  }
+
+  private async restoreInstalledPlugins(profileId: string, installed: InstalledPlugin[]): Promise<void> {
     for (const plugin of installed) {
       if (!plugin.enabled) {
         this.state.patchPlugin(profileId, plugin.id, { status: 'disabled', restartRequired: false });
@@ -867,11 +872,12 @@ export class DshMarketService {
   private effectiveRows(profileId: string, includePluginId?: string): Map<string, InstalledRow[]> {
     const installed = this.state.installed(profileId).filter((plugin) => (plugin.enabled || plugin.id === includePluginId) && plugin.format === 'dsh');
     const rows: InstalledRow[] = [];
-    const owner = new Map<string, string>();
+    const owner = new Map<InstalledRow, string>();
     for (const plugin of installed) {
       for (const row of plugin.rows) {
-        rows.push({ ...row, config: structuredClone(row.config ?? {}) });
-        owner.set(row.id, plugin.id);
+        const copy = { ...row, config: structuredClone(row.config ?? {}) };
+        rows.push(copy);
+        owner.set(copy, plugin.id);
       }
       for (const override of plugin.bundleOverrides || []) {
         if (Array.isArray(override.insert) || typeof override.id !== 'string') continue;
@@ -889,7 +895,7 @@ export class DshMarketService {
     }
     const grouped = new Map<string, InstalledRow[]>();
     for (const row of rows) {
-      const pluginId = owner.get(row.id);
+      const pluginId = owner.get(row);
       if (!pluginId) continue;
       const list = grouped.get(pluginId) || [];
       list.push(row);
@@ -1076,7 +1082,14 @@ export class DshMarketService {
         signal: begin.controller.signal,
       });
       if (prepared.rows.length === 0) throw new Error('The bundle patch inserted no mountable plugin rows.');
-      await this.runtime.ensureStarted(profileId, this.dshHome, true);
+      const before = this.runtime.getInfo();
+      await this.runtime.ensureStarted(profileId, this.dshHome, prepared.format === 'dsh');
+      // Provisioning DSH storage can replace the worker used by native
+      // plugins. Restore its active plugins before probing the new bundle.
+      if (!before.available || before.profileId !== profileId ||
+          before.threadId !== this.runtime.getInfo().threadId) {
+        await this.restoreInstalledPlugins(profileId, this.state.installed(profileId));
+      }
       this.updateOperation(begin.operation, { phase: 'probing', message: 'Probing the plugin in an isolated Cordis scope' });
       const probe = await this.runtime.probe(this.probeSpec(prepared));
       if (begin.controller.signal.aborted) throw new InstallCancelledError();
@@ -1104,12 +1117,13 @@ export class DshMarketService {
       this.state.updatePlugin(profileId, record);
       if (record.enabled) {
         const loaded = await this.runtime.load(this.runtimeSpec(record));
-        record.status = loaded.status === 'loaded' ? 'loaded' : loaded.status;
-        record.lastError = loaded.error || null;
-        if (loaded.error) this.state.appendLog(profileId, plugin.name, `activation failed: ${loaded.error}`);
+        if (loaded.status !== 'loaded' && loaded.status !== 'disabled') {
+          throw new Error(`Plugin failed to activate in the profile: ${loaded.error || loaded.status}`);
+        }
+        record.status = loaded.status;
+        record.lastError = null;
         record.contributions = loaded.contributions || { tools: [], commands: [], skills: [] };
         record.requiredServices = loaded.requiredServices || record.requiredServices || [];
-        record.compatibility = loaded.missing?.length ? this.compatibilityWithProbe(plugin, selected, profileId, loaded) : probedCompatibility;
         this.state.updatePlugin(profileId, record);
       } else {
         record.status = 'disabled';
@@ -1138,6 +1152,7 @@ export class DshMarketService {
               this.state.patchPlugin(profileId, previous.id, { status: 'restart-required', restartRequired: true, lastError: message });
             }
           } else {
+            await this.runtime.unload(plugin.name).catch(() => {});
             fs.rmSync(swapped.finalDir, { recursive: true, force: true });
             this.installer.unlinkPlugin(profileId, plugin.name);
             this.state.removePlugin(profileId, plugin.name);

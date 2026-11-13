@@ -15,6 +15,7 @@ export default function PluginDetailView({ t }: { t: (key: string) => string }) 
   const detail = useDshMarketStore((s) => s.detail);
   const loading = useDshMarketStore((s) => s.detailLoading);
   const error = useDshMarketStore((s) => s.error);
+  const clearError = useDshMarketStore((s) => s.clearError);
   const clearSelection = useDshMarketStore((s) => s.clearSelection);
   const selectPlugin = useDshMarketStore((s) => s.selectPlugin);
   const install = useDshMarketStore((s) => s.install);
@@ -54,9 +55,16 @@ export default function PluginDetailView({ t }: { t: (key: string) => string }) 
   const installedHere = installed?.version === version.version;
   const newer = installed ? versions.find((item) => semver.gt(item.version, installed.version)) : null;
   const canRiskInstall = selectedCompatibility?.state === 'incompatible';
+  const riskReasons = risk ? versions.find((item) => item.version === risk.version)?.compatibility.reasons : undefined;
 
   const doInstall = (targetVersion: string, mode: 'install' | 'update') => {
     if (targetVersion === installed?.version) return;
+    const compatibility = versions.find((item) => item.version === targetVersion)?.compatibility;
+    if (compatibility?.state === 'incompatible') {
+      clearError();
+      setRisk({ version: targetVersion, mode });
+      return;
+    }
     void install(plugin.name, targetVersion, false, allowScripts).catch((installError) => {
       const message = installError instanceof Error ? installError.message : String(installError);
       if (message.includes('Incompatible plugin')) setRisk({ version: targetVersion, mode });
@@ -340,6 +348,11 @@ export default function PluginDetailView({ t }: { t: (key: string) => string }) 
           <div className="w-full max-w-md rounded-2xl border border-[var(--border)] bg-[var(--bg-0)] p-4 shadow-2xl">
             <div className="flex items-center gap-2 text-[13px] font-semibold text-[var(--warning)]"><FiAlertTriangle size={14} />{t('riskTitle')}</div>
             <p className="mt-2 text-[11px] leading-relaxed text-[var(--text-secondary)]">{t('riskBody')}</p>
+            {!!riskReasons?.length && (
+              <ul className="mt-2 list-disc space-y-1 pl-4 text-[11px] text-[var(--text-secondary)]">
+                {riskReasons.map((reason, index) => <li key={index}>{reason.message}</li>)}
+              </ul>
+            )}
             <div className="mt-3 flex justify-end gap-2">
               <button onClick={() => setRisk(null)} className="px-3 py-1.5 rounded-lg border border-[var(--border)] text-[11px] text-[var(--text-secondary)]">{t('cancel')}</button>
               <button

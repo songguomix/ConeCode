@@ -50,8 +50,10 @@ export class AnthropicAdapter extends BaseAdapter {
   protected buildMessages(messages: ChatMessage[], includeThinking = false): any[] {
     const out: { role: 'user' | 'assistant'; content: any[] }[] = [];
 
-    const push = (role: 'user' | 'assistant', blocks: any[]) => {
+    const push = (role: 'user' | 'assistant', blocks: any[], cacheControl?: ChatMessage['cacheControl']) => {
       if (!blocks.length) return;
+      const lastBlock = blocks[blocks.length - 1];
+      if (cacheControl && lastBlock.type !== 'thinking') lastBlock.cache_control = cacheControl;
       const last = out[out.length - 1];
       if (last && last.role === role) last.content.push(...blocks);
       else out.push({ role, content: blocks });
@@ -65,7 +67,7 @@ export class AnthropicAdapter extends BaseAdapter {
           type: 'tool_result',
           tool_use_id: m.tool_call_id,
           content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
-        }]);
+        }], m.cacheControl);
         continue;
       }
 
@@ -101,7 +103,7 @@ export class AnthropicAdapter extends BaseAdapter {
         }
       }
 
-      push(role, blocks);
+      push(role, blocks, m.cacheControl);
     }
 
     // A conversation must start with a user turn.
@@ -135,15 +137,26 @@ export class AnthropicAdapter extends BaseAdapter {
     if (params.reasoningEffort === 'high') budget = 10000;
     else if (params.reasoningEffort === 'medium') budget = 5000;
 
+    // Older Claude models strip cached thinking blocks if ordinary user text
+    // accompanies tool results. Omit repeated environment metadata on a
+    // pure tool follow-up, while still sending attachments and task context.
+    const historyEnd = params.messages.findIndex((message) => message.role !== 'system' && message.cacheControl);
+    const toolContinuation = budget > 0 && params.messages[historyEnd]?.role === 'tool'
+      && !params.messages.slice(historyEnd + 1).some((message) => !message.runtimeContext);
+    const input = toolContinuation ? params.messages.filter((message) => !message.runtimeContext) : params.messages;
+    const messages = this.buildMessages(input, budget > 0);
+    const hasHistoryBreakpoint = messages.some((message) =>
+      message.content.some((block: any) => block.cache_control),
+    );
     let maxTokens = params.maxTokens ?? 8192;
     const body: any = {
       model: params.model,
       ...(system.length ? { system } : {}),
-      messages: this.buildMessages(params.messages, budget > 0),
+      messages,
       temperature: params.temperature ?? 0.7,
-      // Automatic caching advances a second breakpoint with the conversation,
-      // while the explicit system marker above protects the stable base prompt.
-      cache_control: { type: 'ephemeral' },
+      // With an explicit history marker, caching the tail would both spend an
+      // extra breakpoint and store runtime observations that won't be replayed.
+      ...(!hasHistoryBreakpoint && { cache_control: { type: 'ephemeral' } }),
     };
 
     if (budget > 0) {

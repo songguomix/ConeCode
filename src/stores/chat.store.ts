@@ -1,14 +1,15 @@
 import { FREE_PROVIDER_ID, FREE_WEEKLY_TOKEN_LIMIT } from '../core/providers/free.adapter';
+import { normalizeTokenUsage, type TokenUsage } from '../core/providers/tokenUsage';
 import { create } from 'zustand';
 import { v4 as uuidv4 } from 'uuid';
-import type { Conversation, Message, ReasoningEffort, ChatMessage, ToolCall, ThinkingBlock } from '../types';
+import type { Conversation, Message, ReasoningEffort, ChatMessage, ContentPart, ToolCall, ThinkingBlock } from '../types';
 import { useWorkspaceStore } from './workspace.store';
 import { useUIStore } from './ui.store';
 import { useSettingsStore, effectiveApprovalMode } from './settings.store';
 import { useLanguageStore } from './language.store';
 import { useTodosStore, type TodoStatus } from './todos.store';
 import { useMemoryStore } from './memory.store';
-import { useMemoryV2Store, isMemoryV2Active, memoryV2ContextBlock, memoryV2WikiBlock } from './memoryV2.store';
+import { useMemoryV2Store, isMemoryV2Active, type TaskMemoryContext } from './memoryV2.store';
 import { useFreeStore } from './free.store';
 import type { MemoryEntry } from '../core/memory/memory';
 import { formatMemoryFiles } from '../core/memory/memoryFiles';
@@ -22,6 +23,7 @@ import { useComputerStore } from './computer.store';
 import { useGoalStore, type ConversationGoal } from './goal.store';
 import { resolveEffort } from '../core/model/resolveEffort';
 import { effectiveContextWindow } from '../core/model/context';
+import { estimateTokens } from '../core/tokens';
 import { buildCostSnapshot, messageCost, formatUSD } from '../core/pricing/cost';
 import { rsiHistoryContext } from '../core/agents/rsiHistory';
 import { RsiExecutionMonitor, type RsiToolEvidence } from '../core/agents/rsiRuntime';
@@ -132,7 +134,10 @@ export interface SendMessageOptions {
    * not ride along with—or be consumed by—this turn.
    */
   keepComposerImages?: boolean;
+  /** Internal task context captured when retrieval completes. */
+  taskMemory?: TaskMemoryContext;
 }
+const taskMemoryByConversation = new Map<string, TaskMemoryContext>();
 const rsiSpendBaselines = new Map<string, number>();
 interface RsiExecutionSession {
   runId: string | null;
@@ -1248,8 +1253,9 @@ export function contextMessagesForUsage(messages: Message[]): Message[] {
 // (a single picture is worth several hundred k tokens as text).
 // ---------------------------------------------------------------------------
 
-/** Tool results newer than this stay verbatim; older ones collapse to a stub. */
+/** Maximum number of long tool results to retain verbatim in one request. */
 export const TOOL_RESULTS_KEPT_LIVE = 8;
+const TOOL_RESULTS_EVICTION_BATCH = 4;
 const ELIDED_TOOL_HEAD = 400;
 const ELIDED_TOOL_TAIL = 200;
 
@@ -1287,14 +1293,17 @@ export function buildApiMessages(messages: Message[]): ChatMessage[] {
     if (m.role === 'tool' && m.toolCallId) answered.add(m.toolCallId);
   }
 
-  // Tool results: only the most recent TOOL_RESULTS_KEPT_LIVE go out verbatim;
-  // anything older is a stub. Counts across both wire shapes (native role:tool
-  // and prompt-mode user turns flagged isToolResult).
+  // Evict groups of long results instead of rewriting an earlier message on
+  // every new tool call. Short results already fit in a stub and cost no slot.
+  const longResults = live.filter((m) =>
+    (m.role === 'tool' || (m.role === 'user' && m.isToolResult))
+    && m.content.length > ELIDED_TOOL_HEAD + ELIDED_TOOL_TAIL,
+  );
+  const dropped = Math.max(0, Math.ceil(
+    (longResults.length - TOOL_RESULTS_KEPT_LIVE) / TOOL_RESULTS_EVICTION_BATCH,
+  )) * TOOL_RESULTS_EVICTION_BATCH;
   const toolKept = new Set(
-    live
-      .filter((m) => m.role === 'tool' || (m.role === 'user' && m.isToolResult))
-      .slice(-TOOL_RESULTS_KEPT_LIVE)
-      .map((m) => m.id),
+    longResults.slice(dropped).map((m) => m.id),
   );
 
   // Reasoning chains ride on the turn that produced them; on OLDER plain-text
@@ -1640,7 +1649,9 @@ export function extractThink(text: string): { content: string; reasoning: string
 // truncate the saved message ("output suddenly cuts off"). Normalize the three
 // provider return shapes into { content, reasoning } so runAgentLoop can use the
 // return value as the source of truth.
-function extractStreamResult(result: any): { content: string; reasoning: string; finishReason: string | null; tokens: number; promptTokens: number; completionTokens: number; toolCalls: ToolCall[]; thinkingBlocks?: ThinkingBlock[] } {
+type StreamText = TokenUsage & { content: string; reasoning: string; finishReason: string | null };
+
+function extractStreamResult(result: any): StreamText & { toolCalls: ToolCall[]; thinkingBlocks?: ThinkingBlock[] } {
   const base = extractStreamText(result);
   return {
     ...base,
@@ -1650,19 +1661,9 @@ function extractStreamResult(result: any): { content: string; reasoning: string;
   };
 }
 
-function extractStreamText(result: any): { content: string; reasoning: string; finishReason: string | null; tokens: number; promptTokens: number; completionTokens: number } {
-  if (!result || typeof result !== 'object') return { content: '', reasoning: '', finishReason: null, tokens: 0, promptTokens: 0, completionTokens: 0 };
-  // Token usage (OpenAI-style `usage`, Anthropic `usage.input/output_tokens`, Gemini `usageMetadata`).
-  const u = result.usage || result.usageMetadata;
-  const promptTokens = u
-    ? (u.prompt_tokens ?? u.input_tokens ?? u.promptTokenCount ?? 0)
-    : 0;
-  const completionTokens = u
-    ? (u.completion_tokens ?? u.output_tokens ?? u.candidatesTokenCount ?? 0)
-    : 0;
-  const tokens = u
-    ? (u.total_tokens ?? u.totalTokenCount ?? (promptTokens + completionTokens))
-    : 0;
+function extractStreamText(result: any): StreamText {
+  const usage = normalizeTokenUsage(result);
+  if (!result || typeof result !== 'object') return { content: '', reasoning: '', finishReason: null, ...usage };
   // OpenAI / custom / deepseek / openrouter: { choices: [{ message: {...}, finish_reason }] }
   const choice = result.choices?.[0];
   const msg = choice?.message;
@@ -1671,9 +1672,7 @@ function extractStreamText(result: any): { content: string; reasoning: string; f
       content: typeof msg.content === 'string' ? msg.content : '',
       reasoning: typeof msg.reasoning_content === 'string' ? msg.reasoning_content : '',
       finishReason: typeof choice.finish_reason === 'string' ? choice.finish_reason : null,
-      tokens,
-      promptTokens,
-      completionTokens,
+      ...usage,
     };
   }
   // Anthropic: { content: [{ type: 'text', text }] }
@@ -1682,9 +1681,7 @@ function extractStreamText(result: any): { content: string; reasoning: string; f
       content: result.content.map((b: any) => (typeof b?.text === 'string' ? b.text : '')).join(''),
       reasoning: typeof result.reasoning_content === 'string' ? result.reasoning_content : '',
       finishReason: typeof result.finish_reason === 'string' ? result.finish_reason : null,
-      tokens,
-      promptTokens,
-      completionTokens,
+      ...usage,
     };
   }
   // Gemini: { candidates: [{ content: { parts: [{ text }] } }] }
@@ -1694,12 +1691,10 @@ function extractStreamText(result: any): { content: string; reasoning: string; f
       content: parts.map((p: any) => (typeof p?.text === 'string' ? p.text : '')).join(''),
       reasoning: typeof result.reasoning_content === 'string' ? result.reasoning_content : '',
       finishReason: typeof result.finish_reason === 'string' ? result.finish_reason : null,
-      tokens,
-      promptTokens,
-      completionTokens,
+      ...usage,
     };
   }
-  return { content: '', reasoning: '', finishReason: null, tokens, promptTokens, completionTokens };
+  return { content: '', reasoning: '', finishReason: null, ...usage };
 }
 
 /** Coarse OS label so the agent picks platform-appropriate commands unprompted. */
@@ -1716,10 +1711,10 @@ function isMacPlatform(): boolean {
   return typeof navigator !== 'undefined' && /Mac/.test(navigator.platform || '');
 }
 
-function lastUserText(messages: ChatMessage[]): string {
+function lastUserText(messages: Message[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
-    if (m.role === 'user' && typeof m.content === 'string') return m.content;
+    if (m.role === 'user' && !m.isToolResult && !m.isLocalNotice && !m.isSummary) return m.content;
   }
   return '';
 }
@@ -1759,8 +1754,7 @@ async function maybeResumeAfterInstall() {
     useChatStore.setState((s) =>
       s.activeConversationId === convId ? { messages: [...s.messages, userMsg] } : {},
     );
-    // Compact only when this thread is still the active one (autoCompactIfNeeded
-    // reads the visible message array).
+    // Don't start compaction after another run has taken over this thread.
     if (useChatStore.getState().activeConversationId === convId) {
       const canContinue = await autoCompactIfNeeded(convId, model.providerId, model.id);
       if (!canContinue) return;
@@ -1822,16 +1816,8 @@ ${renderPromptToolList(promptToolset)}`;
     ? 'When the requested work is complete—and changes are verified and reviewed from the top—stop calling tools and reply with a short plain-text summary.'
     : 'When the requested work is complete—and changes are verified and reviewed from the top—reply with a short plain-text summary and NO json block.';
 
-  // --- Prompt-cache layout (Anthropic-style prefix cache) --------------------
-  // Three explicit breakpoints so a miss on a volatile tail does not invalidate
-  // the whole prompt:
-  //   BP1 global core     — stable for a given model
-  //   BP2 tool/sandbox    — changes only when tool protocol / sandbox flips
-  //   BP3 workspace+mode  — after project memory/skills; goal/runtime sit AFTER
-  // The last two system blocks after BP3 are expected to churn every turn.
-
-  // BP1: global core. Deliberately excludes sandbox wording, tool-call syntax,
-  // and open-file/runtime facts — those must not bust this segment.
+  // Anthropic can reuse the common instructions independently of workspace
+  // and mode changes. Per-request observations are added after chat history.
   systemMessages.push({
     role: 'system',
     cacheControl: { type: 'ephemeral' },
@@ -1870,22 +1856,6 @@ ${parallelRule}
         content: `Project instructions from ${ws.agentsMdPath?.split('/').pop() || 'AGENTS.md'} — follow them unless the user overrides:\n\n${ws.agentsMd.trim()}`,
       });
     }
-
-    // Long-term memory, placed high so tone/process guidance shapes the whole
-    // reply. Memory 2.0 injects ONLY the memories retrieved for this task; the
-    // legacy flat block is the compatibility fallback when v2 is not active.
-    if (isMemoryV2Active()) {
-      const v2Block = memoryV2ContextBlock();
-      if (v2Block) systemMessages.push({ role: 'system', content: v2Block });
-      // Dream notes are model-written summaries of untrusted session content. They ride the user
-      // channel, not the system channel, so the instruction hierarchy cannot mistake a poisoned
-      // note for an order from the operator.
-      const wikiBlock = memoryV2WikiBlock();
-      if (wikiBlock) systemMessages.push({ role: 'user', content: wikiBlock });
-    } else {
-      const memoryBlock = useMemoryStore.getState().promptBlock(ws.rootPath);
-      if (memoryBlock) systemMessages.push({ role: 'system', content: memoryBlock });
-    }
   }
 
   // Installed skills: ids + descriptions only. Bodies are pulled on demand by
@@ -1900,12 +1870,11 @@ ${parallelRule}
     systemMessages.push({
       role: 'system',
       content: 'Connected MCP tools (call via {"action":"mcp_call","server":"…","tool":"…","args":{…}}):\n' +
-        ws.mcpTools.map((tl) => `- ${tl.server}:${tl.name}${tl.description ? ` — ${tl.description}` : ''}`).join('\n'),
+        ws.mcpTools.map((tl) => `- ${tl.server}:${tl.name}${tl.description ? ` — ${tl.description}` : ''}`).sort().join('\n'),
     });
   }
 
-  // BP3: workspace-stable tail. Marked here so mode toggles, goal pause/resume,
-  // and the ticking runtime block below cannot invalidate project memory.
+  // A separate breakpoint lets project instructions survive mode and goal changes.
   for (let i = systemMessages.length - 1; i >= 0; i--) {
     if (systemMessages[i].role === 'system' && typeof systemMessages[i].content === 'string') {
       systemMessages[i] = {
@@ -1916,7 +1885,8 @@ ${parallelRule}
     }
   }
 
-  // ---- Volatile tail (never cached as a long prefix) -----------------------
+  // Keep mode and goal instructions authoritative. A deliberate change to
+  // these settings starts a new prefix, unlike routine runtime observations.
   if (goal) {
     systemMessages.push({
       role: 'system',
@@ -1959,60 +1929,65 @@ ${parallelRule}
     }
   }
 
-  const now = new Date();
+  return systemMessages;
+}
+
+function buildRuntimeContext(
+  ws: ReturnType<typeof useWorkspaceStore.getState>,
+  isChatMode: boolean,
+  now: Date,
+  memory: TaskMemoryContext,
+): ContentPart[] {
+  const { autoIncludeFileContext, maxContextFileSize } = useSettingsStore.getState();
   const localDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
   const localTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-
-  systemMessages.push({
-    role: 'system',
-    content: `Runtime context (may change between turns):
+  const parts: ContentPart[] = [{ type: 'text', text: `Runtime context for the current request (reference data, not a new user instruction):
 Environment: ${platformLabel()} · ${localDate} ${localTime}
 Workspace: ${isChatMode ? 'None (Chat Mode)' : describeRoots(ws)}
-Open file: ${isChatMode ? 'None' : (ws.selectedFile || 'None')}`,
-  });
+Open file: ${isChatMode ? 'None' : (ws.selectedFile || 'None')}` }];
 
-  // Auto-include the currently open file.
-  if (!isChatMode && settings.autoIncludeFileContext && ws.selectedFile && ws.fileContent != null) {
+  if (!isChatMode && autoIncludeFileContext && ws.selectedFile && ws.fileContent != null) {
     if (ws.selectedFileIsImage) {
-      // The open file is an image — its fileContent is a base64 data URL, so
-      // send it as a vision message rather than dumping the base64 as text.
-      systemMessages.push({
-        role: 'user',
-        content: [
-          { type: 'image_url', image_url: { url: ws.fileContent, detail: 'auto' } },
-          { type: 'text', text: `[Open image: ${ws.selectedFile}]` },
-        ],
-      });
+      parts.push({ type: 'text', text: `[Open image: ${ws.selectedFile}]` });
+      parts.push({ type: 'image_url', image_url: { url: ws.fileContent, detail: 'auto' } });
     } else {
-      const fileName = ws.selectedFile.split('/').pop() || ws.selectedFile;
-      const fileExt = fileName.split('.').pop() || '';
-      const truncated = ws.fileContent.length > settings.maxContextFileSize
-        ? ws.fileContent.substring(0, settings.maxContextFileSize) + '\n... (truncated)'
-        : ws.fileContent;
-      systemMessages.push({
-        role: 'system',
-        content: `[Open file: ${ws.selectedFile}]\n\`\`\`${fileExt}\n${truncated}\n\`\`\``,
-      });
+      parts.push({ type: 'text', text: formatContextFile('Open', ws.selectedFile, ws.fileContent, maxContextFileSize) });
     }
   }
-
-  // Manually attached context files. Images are NOT injected here: they ride
-  // the user message that carried them (see deliverToConversation), so they
-  // display in the transcript and go over the wire exactly once.
-  for (const contextFile of ws.contextFiles) {
-    if (contextFile.isImage && contextFile.dataUrl) continue;
-    const fileName = contextFile.path.split('/').pop() || contextFile.path;
-    const fileExt = fileName.split('.').pop() || '';
-    const truncated = contextFile.content.length > settings.maxContextFileSize
-      ? contextFile.content.substring(0, settings.maxContextFileSize) + '\n... (truncated)'
-      : contextFile.content;
-    systemMessages.push({
-      role: 'system',
-      content: `[Attached file: ${contextFile.path}]\n\`\`\`${fileExt}\n${truncated}\n\`\`\``,
-    });
+  if (!isChatMode) {
+    for (const file of ws.contextFiles) {
+      // Explicitly attached images already ride the transcript's user message.
+      if (file.isImage && file.dataUrl) continue;
+      parts.push({ type: 'text', text: formatContextFile('Attached', file.path, file.content, maxContextFileSize) });
+    }
+    if (memory.records) parts.push({ type: 'text', text: memory.records });
+    // Dream notes are derived from untrusted conversations, so keep them in
+    // user context along with file contents, never in system instructions.
+    if (memory.wiki) parts.push({ type: 'text', text: memory.wiki });
   }
+  return parts;
+}
 
-  return systemMessages;
+function formatContextFile(label: string, path: string, content: string, limit: number): string {
+  const name = path.split(/[\\/]/).pop() || '';
+  const extension = name.includes('.') ? name.split('.').pop() : '';
+  const text = content.length > limit ? content.slice(0, limit) + '\n... (truncated)' : content;
+  return `[${label} file: ${path}]\n\`\`\`${extension}\n${text}\n\`\`\``;
+}
+
+/** Cache the transcript up to its last block, before request-only observations. */
+function markHistoryBoundary(messages: ChatMessage[]): ChatMessage[] {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message.role === 'system') continue;
+    const hasContent = typeof message.content === 'string' ? message.content.trim() : message.content.length;
+    if (message.role === 'tool' || message.tool_calls?.length || hasContent) {
+      return messages.map((item, index) => index === i
+        ? { ...item, cacheControl: { type: 'ephemeral' } }
+        : item);
+    }
+  }
+  return messages;
 }
 
 // Read-only tools a research sub-agent is allowed to use.
@@ -2161,13 +2136,34 @@ async function autoCompactIfNeeded(convId: string, providerId: string, modelId: 
   // Only what is actually SENT counts toward the window: messages an earlier
   // compaction already folded into a summary are no longer part of the request,
   // so counting them would re-compact forever.
-  const ordered = orderForDisplay(get().messages);
-  const { covered } = coveredBySummary(ordered);
-  const msgs = ordered.filter((m) => !m.isLocalNotice && !covered.has(m.id));
+  const history = get().activeConversationId === convId
+    ? get().messages
+    : await window.electronAPI.message.list(convId);
+  if (get().streamingRuns[convId]) return false;
+  const msgs = contextMessagesForUsage(history);
   if (msgs.length <= AUTO_COMPACT_KEEP_RECENT + 2) return true;
 
-  // Rough token estimate (~4 chars/token) — cheap and good enough for a guard.
-  const estTokens = Math.ceil(msgs.reduce((n, m) => n + (m.content?.length || 0), 0) / 4);
+  // Count the wire history, not the raw archive: elided tool output and
+  // base64 attachment bytes should not trigger premature compaction.
+  let estTokens = 0;
+  for (const message of buildApiMessages(history)) {
+    estTokens += 4; // approximate framing
+    estTokens += typeof message.content === 'string'
+      ? estimateTokens(message.content)
+      : message.content.reduce((sum, part) => sum + (
+        part.type === 'text' ? estimateTokens(part.text) : 1024
+      ), 0); // provider-specific image token costs are not base64 length
+    estTokens += estimateTokens(message.reasoning_content);
+    for (const call of message.tool_calls || []) {
+      estTokens += estimateTokens(call.name) + estimateTokens(call.rawArguments ?? JSON.stringify(call.arguments ?? {}));
+    }
+    // Anthropic thinking is also represented as reasoning_content in memory.
+    if (!message.reasoning_content) {
+      for (const thinking of message.thinking_blocks || []) {
+        estTokens += estimateTokens(thinking.thinking);
+      }
+    }
+  }
   if (estTokens <= Math.floor(contextWindow * 0.75)) return true;
 
   const older = msgs.slice(0, -AUTO_COMPACT_KEEP_RECENT);
@@ -2301,6 +2297,13 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
         allRoots: () => [] as string[],
       }
     : { ...workspaceAtStart, allRoots: () => workspaceRoots };
+  // Recall belongs to the initiating request, not to whatever conversation
+  // updates the global memory panel while this agent is running.
+  const taskMemory = options.taskMemory ?? taskMemoryByConversation.get(convId) ?? {
+    records: isMemoryV2Active() ? '' : useMemoryStore.getState().promptBlock(taskWorkspace.rootPath),
+    wiki: '',
+  };
+  const runtimeContext = buildRuntimeContext(taskWorkspace, isChatMode, new Date(turnStartTime), taskMemory);
   const planMode = get().planMode;
   const reviewMode = get().reviewMode;
   // The conversation record owns its execution protocol: a live RSI run must
@@ -2413,13 +2416,15 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
     promptTokens: number;
     completionTokens: number;
     tokens: number;
+    cacheHitTokens: number;
+    cacheUsageSegments: number;
     thinkingBlocks?: ThinkingBlock[];
     /** Successful segments accumulated (bounds auto-continuation). */
     segments: number;
   }
   const freshStitch = (): StitchState => ({
     active: false, forIteration: -1, rawContent: '', rawReasoning: '',
-    promptTokens: 0, completionTokens: 0, tokens: 0, thinkingBlocks: undefined, segments: 0,
+    promptTokens: 0, completionTokens: 0, tokens: 0, cacheHitTokens: 0, cacheUsageSegments: 0, thinkingBlocks: undefined, segments: 0,
   });
   let stitch = freshStitch();
   /** Extra segments allowed after the first before a turn must finalize. */
@@ -2484,12 +2489,10 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
         // constraints) and its isolated archive path — after the mode overlay
         // so it is never diluted by other protocol text.
         ...(rsiDirection ? [{ role: 'system' as const, content: rsiDirection }] : []),
-        ...(rsiHistory ? [{ role: 'system' as const, content: rsiHistory }] : []),
-        ...(rsiExecuting ? [{ role: 'system' as const, content: `${rsiMonitor.context()}\n${rsiRecovery}` }] : []),
         // Local UI notices (/help, /diff output, etc.) are shown in the
         // transcript but must not be replayed to the model as context; tool
         // calls and their results are re-linked into a protocol-valid exchange.
-        ...buildApiMessages(conversationMessages),
+        ...markHistoryBoundary(buildApiMessages(conversationMessages)),
       ];
       const baseMessages = allMessages;
 
@@ -2500,7 +2503,19 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
       const continuing = stitch.active && stitch.forIteration === iteration;
       if (!continuing) stitch = freshStitch();
       const requestMessages = (frame: ComputerFrame | null): ChatMessage[] => {
-        const tail: ChatMessage[] = [];
+        const context = [...runtimeContext];
+        if (rsiHistory) context.push({ type: 'text', text: rsiHistory });
+        if (rsiExecuting) context.push({ type: 'text', text: `${rsiMonitor.context()}\n${rsiRecovery}`.trim() });
+        const textParts = context.filter((part): part is Extract<ContentPart, { type: 'text' }> => part.type === 'text');
+        // Plain text keeps text-only OpenAI-compatible gateways on their
+        // existing wire format. Use content parts only for a real image.
+        const tail: ChatMessage[] = [{
+          role: 'user',
+          // Keep attachments, recalled memory and RSI evidence visible even
+          // on a tool follow-up. Only repeatable environment metadata can go.
+          runtimeContext: context.length === 1,
+          content: textParts.length === context.length ? textParts.map((part) => part.text).join('\n\n') : context,
+        }];
         if (frame) {
           tail.push({ role: 'user', content: screenshotParts([frame.dataUrl]) });
         }
@@ -2560,7 +2575,7 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
             ...(observedFrame && { computerFrameId: observedFrame.frameId }),
             // Auto intensity resolves per-turn from the user's ask (codex-style),
             // then clamps to the levels the selected model actually declares.
-            reasoningEffort: resolveEffort(reasoningEffort, lastUserText(request), selectedModel?.reasoningEfforts),
+            reasoningEffort: resolveEffort(reasoningEffort, lastUserText(conversationMessages), selectedModel?.reasoningEfforts),
             maxTokens,
             // Tags every chunk and keys the main-process abort controller, so
             // concurrent conversations never cancel or mix each other's output.
@@ -2628,6 +2643,8 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
               promptTokens: 0,
               completionTokens: 0,
               tokens: 0,
+              cacheHitTokens: 0,
+              cacheUsageSegments: 0,
               thinkingBlocks: undefined,
               segments: 0,
             };
@@ -2690,6 +2707,10 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
       stitch.promptTokens += authoritative.promptTokens || 0;
       stitch.completionTokens += authoritative.completionTokens || 0;
       stitch.tokens += authoritative.tokens || 0;
+      if (authoritative.cacheHitTokens !== undefined) {
+        stitch.cacheHitTokens += authoritative.cacheHitTokens;
+        stitch.cacheUsageSegments += 1;
+      }
       if (authoritative.thinkingBlocks?.length) stitch.thinkingBlocks = authoritative.thinkingBlocks;
       stitch.segments += 1;
 
@@ -2795,6 +2816,7 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
         tokensUsed: stitch.tokens || undefined,
         promptTokens: stitch.promptTokens || undefined,
         completionTokens: stitch.completionTokens || undefined,
+        cacheHitTokens: stitch.cacheUsageSegments === stitch.segments ? stitch.cacheHitTokens : undefined,
         toolCalls: nativeCalls.length ? nativeCalls : undefined,
         thinkingBlocks: stitch.thinkingBlocks,
       };
@@ -4290,6 +4312,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     await window.electronAPI.conversation.delete(id);
     rsiExecutionSessions.delete(id);
     rsiSpendBaselines.delete(id);
+    taskMemoryByConversation.delete(id);
     const newSnapshots = new Map(get().workspaceSnapshots);
     newSnapshots.delete(id);
     set((s) => ({
@@ -4403,7 +4426,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
     const v2Active = isMemoryV2Active();
     if (v2Active) {
-      await useMemoryV2Store.getState().beginTask(content, convId);
+      const taskMemory = await useMemoryV2Store.getState().beginTask(content, convId);
+      taskMemoryByConversation.set(convId, taskMemory);
+      options = { ...options, taskMemory };
+    } else {
+      taskMemoryByConversation.delete(convId);
     }
 
     await deliverToConversation(convId, content, providerId, modelId, options);

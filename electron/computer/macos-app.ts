@@ -28,7 +28,8 @@ function selectedWindow(windows, selected) {
   return window;
 }
 function frontPid() {
-  return $.NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier;
+  var app = $.NSWorkspace.sharedWorkspace.frontmostApplication;
+  return app && !app.isNil() ? Number(app.processIdentifier) : 0;
 }
 `;
 
@@ -78,51 +79,85 @@ function verifyFocus(windows, target, axApp) {
   return frontPid() === target.pid && top && top.kCGWindowNumber === Number(target.id) &&
     matchesAxWindow(axAttribute(axApp, 'AXFocusedWindow'), target);
 }
+function findAxWindow(axApp, target) {
+  var candidates = axAttribute(axApp, 'AXWindows');
+  var matching = [];
+  if (candidates) {
+    for (var i = 0; i < Number(candidates.count); i++) {
+      var window = candidates.objectAtIndex(i);
+      if (matchesAxWindow(window, target)) matching.push(window);
+    }
+  }
+  if (matching.length > 1 && target.title) {
+    matching = matching.filter(function (window) {
+      var title = axAttribute(window, 'AXTitle');
+      return title && ObjC.unwrap(title) === target.title;
+    });
+  }
+  return matching.length === 1 ? matching[0] : null;
+}
 function focusSelectedWindow(target, axApp) {
   var windows = onScreenWindows();
   selectedWindow(windows, target);
   if (verifyFocus(windows, target, axApp)) return;
-  function activateSelectedApp() {
-    var app = $.NSRunningApplication.runningApplicationWithProcessIdentifier(target.pid);
-    if (app.isNil()) throw new Error('The selected app is no longer running.');
-    if (!app.activateWithOptions(0)) throw new Error('macOS refused to activate the selected app.');
-    for (var i = 0; i < 12 && frontPid() !== target.pid; i++) delay(0.05);
-  }
-  if (frontPid() !== target.pid) activateSelectedApp();
-  if (!verifyFocus(onScreenWindows(), target, axApp)) {
-    var candidates = axAttribute(axApp, 'AXWindows');
-    var matching = [];
-    if (candidates) {
-      for (var i = 0; i < Number(candidates.count); i++) {
-        var axWindow = candidates.objectAtIndex(i);
-        if (matchesAxWindow(axWindow, target)) matching.push(axWindow);
+
+  var initialFront = frontPid();
+  var reachedTarget = initialFront === target.pid;
+  var app = $.NSRunningApplication.runningApplicationWithProcessIdentifier(target.pid);
+  if (app.isNil()) throw new Error('The selected app is no longer running.');
+
+  // Activation and AXRaise are requests. Some apps raise a window without
+  // making it the main or focused window, and AppKit activation is asynchronous.
+  if (initialFront !== target.pid) app.activateWithOptions(0);
+  for (var attempt = 0; attempt < 3; attempt++) {
+    for (var poll = 0; poll < 8; poll++) {
+      windows = onScreenWindows();
+      selectedWindow(windows, target);
+      if (verifyFocus(windows, target, axApp)) return;
+      var front = frontPid();
+      if (front === target.pid) reachedTarget = true;
+      if (front && front !== target.pid && (reachedTarget || front !== initialFront)) {
+        throw new Error('Another app gained focus. Select the app window again.');
       }
+      if (poll === 0) {
+        if (front !== target.pid) {
+          $.AXUIElementSetAttributeValue(axApp, $('AXFrontmost'), $(true));
+        }
+        var window = findAxWindow(axApp, target);
+        if (window) {
+          // Not all AX attributes are writable. Validate the resulting focus
+          // rather than treating a failed setter as a failed window switch.
+          $.AXUIElementSetAttributeValue(window, $('AXMain'), $(true));
+          $.AXUIElementPerformAction(window, $('AXRaise'));
+          if (frontPid() === target.pid) {
+            reachedTarget = true;
+            $.AXUIElementSetAttributeValue(axApp, $('AXFocusedWindow'), window);
+          }
+        }
+      }
+      delay(0.05);
     }
-    if (matching.length > 1 && target.title) {
-      matching = matching.filter(function (w) {
-        var title = axAttribute(w, 'AXTitle');
-        return title && ObjC.unwrap(title) === target.title;
-      });
-    }
-    if (matching.length !== 1 || $.AXUIElementPerformAction(matching[0], $('AXRaise')) !== 0) {
-      throw new Error('Could not raise the selected app window.');
-    }
-    // A window raise is independent of app activation. If the approval UI
-    // reclaimed focus while raising, restore the same selected app first.
-    if (frontPid() !== target.pid) activateSelectedApp();
-    for (var i = 0; i < 12 && !verifyFocus(onScreenWindows(), target, axApp); i++) delay(0.05);
   }
   windows = onScreenWindows();
   selectedWindow(windows, target);
-  if (!verifyFocus(windows, target, axApp)) throw new Error('The selected app window did not gain focus. No input was sent.');
+  if (!verifyFocus(windows, target, axApp)) {
+    throw new Error('Could not focus the selected app window. Click that window to bring it forward, then try again.');
+  }
 }
 `;
 
 function runJxa(source: string, signal?: AbortSignal, timeout = 5_000): Promise<string> {
   return new Promise((resolve, reject) => {
     const command = execFile('/usr/bin/osascript', ['-l', 'JavaScript', '-'], { signal, timeout }, (error, out, stderr) => {
-      if (error) reject(Object.assign(new Error(stderr.trim() || error.message), { cause: error }));
-      else resolve(out.trim());
+      if (error) {
+        const diagnostic = stderr.trim();
+        // Script exceptions include osascript's generic -2700 code, which adds
+        // no detail about the window operation that failed.
+        const message = diagnostic.match(/execution error:\s*(?:Error:\s*)+([\s\S]+?)\s*\(-2700\)$/)?.[1];
+        reject(Object.assign(new Error(message || diagnostic || error.message), { cause: error }));
+      } else {
+        resolve(out.trim());
+      }
     });
     command.stdin!.on('error', reject);
     command.stdin!.end(source);

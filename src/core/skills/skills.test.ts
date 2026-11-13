@@ -156,6 +156,13 @@ describe('formatSkillsPrompt', () => {
     expect(formatSkillsPrompt([])).toBe('');
   });
 
+  it('advertises the same skill prefix regardless of discovery order', () => {
+    const skills = ['z', 'a'].map((id) => ({
+      id, name: id, description: `Description for ${id}`, tags: [], scope: 'global' as const, source: 'custom' as const,
+    }));
+    expect(formatSkillsPrompt(skills)).toBe(formatSkillsPrompt([...skills].reverse()));
+  });
+
   it('does not advertise disabled skills', () => {
     expect(formatSkillsPrompt([
       { id: 'off', name: 'Off', description: 'Do not show.', tags: [], scope: 'global', source: 'custom', enabled: false },

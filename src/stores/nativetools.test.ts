@@ -174,31 +174,32 @@ describe('buildApiMessages', () => {
     expect(out[1].role).toBe('user'); // the orphaned result, demoted
   });
 
-  it('elides old tool results but keeps the newest verbatim', () => {
+  it('keeps the wire prefix unchanged between batched evictions', () => {
     const big = 'R'.repeat(5000);
-    const live = Array.from({ length: TOOL_RESULTS_KEPT_LIVE + 3 }, (_, i) =>
+    const live = Array.from({ length: TOOL_RESULTS_KEPT_LIVE + 4 }, (_, i) =>
       msg({ role: 'tool', content: `result ${i} ${big}`, toolCallId: `old${i}`, isToolResult: true }));
     const out = buildApiMessages(live);
-    // The newest TOOL_RESULTS_KEPT_LIVE survive intact.
+    // At the end of a batch the full budget is in use.
     for (const m of out.slice(-TOOL_RESULTS_KEPT_LIVE)) {
       expect(m.content).toContain(big);
     }
-    // Older ones collapse to a short stub (head 0..2, newest 3..10 kept).
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 4; i++) {
       expect(out[i].content.length).toBeLessThan(1000);
       expect(out[i].content).toContain('elided');
       expect(out[i].content).toContain(`result ${i}`); // head is kept
     }
+    const prior = buildApiMessages(live.slice(0, -1));
+    expect(out.slice(0, prior.length)).toEqual(prior);
   });
 
   it('shares the tool-result budget with prompt-mode user tool results', () => {
     const big = 'P'.repeat(5000);
-    // Nine tool-class messages: the newest 8 (role:tool) stay verbatim, the
-    // older prompt-mode user tool result collapses like a native one.
+    // Nine long results trigger the eviction of the oldest group. The oldest
+    // prompt-mode result collapses like a native one.
     const out = buildApiMessages([
       msg({ role: 'user', content: `old prompt result ${big}`, isToolResult: true }),
       ...Array.from({ length: TOOL_RESULTS_KEPT_LIVE }, (_, i) =>
-        msg({ role: 'tool', content: `result ${i}`, toolCallId: `t${i}`, isToolResult: true })),
+        msg({ role: 'tool', content: `result ${i} ${big}`, toolCallId: `t${i}`, isToolResult: true })),
       msg({ role: 'assistant', content: 'ok' }),
     ]);
     expect(out[0].content.length).toBeLessThan(1000);

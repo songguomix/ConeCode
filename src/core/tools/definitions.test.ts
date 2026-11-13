@@ -82,6 +82,12 @@ describe('buildToolset', () => {
     expect(tools.filter((tl) => tl.name === 'mcp__files__read_text')).toHaveLength(1);
   });
 
+  it('advertises the same tool prefix regardless of MCP discovery order', () => {
+    const mcpTools = [{ server: 'z', name: 'read' }, { server: 'a', name: 'search' }];
+    expect(toAnthropicTools(buildToolset({ mcpTools })))
+      .toEqual(toAnthropicTools(buildToolset({ mcpTools: [...mcpTools].reverse() })));
+  });
+
   it('restricts tools to pure conversation and web lookup in Chat Mode', () => {
     const names = buildToolset({ isChatMode: true }).map((tl) => tl.name);
     expect(names).not.toContain('read_file');

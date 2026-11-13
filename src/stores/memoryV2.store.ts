@@ -38,6 +38,11 @@ let projectRevision = 0;
 let projectChanging = false;
 const endedSessions = new Set<string>();
 
+export interface TaskMemoryContext {
+  records: string;
+  wiki: string;
+}
+
 interface MemoryV2State {
   active: boolean;
   initialized: boolean;
@@ -77,10 +82,10 @@ interface MemoryV2State {
   refresh: () => void;
   refreshHealth: () => Promise<void>;
   setProject: (rootPath: string | null) => Promise<void>;
-  beginTask: (taskText: string, sessionId?: string) => Promise<string>;
+  beginTask: (taskText: string, sessionId?: string) => Promise<TaskMemoryContext>;
   runDream: () => Promise<DreamReport | null>;
   setDreamAuto: (enabled: boolean) => void;
-  refreshWikiContext: (taskText?: string) => Promise<void>;
+  refreshWikiContext: (taskText?: string) => Promise<string>;
   loadWikiEntries: () => Promise<void>;
   openWikiEntry: (slug: string) => Promise<void>;
   endTask: (opts: {
@@ -499,38 +504,43 @@ export const useMemoryV2Store = create<MemoryV2State>((set, get) => ({
   },
 
   beginTask: async (taskText, sessionId) => {
-    if (!service || !get().active) return '';
+    if (!service || !get().active || projectChanging) return { records: '', wiki: '' };
+    const revision = projectRevision;
+    const projectId = get().projectId;
     try {
       if (sessionId) {
         service.setSession(sessionId);
         // New activity in a session makes it eligible for a later session-end pass.
         endedSessions.delete(sessionId);
       }
-      const block = await service.beginTask(taskText);
-      set({ contextBlock: block, hits: service.getLastHits() });
-      await get().refreshWikiContext(taskText);
-      return block;
-    } catch { return ''; }
+      const records = await service.beginTask(taskText, { projectId });
+      if (revision !== projectRevision || projectChanging) return { records: '', wiki: '' };
+      set({ contextBlock: records, hits: service.getLastHits() });
+      const wiki = await get().refreshWikiContext(taskText);
+      return revision === projectRevision && !projectChanging ? { records, wiki } : { records: '', wiki: '' };
+    } catch { return { records: '', wiki: '' }; }
   },
 
   refreshWikiContext: async (taskText = '') => {
     if (!service || !get().active) {
       set({ wikiContext: '' });
-      return;
+      return '';
     }
     const revision = projectRevision;
     try {
       const scope = get().projectId || 'default';
       const result = await loadWikiContext(dreamStorage(), scope, taskText);
       const last = await readLastDream(dreamStorage(), scope);
-      if (revision !== projectRevision || projectChanging) return;
+      if (revision !== projectRevision || projectChanging) return '';
       set({
         wikiContext: result.block,
         wikiEntries: result.items,
         lastDream: last,
       });
+      return result.block;
     } catch {
       if (revision === projectRevision && !projectChanging) set({ wikiContext: '' });
+      return '';
     }
   },
 

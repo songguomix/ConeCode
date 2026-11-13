@@ -30,6 +30,8 @@ export interface SendMessageParams {
   temperature?: number;
   maxTokens?: number;
   signal?: AbortSignal;
+  /** Stable key for provider-specific conversation routing, when supported. */
+  conversationId?: string;
   reasoningEffort?: 'low' | 'medium' | 'high';
   // Native function-calling: when present, the adapter advertises these tools to
   // the API and returns any structured tool calls the model emits. Omitted for
@@ -70,6 +72,8 @@ export interface ChatMessage {
   // Provider-agnostic cache breakpoint. Adapters that support explicit prompt
   // caching translate this to their wire format; the others safely ignore it.
   cacheControl?: { type: 'ephemeral'; ttl?: '5m' | '1h' };
+  /** Request-only observations, safe to omit during native tool continuations. */
+  runtimeContext?: boolean;
   reasoning_content?: string;
   // Assistant turns that called tools carry them here; the adapter re-encodes
   // them in the provider's wire format so the model sees its own calls.

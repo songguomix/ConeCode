@@ -292,7 +292,7 @@
           "summary": "Static/preflight assessment of Ephemeral-AI-Lab/dsh-layerfs@b9bf3bc: Docker daemon not running, LayerFS checkout/bundle/image absent, required DSH host services and Web client host not provided. No install or fake load was attempted."
         }
       ],
-      "notes": "Not an executed plugin verification. It is recorded as incompatible/blocked so a future catalog entry cannot accidentally show it as green.",
+      "notes": "LayerFS requires DSH host services and a Web interface that ConeCode does not provide.",
       "recordedAt": "2026-11-07T01:08:00.000Z"
     }
   ]

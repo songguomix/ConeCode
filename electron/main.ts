@@ -1195,7 +1195,8 @@ function registerIPC() {
       : () => {};
     try {
       const result = await adapter.streamMessage(
-        { model: modelId, messages, signal: controller.signal, reasoningEffort, maxTokens, tools, toolChoice },
+        { model: modelId, messages, signal: controller.signal, reasoningEffort, maxTokens, tools, toolChoice,
+          conversationId: !silent && emitChunks !== false && typeof conversationId === 'string' ? conversationId : undefined },
         onChunk,
         controller.signal
       );

@@ -62,6 +62,9 @@ function MessageBubble({
     message.providerId ? s.models.get(message.providerId)?.find((m) => m.id === message.modelId)?.pricing : undefined,
   );
   const cost = messageCost(message.promptTokens, message.completionTokens, pricing);
+  const cacheHitPercent = message.cacheHitTokens != null && message.promptTokens
+    ? Math.round((100 * message.cacheHitTokens) / message.promptTokens)
+    : null;
   const [thinkingOpen, setThinkingOpen] = useState(true);
   const reasoningText = message.reasoning_content ||
     (message.thinkingBlocks && message.thinkingBlocks.length > 0
@@ -308,13 +311,18 @@ function MessageBubble({
                   {showCopied ? <FiCheck size={12} className="text-[var(--success)]" /> : <FiCopy size={12} />}
                 </button>
               </div>
-              {(message.thinkingTime != null || message.tokensUsed != null) && (
+              {(message.thinkingTime != null || message.tokensUsed != null || cacheHitPercent != null) && (
                 <div className="flex items-center gap-2 text-xs text-[var(--text-muted)] px-2.5 py-0.5 rounded-full bg-[var(--glass-card)] border border-[var(--glass-border)] shadow-2xs backdrop-blur-sm">
                   {message.thinkingTime != null && (
                     <span className="flex items-center gap-1"><FiClock size={11} />{formatThinkingTime(message.thinkingTime)}</span>
                   )}
                   {message.tokensUsed != null && cost == null && (
                     <span className="flex items-center gap-1"><FiZap size={11} />{message.tokensUsed} {t('tokens')}</span>
+                  )}
+                  {cacheHitPercent != null && (
+                    <span title={`${formatCount(message.cacheHitTokens!)} / ${formatCount(message.promptTokens!)} ${t('costTokensIn')}`}>
+                      {t('cacheHitRate')} {cacheHitPercent}%
+                    </span>
                   )}
                   {cost != null && (
                     <span className="flex items-center gap-1" title={`${message.promptTokens} ${t('costTokensIn')} · ${message.completionTokens} ${t('costTokensOut')}`}>

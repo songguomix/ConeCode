@@ -74,25 +74,25 @@ export class OpenAIAdapter extends BaseAdapter {
     return this.fetchModels(this.buildUrl('/models'), this.buildHeaders());
   }
 
-  async sendMessage(params: SendMessageParams) {
-    const body: any = {
+  protected buildRequestBody(params: SendMessageParams): Record<string, any> {
+    const body: Record<string, any> = {
       model: params.model,
       messages: this.cleanMessages(params.messages),
       temperature: params.temperature ?? 0.7,
       max_tokens: params.maxTokens,
     };
-    
-    if (params.reasoningEffort) {
-      body.reasoning_effort = params.reasoningEffort;
-    }
+    if (params.reasoningEffort) body.reasoning_effort = params.reasoningEffort;
     this.applyTools(body, params);
+    return body;
+  }
 
+  async sendMessage(params: SendMessageParams) {
     const response = await this.fetchWithTimeout(
       this.buildUrl('/chat/completions'),
       {
         method: 'POST',
         headers: this.buildHeaders(),
-        body: JSON.stringify(body),
+        body: JSON.stringify(this.buildRequestBody(params)),
         signal: params.signal,
       }
     );
@@ -100,21 +100,11 @@ export class OpenAIAdapter extends BaseAdapter {
   }
 
   async streamMessage(params: SendMessageParams, onChunk: (chunk: StreamChunk) => void, signal?: AbortSignal) {
-    const body: any = {
-      model: params.model,
-      messages: this.cleanMessages(params.messages),
-      temperature: params.temperature ?? 0.7,
-      max_tokens: params.maxTokens,
+    const body = {
+      ...this.buildRequestBody(params),
       stream: true,
-      // Ask OpenAI-compatible servers to emit a final usage chunk so we can show
-      // token counts. Harmless on servers that ignore unknown fields.
       stream_options: { include_usage: true },
     };
-    
-    if (params.reasoningEffort) {
-      body.reasoning_effort = params.reasoningEffort;
-    }
-    this.applyTools(body, params);
 
     onChunk({ type: 'thinking', content: '' });
 

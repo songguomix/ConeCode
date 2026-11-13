@@ -504,7 +504,7 @@ export function computeCompatibility(input: CompatibilityInput): CompatibilityRe
   if (hasClientHalf(manifest)) {
     reasons.push({
       code: 'web-client',
-      message: 'The package ships a DSH Web client half. Host-side code is loaded; the browser UI is not mounted by ConeCode.',
+      message: 'This plugin includes a DSH Web interface that ConeCode cannot display.',
     });
     missing.push('web-client');
   }

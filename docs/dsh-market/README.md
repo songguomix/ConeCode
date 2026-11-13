@@ -123,6 +123,7 @@ the official Web client exist. The four required layers are:
 | DSH host-side tools (`ctx.tools.register`) | Implemented and verified |
 | DSH host commands (`ctx.commands.register`) | Implemented and verified |
 | DSH skills (`ctx.skills.register` / `registerProvider`) | Implemented and verified |
+| Services provided by earlier rows in the same bundle | Available to later rows that declare the service in their Cordis injection list |
 | Cordis config validation via exported `Config` | Implemented; invalid values keep the previous working instance |
 | `engines.dsh`, DSH peer ranges, `engines.node`, bundle platforms | Implemented; prereleases included as DSH does |
 | Exact-version compatibility exemptions | Implemented; persisted per profile; explicit risk acknowledgement |

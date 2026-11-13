@@ -731,7 +731,9 @@ export function buildToolset(
       if (!mcp.has(definition.name)) mcp.set(definition.name, definition);
     }
   }
-  return [...builtins, ...mcp.values()];
+  // Discovery order can change when the same servers reconnect. Keep the
+  // provider's tool prefix stable when the tool catalog itself is unchanged.
+  return [...builtins, ...[...mcp.values()].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)];
 }
 
 // ---------------------------------------------------------------------------
