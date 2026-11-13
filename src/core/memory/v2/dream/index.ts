@@ -67,6 +67,7 @@ function readState(raw: string | null): DreamState {
           schema: 1,
           processed: parsed.processed as DreamState['processed'],
           lastRunAt: typeof parsed.lastRunAt === 'number' ? parsed.lastRunAt : null,
+          organizerPending: parsed.organizerPending === true,
         };
       }
     } catch {
@@ -151,7 +152,7 @@ async function mergeFiles(
 ): Promise<boolean> {
   const source = files.get(from);
   const target = files.get(to);
-  if (!source || !target || isRetired(source)) return false;
+  if (!source || !target || isRetired(source) || isRetired(target)) return false;
   const date = new Date(now).toISOString().slice(0, 10);
   const merged: WikiFile = {
     ...target,
@@ -162,7 +163,7 @@ async function mergeFiles(
   };
   if (!(await persistFile(storage, scope, merged, target, now, warnings))) return false;
   files.set(to, merged);
-  await writeStub(storage, scope, source, to, now, files);
+  if (!(await writeStub(storage, scope, source, to, now, files, warnings))) return false;
   await repointLinks(storage, scope, files, from, to, now, warnings);
   return true;
 }
@@ -173,8 +174,9 @@ async function writeStub(
   source: WikiFile,
   movedTo: string,
   now: number,
-  files: Map<string, WikiFile>
-): Promise<void> {
+  files: Map<string, WikiFile>,
+  warnings: string[]
+): Promise<boolean> {
   const stub: WikiFile = {
     slug: source.slug,
     name: source.name,
@@ -184,8 +186,12 @@ async function writeStub(
     sources: source.sources,
     body: `MOVED TO [[${movedTo}]]`,
   };
-  await storage.putObject(wikiKey(scope, source.slug), formatWikiFile(stub));
+  if (!(await storage.putObject(wikiKey(scope, source.slug), formatWikiFile(stub)))) {
+    warnings.push(`wiki_write_failed:${source.slug}`);
+    return false;
+  }
   files.set(source.slug, stub);
+  return true;
 }
 
 function capProcessed(processed: DreamState['processed']): DreamState['processed'] {
@@ -312,7 +318,10 @@ export async function runDream(
     }
   }
 
-  if (changedFiles.size > 0) {
+  // A valid analyzer result can be committed even if the organizer times out or
+  // returns invalid output. Retry organizing those topics without reanalyzing.
+  let organizerPending = state.organizerPending === true || changedFiles.size > 0;
+  if (organizerPending) {
     const entriesNow = buildIndexEntries([...files.values()]);
     try {
       const plan = await withTimeout(
@@ -320,6 +329,7 @@ export async function runDream(
         timeoutMs,
         'organizer'
       );
+      organizerPending = Boolean(plan.warning);
       if (plan.warning) warnings.push(`organizer:${plan.warning}`);
       for (const merge of plan.merges) {
         if (await mergeFiles(storage, scope, files, merge.from, merge.to, startedAt, warnings)) {
@@ -331,22 +341,23 @@ export async function runDream(
       for (const retire of plan.retired) {
         if (merged.some((merge) => merge.from === retire.slug)) continue;
         const source = files.get(retire.slug);
-        if (!source || !files.has(retire.movedTo) || isRetired(source)) continue;
-        await writeStub(storage, scope, source, retire.movedTo, startedAt, files);
+        const target = files.get(retire.movedTo);
+        if (!source || !target || isRetired(source) || isRetired(target)) continue;
+        if (!(await writeStub(storage, scope, source, retire.movedTo, startedAt, files, warnings))) continue;
         await repointLinks(storage, scope, files, retire.slug, retire.movedTo, startedAt, warnings);
         merged.push({ from: retire.slug, to: retire.movedTo });
         changedFiles.add(retire.slug);
       }
     } catch (error) {
+      organizerPending = true;
       warnings.push(`organizer:${errorText(error)}`);
     }
   }
 
   const loaded = buildIndexEntries([...files.values()]);
-  const loadedSlugs = new Set(loaded.map((entry) => entry.slug));
   // Topics beyond the per-run file cap were never read; keep their metadata so
-  // the index can never silently shrink.
-  const untouched = indexEntries.filter((entry) => !loadedSlugs.has(entry.slug));
+  // the index can never silently shrink. Loaded retired topics must stay out.
+  const untouched = indexEntries.filter((entry) => !files.has(entry.slug));
   const finalEntries = [...loaded, ...untouched].sort(
     (a, b) => a.domain.localeCompare(b.domain) || a.slug.localeCompare(b.slug)
   );
@@ -376,6 +387,7 @@ export async function runDream(
     schema: 1,
     processed: capProcessed(state.processed),
     lastRunAt: startedAt,
+    organizerPending,
   };
   if (!(await storage.putObject(stateKey(scope), JSON.stringify(nextState, null, 2)))) {
     report.warnings.push('state_write_failed');
@@ -467,6 +479,7 @@ export {
   parseWikiFile,
   readIndexJson,
   safeScope,
+  sanitizeNoteBody,
   sanitizeSlug,
   wikiKey,
 } from './wiki';

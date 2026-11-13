@@ -11,8 +11,8 @@ import type {
 } from './githubReply.types';
 // The preview's shapes are defined next to its logic and shared with main.
 import type { PreviewPlan, PreviewStatus, PreviewLog } from '../core/preview/preview';
-import type { ComputerRequest, DisplayGeometry } from '../core/computer/computer';
-import type { ComputerPreviewAPI, ComputerPreviewAppearance } from '../core/computer/preview';
+import type { ComputerFrame, ComputerRequest, ComputerTarget, DisplayGeometry } from '../core/computer/computer';
+import type { ComputerPreviewAPI, ComputerPreviewAppearance, ComputerPreviewStatus } from '../core/computer/preview';
 import type {
   CloudUsage, GoogleDriveStatus, Memory2State, MemoryChange, MemoryConflict,
   MemoryQuery, SearchHit, StorageHealth,
@@ -55,23 +55,19 @@ export interface AppMetricsSnapshot {
   cpus: number;
 }
 
-export interface ComputerStatus {  platform: string;
-  enabled: boolean;
-  supported: boolean;
-  accessibility: boolean;
-  screenRecording: boolean;
-  geometry: DisplayGeometry | null;
-}
+export type ComputerStatus = ComputerPreviewStatus;
 
 export interface ComputerActionResult {
   ok: boolean;
   message: string;
   cursor?: [number, number];
   needsPermission?: 'accessibility' | 'screenRecording';
+  target?: ComputerTarget;
+  targets?: ComputerTarget[];
 }
 
 export type ComputerScreenshot =
-  | { dataUrl: string; geometry: DisplayGeometry }
+  | ComputerFrame
   | { error: string; needsPermission?: 'screenRecording' };
 
 export interface IPCChannels {
@@ -169,6 +165,8 @@ export interface ChatStreamParams {
   providerId: string;
   modelId: string;
   messages: any[];
+  /** Binds an attached Computer Use image to the current native window frame. */
+  computerFrameId?: string;
   reasoningEffort?: 'low' | 'medium' | 'high';
   maxTokens?: number;
   /** Background calls are independent from the user-stoppable main stream. */
@@ -291,6 +289,13 @@ export interface ElectronAPI {
     getSystemInfo: () => Promise<Record<string, any>>;
     getAppMetrics: () => Promise<AppMetricsSnapshot>;
     getVersion: () => Promise<string>;
+  };
+  /** Self-update: metadata from agibase, installer fetched by Chromium. */
+  update: {
+    check: () => Promise<import('../core/updates/updateClient').UpdateCheckResult>;
+    download: (url: string, fileName?: string) => Promise<import('../core/updates/updateClient').UpdateDownloadStart>;
+    reveal: (filePath: string) => Promise<boolean>;
+    onProgress: (callback: (progress: import('../core/updates/updateClient').UpdateDownloadProgress) => void) => () => void;
   };
   git: {
     publishRelease: (options: { repo: string; token: string; tag: string; name?: string; body?: string; target: string; files: string[]; draft?: boolean; prerelease?: boolean }) => Promise<{ ok: boolean; message: string; url?: string }>;
@@ -451,7 +456,8 @@ export interface ElectronAPI {
     status: () => Promise<ComputerStatus>;
     setEnabled: (on: boolean) => Promise<ComputerStatus>;
     requestPermissions: () => Promise<ComputerStatus>;
-    screenshot: () => Promise<ComputerScreenshot>;
+    openScreenSettings: () => Promise<void>;
+    screenshot: (expectedRevision?: number) => Promise<ComputerScreenshot>;
     act: (req: ComputerRequest) => Promise<ComputerActionResult>;
     panic: () => Promise<ComputerStatus>;
   };

@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef, useId, type Dispatch, type SetStateAction } from 'react';
-import { FiX, FiPlus, FiEdit3, FiTrash2, FiCheck, FiServer, FiZap, FiRefreshCw, FiSliders, FiPackage, FiCpu, FiBell, FiBox, FiGlobe, FiFileText } from 'react-icons/fi';
-import { useUIStore, useProviderStore, useLanguageStore, useSettingsStore, LOCALES } from '../../stores';
+import { FiX, FiPlus, FiEdit3, FiTrash2, FiCheck, FiServer, FiZap, FiRefreshCw, FiSliders, FiPackage, FiCpu, FiBell, FiBox, FiGlobe, FiFileText, FiDownload } from 'react-icons/fi';
+import { useUIStore, useProviderStore, useLanguageStore, useSettingsStore, useUpdateStore, LOCALES } from '../../stores';
 import type { ProviderConfig, ProviderType } from '../../types';
 import MemoryPanel from '../memory/MemoryPanel';
 import SkillsPanel from '../skills/SkillsPanel';
+import UpdateSettingsPanel from '../update/UpdateSettingsPanel';
 import SettingsPlugins from './SettingsPlugins';
 import ShortcutCard from '../screenshot/ShortcutCard';
 import FreeProviderCard from './FreeProviderCard';
@@ -131,6 +132,7 @@ export default function SettingsModal() {
   const preventSleepWhileRunning = useSettingsStore((s) => s.preventSleepWhileRunning);
   const updateSettings = useSettingsStore((s) => s.updateSettings);
   const { locale, setLocale, t } = useLanguageStore();
+  const updateAvailable = useUpdateStore((s) => Boolean(s.result?.ok && s.result.updateAvailable));
 
   const TOOL_CALL_MODES = [
     { value: 'auto', label: 'toolModeAuto' },
@@ -185,6 +187,7 @@ export default function SettingsModal() {
     { id: 'plugins', label: 'plugins', icon: <FiBox size={14} /> },
     { id: 'memory', label: 'memory', icon: <FiCpu size={14} /> },
     { id: 'mcp', label: 'mcpServers', icon: <FiZap size={14} /> },
+    { id: 'updates', label: 'setUpdates', icon: <FiDownload size={14} /> },
   ] as const;
   const [section, setSection] = useState<(typeof SECTIONS)[number]['id']>('general');
   const currentSec = SECTIONS.find((s) => s.id === section) || SECTIONS[0];
@@ -220,7 +223,7 @@ export default function SettingsModal() {
                 title={t(sec.label)}
                 aria-label={t(sec.label)}
                 aria-current={section === sec.id ? 'page' : undefined}
-                className={`w-full flex items-center justify-center sm:justify-start gap-2.5 px-2 sm:px-3 py-2 rounded-xl text-xs font-medium transition-all cursor-pointer ${
+                className={`relative w-full flex items-center justify-center sm:justify-start gap-2.5 px-2 sm:px-3 py-2 rounded-xl text-xs font-medium transition-all cursor-pointer ${
                   section === sec.id
                     ? 'bg-[var(--bg-2)] text-[var(--text-primary)] shadow-xs border border-[color-mix(in_srgb,var(--border)_80%,transparent)] font-semibold'
                     : 'text-[var(--text-secondary)] hover:bg-[color-mix(in_srgb,var(--bg-2)_60%,transparent)] hover:text-[var(--text-primary)] border border-transparent'
@@ -228,6 +231,9 @@ export default function SettingsModal() {
               >
                 <span className={section === sec.id ? 'text-[var(--accent)]' : 'text-[var(--text-muted)]'}>{sec.icon}</span>
                 <span className="hidden sm:inline">{t(sec.label)}</span>
+                {sec.id === 'updates' && updateAvailable && (
+                  <span aria-hidden="true" className="absolute right-1 top-1 w-1.5 h-1.5 rounded-full bg-[var(--accent)]" />
+                )}
               </button>
             ))}
           </nav>
@@ -480,6 +486,9 @@ export default function SettingsModal() {
 
             {section === 'mcp' && (
               <McpSettings t={t} />
+            )}
+            {section === 'updates' && (
+              <UpdateSettingsPanel />
             )}
             </div>
           )}

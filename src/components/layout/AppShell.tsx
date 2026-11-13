@@ -20,6 +20,7 @@ import BackgroundPanel from '../background/BackgroundPanel';
 import ScreenshotOverlay from '../screenshot/ScreenshotOverlay';
 import ImageGeneratorModal from '../chat/ImageGeneratorModal';
 import DshMarketPanel from '../dsh-market/DshMarketPanel';
+import UpdateDialog from '../update/UpdateDialog';
 import ResizeHandle from './ResizeHandle';
 import { panelLayout, SIDEBAR_OVERLAY_WIDTH } from './panelLayout';
 import { workbenchVisible } from './rsiLayout';
@@ -186,6 +187,7 @@ export default function AppShell() {
       {computerOpen && <ComputerPanel />}
       <ImageGeneratorModal />
       <DshMarketPanel />
+      <UpdateDialog />
     </div>
   );
 }

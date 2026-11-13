@@ -13,13 +13,13 @@ conversation/message 存储
 collectDreamSessions() ──► formatTranscript()（脱敏、截断 24k）
         │
         ▼
-analyzer（每个 transcript 一次，单次超时 120s）
+analyzer（逐个 transcript 分析，每个最多尝试两次，共用 120s 超时）
         │  JSON: files[{slug,name,description,domain,body,sources}]
         ▼
 wiki 对象存储（覆盖前先写 history）
         │
         ▼
-organizer（一次）──► merges / retire
+organizer（有新主题或上次整理失败时）──► merges / retire
         │  确定性执行：合并正文、保留全部事实、MOVED TO 存根、链接重写
         ▼
 index.json + _index.md + state.json + last-report.json
@@ -73,8 +73,8 @@ objects/dream/<scope>/history/<slug>-<ts>.md  # 被覆盖主题的旧版本
 ## 成本控制
 
 - 每轮最多 6 个会话；最多收集 12 个候选；每会话最多 6 个文件。
-- transcript 截断到 24k 字符，单条消息 4k，工具参数 300 字符；analyzer 输出上限 4000 tokens，organizer 2000。
-- 单次调用超时 120 秒；失败只记录报告，不重试、不写入半成品。
+- transcript 截断到 24k 字符，单条消息 4k，工具参数 300 字符。模型请求通常从 8192 输出 tokens 开始，并遵守模型声明的更低上限。
+- 只读取模型的最终答案。输出截断、为空或无法解析成 JSON 时，用更精简的提示重试一次；重试也受模型上限和同一阶段的 120 秒超时约束。失败保留在报告中，下轮可重试。
 - wiki 主题上限（读取/整理）默认 80 个，超出记 warning。
 - 已处理会话按 transcript hash 跳过；会话内容变化才会重新分析。
 
@@ -91,12 +91,11 @@ objects/dream/<scope>/history/<slug>-<ts>.md  # 被覆盖主题的旧版本
 - history 的容量统计与更细的保留策略（当前：每主题保留最新 8 份，超过 180 天且非最新删除）。
 - 并行 analyzer（当前顺序执行，避免同文件并发写；会话上限 6 控制成本）。
 - 跨项目共享 wiki（当前严格按项目隔离）。
-- 失败自动重试与断点续跑（报告保留，下次按 hash 继续）。
 
 ## 测试
 
 ```bash
-npx vitest run src/core/memory/v2/dream src/stores/memoryDream.store.test.ts electron/memory2.store.test.ts
+npx vitest run src/core/memory/v2/dream src/stores/memoryDream*.test.ts electron/memory2.store.test.ts
 ```
 
 Dream Wiki 浏览器位于 Memory 面板的 "Dream wiki" 页签：列出主题、查看只读正文，不提供编辑（重新整理才会更新）。

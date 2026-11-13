@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { v4 as uuidv4 } from 'uuid';
 import { useWorkspaceStore } from './workspace.store';
+import { useComputerStore } from './computer.store';
+import type { ComputerRequest } from '../core/computer/computer';
 import type { Message } from '../types';
 import type { RsiToolEvidence } from '../core/agents/rsiRuntime';
 
@@ -124,8 +126,9 @@ async function applyEffect(change: CodeChange): Promise<{ success: boolean; resu
     } else if (kind === 'computer') {
       // The pointer/keyboard request rides in newCode as JSON so the approval
       // card can show it verbatim before anything touches the screen.
-      const request = JSON.parse(change.newCode);
+      const request: ComputerRequest = JSON.parse(change.newCode);
       const outcome = await window.electronAPI.computer.act(request);
+      useComputerStore.getState().note(request, outcome.ok, outcome.ok ? undefined : outcome.message);
       success = outcome.ok;
       result = outcome.message + (outcome.cursor ? `\nPointer is now at (${outcome.cursor.join(', ')}).` : '');
     } else if (kind === 'create') {

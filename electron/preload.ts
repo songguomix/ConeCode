@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { ComputerPreviewAppearance } from '../src/core/computer/preview';
+import type { UpdateDownloadProgress } from '../src/core/updates/updateClient';
 
 contextBridge.exposeInMainWorld('electronAPI', {
   free: {
@@ -272,6 +273,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
       return () => ipcRenderer.removeListener('preview:reload', listener);
     },
   },
+  update: {
+    check: () => ipcRenderer.invoke('update:check'),
+    download: (url: string, fileName?: string) => ipcRenderer.invoke('update:download', url, fileName),
+    reveal: (filePath: string) => ipcRenderer.invoke('update:reveal', filePath),
+    onProgress: (callback: (progress: UpdateDownloadProgress) => void) => {
+      const listener = (_: unknown, progress: UpdateDownloadProgress) => callback(progress);
+      ipcRenderer.on('update:download-progress', listener);
+      return () => ipcRenderer.removeListener('update:download-progress', listener);
+    },
+  },
   computer: {
     openPreview: (appearance?: ComputerPreviewAppearance) => ipcRenderer.invoke('computer-preview:open', appearance),
     closePreview: () => ipcRenderer.invoke('computer-preview:close'),
@@ -289,7 +300,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     status: () => ipcRenderer.invoke('computer:status'),
     setEnabled: (on: boolean) => ipcRenderer.invoke('computer:setEnabled', on),
     requestPermissions: () => ipcRenderer.invoke('computer:requestPermissions'),
-    screenshot: () => ipcRenderer.invoke('computer:screenshot'),
+    openScreenSettings: () => ipcRenderer.invoke('computer:openScreenSettings'),
+    screenshot: (expectedRevision?: number) => ipcRenderer.invoke('computer:screenshot', expectedRevision),
     act: (req: any) => ipcRenderer.invoke('computer:act', req),
     panic: () => ipcRenderer.invoke('computer:panic'),
   },

@@ -8,7 +8,7 @@ import { useSettingsStore, effectiveApprovalMode } from './settings.store';
 import { useLanguageStore } from './language.store';
 import { useTodosStore, type TodoStatus } from './todos.store';
 import { useMemoryStore } from './memory.store';
-import { useMemoryV2Store, isMemoryV2Active, memoryV2ContextBlock } from './memoryV2.store';
+import { useMemoryV2Store, isMemoryV2Active, memoryV2ContextBlock, memoryV2WikiBlock } from './memoryV2.store';
 import { useFreeStore } from './free.store';
 import type { MemoryEntry } from '../core/memory/memory';
 import { formatMemoryFiles } from '../core/memory/memoryFiles';
@@ -47,7 +47,9 @@ import {
   validateComputerRequest,
   describeAction as describeComputerAction,
   READ_ONLY_ACTIONS,
+  type ComputerFrame,
   type ComputerRequest,
+  type ComputerTarget,
 } from '../core/computer/computer';
 import {
   pageSnapshot, pageClick, pageFill, pageEval, pageHistory, waitForPage,
@@ -396,11 +398,7 @@ export async function finalizeRsiRun(
 }
 
 /**
- * Write a message to the transcript on disk. Screenshots are dropped on the way
- * out: a single capture is hundreds of kilobytes of base64, and a conversation
- * that drove the computer for a few minutes would otherwise bloat the store
- * beyond reading. They stay on the in-memory message for as long as the
- * conversation is open, which is all the model needs.
+ * Write a message to the transcript on disk without its transient tool images.
  */
 async function persistMessage(message: Message): Promise<void> {
   const { images, ...withoutImages } = message;
@@ -410,11 +408,9 @@ async function persistMessage(message: Message): Promise<void> {
 }
 
 /**
- * How many of the most recent screenshots are actually sent to the model. Older
- * ones are dropped: they are expensive, and after a few more actions they no
- * longer describe the screen anyway.
+ * Only send the most recent chat images. Computer frames are run-local.
  */
-const MAX_LIVE_SCREENSHOTS = 2;
+const MAX_LIVE_CHAT_IMAGES = 2;
 
 /**
  * Search or glob the open workspace. When the model didn't name a folder, every
@@ -817,10 +813,14 @@ export interface QueuedMessage {
   providerId: string;
   modelId: string;
   createdAt: number;
+  /** The user asked this message to guide the current run at a safe boundary. */
+  steer: boolean;
+  steerError: string | null;
 }
 
 /** Re-entrancy guard: endRun fires on every run end, flush chains from it. */
 const flushingQueues = new Set<string>();
+const persistingSteers = new Map<string, string>();
 
 /**
  * The body of a send for an EXPLICIT conversation: persist the user message,
@@ -1100,7 +1100,8 @@ export function toolCallToAction(
       ? computer
       : { ...rest, action: inner ?? command };
     if (!nested.action) return { error: 'Error: tool "computer" is missing required argument: action.' };
-    return { action: { action: 'computer', computer: nested as ComputerRequest } };
+    const { frameId, targetRevision, ...request } = nested;
+    return { action: { action: 'computer', computer: request as ComputerRequest } };
   }
 
   const invalid = validateToolArgs(resolvedName, args);
@@ -1268,7 +1269,7 @@ const INLINE_DATA_URL = /data:image\/[\w+.-]+;base64,[A-Za-z0-9+/=]+/g;
 /**
  * Replace inline base64 images in message text with a stub. The picture itself
  * rides in the message's images array (recent ones only — see
- * MAX_LIVE_SCREENSHOTS), so the megabyte copy inside the markdown is pure
+ * MAX_LIVE_CHAT_IMAGES), so the megabyte copy inside the markdown is pure
  * re-sent waste on every later turn.
  */
 export function elideInlineDataImages(content: string): string {
@@ -1307,10 +1308,10 @@ export function buildApiMessages(messages: Message[]): ChatMessage[] {
   const out: ChatMessage[] = [];
   const emitted = new Set<string>();
 
-  // Only the last few screenshots go over the wire; everything older is
+  // Only the last few chat images go over the wire; everything older is
   // described in text instead of re-sent.
   const liveScreenshots = new Set(
-    live.filter((m) => m.images?.length).slice(-MAX_LIVE_SCREENSHOTS).map((m) => m.id),
+    live.filter((m) => m.images?.length).slice(-MAX_LIVE_CHAT_IMAGES).map((m) => m.id),
   );
 
   for (let idx = 0; idx < live.length; idx++) {
@@ -1876,6 +1877,11 @@ ${parallelRule}
     if (isMemoryV2Active()) {
       const v2Block = memoryV2ContextBlock();
       if (v2Block) systemMessages.push({ role: 'system', content: v2Block });
+      // Dream notes are model-written summaries of untrusted session content. They ride the user
+      // channel, not the system channel, so the instruction hierarchy cannot mistake a poisoned
+      // note for an order from the operator.
+      const wikiBlock = memoryV2WikiBlock();
+      if (wikiBlock) systemMessages.push({ role: 'user', content: wikiBlock });
     } else {
       const memoryBlock = useMemoryStore.getState().promptBlock(ws.rootPath);
       if (memoryBlock) systemMessages.push({ role: 'system', content: memoryBlock });
@@ -2260,6 +2266,10 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
   // abort controller is the run identity; activeConversationId is only the UI.
   const ownsRun = () => runControllers.get(convId) === abortController;
   const runBuffer = (): StreamRunState => get().streamingRuns[convId] || EMPTY_RUN;
+  // A computer frame belongs to this run and selection, never the chat
+  // transcript. A newer window or frame invalidates it before any model call.
+  let computerFrame: ComputerFrame | null = null;
+  let appList: { targets: ComputerTarget[]; targetRevision: number } | null = null;
 
   const turnStartTime = Date.now();
   const workspaceAtStart = useWorkspaceStore.getState();
@@ -2345,6 +2355,44 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
 
   const { useCodeChangesStore } = await import('./codeChanges.store');
   const { useModelStore } = await import('./model.store');
+  const appendSteering = async (): Promise<boolean> => {
+    if (!ownsRun() || abortController.signal.aborted || isHolding(useInstallGateStore.getState().jobs)) return false;
+    if (useCodeChangesStore.getState().changes.some((c) => c.conversationId === convId && c.status === 'pending')) return false;
+    const next = get().queuedMessages[convId]?.find((message) => message.steer);
+    if (!next || persistingSteers.has(convId)) return false;
+    // Keep the item queued until its transcript write succeeds. A stop can end
+    // this run during that write; do not let its queue flush claim the same item.
+    persistingSteers.set(convId, next.id);
+    try {
+      const message: Message = {
+        id: next.id,
+        conversationId: convId,
+        role: 'user',
+        content: next.content,
+        createdAt: Date.now(),
+      };
+      await persistMessage(message);
+      set((s) => ({
+        queuedMessages: { ...s.queuedMessages, [convId]: (s.queuedMessages[convId] || []).filter((item) => item.id !== next.id) },
+        ...(s.activeConversationId === convId ? { messages: [...s.messages, message] } : {}),
+      }));
+      return ownsRun() && !abortController.signal.aborted;
+    } catch (error) {
+      const steerError = error instanceof Error ? error.message : String(error);
+      set((s) => ({
+        queuedMessages: {
+          ...s.queuedMessages,
+          [convId]: (s.queuedMessages[convId] || []).map((item) =>
+            item.id === next.id ? { ...item, steer: false, steerError } : item,
+          ),
+        },
+      }));
+      return false;
+    } finally {
+      persistingSteers.delete(convId);
+      if (!get().streamingRuns[convId]) void get().flushQueue(convId);
+    }
+  };
   // Resolved per iteration inside the loop (not once here): a limit edit,
   // reasoning toggle, or model-list refresh mid-run must apply to the NEXT
   // turn without waiting for the user to send another message.
@@ -2451,9 +2499,12 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
       // base transcript untouched.
       const continuing = stitch.active && stitch.forIteration === iteration;
       if (!continuing) stitch = freshStitch();
-      const requestMessages = (): ChatMessage[] => {
-        if (!(stitch.active && stitch.forIteration === iteration)) return baseMessages;
+      const requestMessages = (frame: ComputerFrame | null): ChatMessage[] => {
         const tail: ChatMessage[] = [];
+        if (frame) {
+          tail.push({ role: 'user', content: screenshotParts([frame.dataUrl]) });
+        }
+        if (!(stitch.active && stitch.forIteration === iteration)) return [...baseMessages, ...tail];
         // Adapters tolerate an empty assistant turn (dropped/merged), so no
         // placeholder is needed when only reasoning accumulated so far.
         tail.push({ role: 'assistant', content: stitch.rawContent });
@@ -2478,6 +2529,8 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
       const finishReason = () => turnFinishReason ?? runFinishReasons.get(convId) ?? null;
       let streamResult: any;
       let fallbackToPrompt = false;
+      let observedFrame: ComputerFrame | null = null;
+      let observedAppList: { targets: ComputerTarget[]; targetRevision: number } | null = null;
       // Per-iteration attempt budget. Turn-level retries EXTEND it (see the
       // catch below) instead of leaving the stream loop, so the stitched
       // partial and the retry pill keep working across the whole budget.
@@ -2485,8 +2538,15 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
       for (let streamAttempt = 0; streamAttempt <= maxStreamAttempts; streamAttempt++) {
         // Rebuilt per attempt: a stitched retry resumes from the partial that
         // just arrived instead of replaying the base transcript.
-        const request = requestMessages();
         try {
+          if (computerFrame) {
+            const status = await window.electronAPI.computer.status();
+            if (!status.enabled || status.frameId !== computerFrame.frameId) computerFrame = null;
+          }
+          if (abortController.signal.aborted || !ownsRun()) break;
+          observedFrame = computerFrame;
+          observedAppList = appList;
+          const request = requestMessages(observedFrame);
           // A previous attempt's retry pill must not linger into live streaming.
           // A retry attempt also starts with a clean thinking slate: the
           // interrupted attempt's reasoning must never flash back into view.
@@ -2497,6 +2557,7 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
             providerId,
             modelId,
             messages: request,
+            ...(observedFrame && { computerFrameId: observedFrame.frameId }),
             // Auto intensity resolves per-turn from the user's ask (codex-style),
             // then clamps to the levels the selected model actually declares.
             reasoningEffort: resolveEffort(reasoningEffort, lastUserText(request), selectedModel?.reasoningEfforts),
@@ -2770,6 +2831,7 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
 
       if (pending.length === 0) {
         if (rsiCause) break;
+        if (finishReason() !== 'length' && await appendSteering()) continue;
         // No action this turn. If the model was cut off at the token limit
         // (finish_reason 'length'), it likely meant to keep going (e.g. emit a
         // tool call) — surface that rather than ending as if it were done.
@@ -2903,9 +2965,6 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
         }
 
         let result = '';
-        // Set by the `computer` action: the model needs to see the screen it
-        // just changed, so a fresh capture rides back with the tool result.
-        let screenshotAfter = false;
         const label = toolActionLabel(action);
         const changeCtx = { conversationId: convId, providerId, modelId, messageId: assistantMsg.id };
 
@@ -3470,43 +3529,74 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
               shouldContinue = true;
               break;
             }
-            // Looking costs nothing and needs no permission, so reading the
-            // screen or the pointer runs straight away; anything that actually
-            // moves the mouse or types goes through the approval card.
-            if (READ_ONLY_ACTIONS.has(req.action)) {
-              const outcome = await window.electronAPI.computer.act(req);
-              result = outcome.message;
-              useComputerStore.getState().note(req, outcome.ok, outcome.ok ? undefined : outcome.message);
+            const computer = window.electronAPI.computer;
+            const log = useComputerStore.getState();
+            if (req.action === 'screenshot') {
+              computerFrame = null;
+              const status = await computer.status();
+              const shot = await computer.screenshot(status.targetRevision);
+              if ('error' in shot) {
+                result = shot.error;
+                log.note(req, false, result);
+              } else {
+                computerFrame = shot;
+                log.setLastShot(shot);
+                result = `Captured ${shot.target.name} (${shot.geometry.captureWidth}×${shot.geometry.captureHeight}). Use this image for window-local coordinates.`;
+                log.note(req, true);
+              }
               shouldContinue = true;
-            } else {
-              result = await propose({
-                kind: 'computer',
-                filePath: '[Computer]',
-                originalCode: '',
-                newCode: JSON.stringify(req),
-                description: `AI wants to control the computer: ${describeComputerAction(req)}`,
-              }, 'Computer action proposed — awaiting your approval.');
-              // The panel shows what actually reached the screen; a proposal
-              // still waiting on the user has not.
-              const applied = !/awaiting your approval/.test(result);
-              if (applied) useComputerStore.getState().note(req, !/did not move|failed|not been granted/i.test(result), result);
+              break;
             }
-            // Show the model the result. Anthropic's tool returns a fresh
-            // screenshot after every action, and without one the model is
-            // clicking blind.
-            screenshotAfter = req.action !== 'cursor_position';
+            if (req.action === 'list_apps' || req.action === 'wait') {
+              const status = req.action === 'list_apps' ? await computer.status() : null;
+              const outcome = await computer.act(req);
+              if (status) appList = outcome.ok && outcome.targets ? { targets: outcome.targets, targetRevision: status.targetRevision } : null;
+              result = outcome.message;
+              log.note(req, outcome.ok, outcome.ok ? undefined : outcome.message);
+              shouldContinue = true;
+              break;
+            }
+            const switching = req.action === 'switch_app';
+            let bound: ComputerRequest;
+            let description: string;
+            if (switching) {
+              const target = observedAppList?.targets.find((item) => item.id === req.targetId);
+              if (!observedAppList || !target) {
+                result = 'Call list_apps and choose an exact ID from its result before switching.';
+                shouldContinue = true;
+                break;
+              }
+              bound = { ...req, targetRevision: observedAppList.targetRevision };
+              description = `Switch Computer Use to ${target.name}`;
+            } else {
+              if (!observedFrame) {
+                result = 'Take a screenshot of the selected app window before using input or reading the pointer.';
+                shouldContinue = true;
+                break;
+              }
+              bound = { ...req, frameId: observedFrame.frameId };
+              description = `${describeComputerAction(req)} in ${observedFrame.target.name}`;
+            }
+            if (READ_ONLY_ACTIONS.has(req.action)) {
+              const outcome = await computer.act(bound);
+              result = outcome.message;
+              log.note(req, outcome.ok, outcome.ok ? undefined : outcome.message);
+              shouldContinue = true;
+              break;
+            }
+            // A proposal is bound to what this model request saw. A later
+            // screenshot in the same batch cannot authorize these coordinates.
+            if (switching) appList = observedAppList = null;
+            computerFrame = null;
+            observedFrame = null;
+            result = await propose({
+              kind: 'computer',
+              filePath: '[Computer]',
+              originalCode: '',
+              newCode: JSON.stringify(bound),
+              description,
+            }, 'Computer action proposed — awaiting your approval.');
             break;
-          }
-        }
-
-        if (screenshotAfter) {
-          const shot = await window.electronAPI.computer.screenshot();
-          if ('dataUrl' in shot) {
-            image = shot.dataUrl;
-            useComputerStore.getState().setLastShot(shot.dataUrl);
-            result += `\n[Screenshot attached, ${shot.geometry.captureWidth}×${shot.geometry.captureHeight}. Read every coordinate off this image.]`;
-          } else {
-            result += `\nThe screen could not be captured: ${shot.error}`;
           }
         }
         } catch (error) {
@@ -3580,6 +3670,7 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
         if (rsiExecuting && !costBlocked) rsiCause = askedUser ? 'Waiting for the user to answer.' : awaitingUserAction ? 'Waiting for action approval.' : 'Waiting for a delegated action; execution is not complete.';
         break;
       }
+      if (!rsiCause) await appendSteering();
       if (rsiExecuting) await refreshRsiHistory();
     }
     // No tool-turn cap: the loop only leaves above via an explicit break
@@ -3769,6 +3860,7 @@ interface ChatStore {
    * ended (delivered straight away), 'queued' normally, 'dropped' on garbage.
    */
   enqueueMessage: (conversationId: string, content: string, providerId: string, modelId: string) => 'queued' | 'sent' | 'dropped';
+  steerQueuedMessage: (conversationId: string, id: string) => void;
   dequeueMessage: (conversationId: string, id: string) => void;
   /** Send the head of the queue, unless the run is live, held, or waiting. */
   flushQueue: (conversationId: string) => Promise<void>;
@@ -4363,6 +4455,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       providerId,
       modelId,
       createdAt: Date.now(),
+      steer: false,
+      steerError: null,
     };
     set((s) => ({
       queuedMessages: {
@@ -4373,7 +4467,20 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     return 'queued';
   },
 
+  steerQueuedMessage: (conversationId, id) => {
+    if (!get().streamingRuns[conversationId]) return;
+    const queue = get().queuedMessages[conversationId];
+    if (!queue?.some((item) => item.id === id && !item.steer)) return;
+    set((s) => ({
+      queuedMessages: {
+        ...s.queuedMessages,
+        [conversationId]: queue.map((item) => item.id === id ? { ...item, steer: true, steerError: null } : item),
+      },
+    }));
+  },
+
   dequeueMessage: (conversationId, id) => {
+    if (persistingSteers.get(conversationId) === id) return;
     set((s) => ({
       queuedMessages: {
         ...s.queuedMessages,
@@ -4383,7 +4490,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   flushQueue: async (conversationId) => {
-    if (flushingQueues.has(conversationId)) return;
+    if (flushingQueues.has(conversationId) || persistingSteers.has(conversationId)) return;
     if (!get().queuedMessages[conversationId]?.length) return;
     if (get().streamingRuns[conversationId] || get().messageEdits[conversationId]) return;
     if (isHolding(useInstallGateStore.getState().jobs)) return;
@@ -4405,22 +4512,26 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         (c) => c.conversationId === conversationId && c.status === 'pending',
       );
       if (awaitingApproval) return;
-      const transcript = await window.electronAPI.message.list(conversationId).catch(() => []);
-      if (transcript.length > 0 && (transcript[transcript.length - 1] as any)?.isQuestion) return;
-    } catch {
+      const transcript = await window.electronAPI.message.list(conversationId);
+      if (transcript[transcript.length - 1]?.isQuestion) return;
+    } catch (error) {
+      if (get().activeConversationId === conversationId) {
+        set({ error: error instanceof Error ? error.message : String(error) });
+      }
       return;
     }
     // Another flush may have acquired the delivery lock during these reads.
-    if (flushingQueues.has(conversationId)
+    if (flushingQueues.has(conversationId) || persistingSteers.has(conversationId)
       || get().streamingRuns[conversationId] || get().messageEdits[conversationId]) return;
-    const head = get().queuedMessages[conversationId]?.[0];
+    const queue = get().queuedMessages[conversationId];
+    const head = queue?.find((item) => item.steer) ?? queue?.find((item) => item.steerError === null);
     if (!head) return;
     flushingQueues.add(conversationId);
     try {
       set((s) => ({
         queuedMessages: {
           ...s.queuedMessages,
-          [conversationId]: (s.queuedMessages[conversationId] || []).slice(1),
+          [conversationId]: (s.queuedMessages[conversationId] || []).filter((item) => item.id !== head.id),
         },
       }));
       await deliverToConversation(conversationId, head.content, head.providerId, head.modelId, { keepComposerImages: true });

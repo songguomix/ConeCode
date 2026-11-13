@@ -16,12 +16,13 @@ export function ComputerPreviewSurface({ snapshot, waiting, unavailable, failed 
   failed?: boolean;
 }) {
   const [failedShot, setFailedShot] = useState<string>();
-  const image = snapshot?.status.enabled ? snapshot.shot?.dataUrl : undefined;
+  const shot = snapshot?.shot;
+  const image = snapshot?.status.enabled && shot?.frameId === snapshot.status.frameId ? shot?.dataUrl : undefined;
   const ready = !!image && /^data:image\/(?:png|jpe?g|webp);base64,/.test(image) && failedShot !== image;
   return (
     <div className="computer-preview-surface" data-testid="computer-preview-window">
       {ready ? (
-        <img src={image} alt="" draggable={false} onError={() => setFailedShot(image)} />
+        <img src={image} alt={shot!.target.name} draggable={false} onError={() => setFailedShot(image)} />
       ) : (
         <span className="computer-preview-placeholder" role="status">{failed ? unavailable : waiting}</span>
       )}
@@ -43,7 +44,8 @@ export default function ComputerPreviewWindow() {
     const appearance = snapshot?.appearance;
     if (appearance && appearance.locale !== useLanguageStore.getState().locale) useLanguageStore.getState().setLocale(appearance.locale);
   }, [snapshot?.appearance?.locale]);
-  useEffect(() => { document.title = `ConeCode · ${t('computerPreviewTitle')}`; }, [locale, t]);
+  const target = snapshot?.status.target;
+  useEffect(() => { document.title = `ConeCode · ${t('computerPreviewTitle')}${target ? ` · ${target.name}` : ''}`; }, [locale, t, target]);
 
   useEffect(() => {
     const api = window.computerPreviewAPI;

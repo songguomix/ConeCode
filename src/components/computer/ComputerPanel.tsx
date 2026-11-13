@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  FiX, FiMonitor, FiAlertTriangle, FiCheck, FiExternalLink, FiSlash, FiTrash2, FiCrosshair,
+  FiX, FiMonitor, FiAlertTriangle, FiCheck, FiExternalLink, FiSlash, FiTrash2, FiCrosshair, FiRefreshCw,
 } from 'react-icons/fi';
 import { useUIStore, useLanguageStore, useComputerStore, useSettingsStore } from '../../stores';
+import type { ComputerTarget } from '../../core/computer/computer';
 
 // The consent surface for letting the agent drive the machine. Everything the
 // user needs in order to decide is here: what it will be able to do, which OS
@@ -33,12 +34,15 @@ export default function ComputerPanel() {
   const { t, locale } = useLanguageStore();
   const approvalMode = useSettingsStore((s) => s.approvalOverride ?? s.approvalMode);
   const {
-    enabled, supported, platform, accessibility, screenRecording, geometry,
-    activity, lastShot, refresh, setEnabled, requestPermissions, panic, clearActivity, previewVisible, refreshPreview,
+    enabled, supported, platform, accessibility, screenRecording, geometry, target,
+    activity, lastShot, refresh, setEnabled, requestPermissions, panic, clearActivity, previewVisible, refreshPreview, setLastShot,
   } = useComputerStore();
   const bottomRef = useRef<HTMLDivElement>(null);
   const [openingPreview, setOpeningPreview] = useState(false);
   const [previewError, setPreviewError] = useState<string>();
+  const [apps, setApps] = useState<ComputerTarget[] | null>(null);
+  const [appBusy, setAppBusy] = useState(false);
+  const [appError, setAppError] = useState<string | null>(null);
 
   useEffect(() => { refresh(); }, [refresh]);
   useEffect(() => { void refreshPreview().catch(() => undefined); }, [refreshPreview]);
@@ -46,6 +50,44 @@ export default function ComputerPanel() {
 
   const isMac = platform === 'darwin';
   const ready = accessibility && screenRecording;
+  const loadApps = useCallback(async () => {
+    setAppBusy(true);
+    setAppError(null);
+    try {
+      const result = await window.electronAPI.computer.act({ action: 'list_apps' });
+      if (!result.ok) throw new Error(result.message);
+      setApps(result.targets!);
+    } catch (error) {
+      setAppError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setAppBusy(false);
+    }
+  }, []);
+  useEffect(() => {
+    if (enabled) void loadApps();
+    else {
+      setApps(null);
+      setAppError(null);
+    }
+  }, [enabled, loadApps]);
+
+  const selectApp = async (targetId: string) => {
+    setAppBusy(true);
+    setAppError(null);
+    try {
+      const api = window.electronAPI.computer;
+      const { targetRevision } = await api.status();
+      const result = await api.act({ action: 'switch_app', targetId, targetRevision });
+      if (!result.ok) throw new Error(result.message);
+      const shot = await api.screenshot(targetRevision + 1);
+      if ('error' in shot) throw new Error(shot.error);
+      setLastShot(shot);
+    } catch (error) {
+      setAppError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setAppBusy(false);
+    }
+  };
   const openPreview = async () => {
     setOpeningPreview(true);
     setPreviewError(undefined);
@@ -127,17 +169,41 @@ export default function ComputerPanel() {
                   <span className="block text-[13px] font-medium">
                     {enabled ? t('computerDisable') : t('computerEnable')}
                   </span>
-                  <span className="block text-[11.5px] text-[var(--text-muted)]">{t('computerSessionOnly')}</span>
+                <span className="block text-[11.5px] text-[var(--text-muted)]">{t('computerSessionOnly')}</span>
                 </span>
               </button>
 
               {enabled && (
-                <button
-                  onClick={panic}
-                  className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-[var(--error)] text-white text-[13px] font-medium hover:opacity-90 transition-opacity cursor-pointer"
-                >
-                  <FiSlash size={13} /> {t('computerStopNow')}
-                </button>
+                <>
+                  <div className="space-y-2 rounded-xl border border-[var(--border)] bg-[var(--bg-0)] p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <label htmlFor="computer-target" className="text-[13px] font-medium">{t('computerTarget')}</label>
+                      <button type="button" onClick={loadApps} disabled={appBusy}
+                        className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-[var(--accent)] hover:bg-[var(--accent-soft)] disabled:opacity-50">
+                        <FiRefreshCw size={12} aria-hidden="true" /> {t('refresh')}
+                      </button>
+                    </div>
+                    <select id="computer-target" disabled={appBusy || !apps?.length}
+                      value={target?.id ?? ''} onChange={(event) => void selectApp(event.target.value)}
+                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-2)] px-2 py-1.5 text-xs">
+                      <option value="" disabled>{t('computerPickApp')}</option>
+                      {target && !apps?.some((app) => app.id === target.id) && (
+                        <option value={target.id}>{target.name}{target.title ? ` · ${target.title}` : ''}</option>
+                      )}
+                      {apps?.map((app) => (
+                        <option key={app.id} value={app.id}>{app.name}{app.title ? ` · ${app.title}` : ''}</option>
+                      ))}
+                    </select>
+                    <p className="text-xs text-[var(--text-muted)]">{t(apps?.length === 0 ? 'computerNoApps' : 'computerTargetHint')}</p>
+                    {appError && <p role="alert" className="break-words text-xs text-[var(--error)]">{appError}</p>}
+                  </div>
+                  <button
+                    onClick={panic}
+                    className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-[var(--error)] text-white text-[13px] font-medium hover:opacity-90 transition-opacity cursor-pointer"
+                  >
+                    <FiSlash size={13} /> {t('computerStopNow')}
+                  </button>
+                </>
               )}
 
               {/* Permissions */}
@@ -159,7 +225,15 @@ export default function ComputerPanel() {
                     granted={screenRecording}
                     label={t('computerScreenRecording')}
                     hint={screenRecording ? t('computerGranted') : t('computerScreenRecordingHint')}
+                    action={
+                      <button type="button" onClick={() => {
+                        void window.electronAPI.computer.openScreenSettings().catch((error: Error) => setAppError(error.message));
+                      }} className="shrink-0 rounded-lg px-2 py-1 text-xs text-[var(--accent)] hover:bg-[var(--accent-soft)]">
+                        {t('computerOpenSettings')} <FiExternalLink className="inline" size={11} />
+                      </button>
+                    }
                   />
+                  {!enabled && appError && <p role="alert" className="break-words text-xs text-[var(--error)]">{appError}</p>}
                   {!ready && (
                     <p className="text-[11.5px] text-[var(--text-muted)] leading-relaxed px-1">
                       {t('computerRestartHint')}
@@ -179,7 +253,7 @@ export default function ComputerPanel() {
               {geometry && (
                 <div className="flex items-center gap-2 px-1 text-[11.5px] text-[var(--text-muted)]">
                   <FiCrosshair size={11} />
-                  {t('computerScreen')}: {geometry.logicalWidth}×{geometry.logicalHeight}
+                  {t('computerTarget')}: {geometry.logicalWidth}×{geometry.logicalHeight}
                   <span className="opacity-60">→</span>
                   {geometry.captureWidth}×{geometry.captureHeight} {t('computerAsSeen')}
                 </div>
@@ -189,7 +263,7 @@ export default function ComputerPanel() {
               {lastShot && (
                 <div className="rounded-xl overflow-hidden border border-[var(--border)]">
                   <div className="px-3 py-1.5 text-[11.5px] text-[var(--text-muted)] bg-[var(--bg-0)]">
-                    {t('computerLastShot')}
+                    {t('computerLastShot')}{target ? ` · ${target.name}` : ''}
                   </div>
                   <img src={lastShot} alt={t('computerLastShot')} className="w-full block" />
                 </div>

@@ -2,13 +2,15 @@
 // a model already trained on it needs no re-teaching.
 //
 // Everything here is pure: the action shapes, what counts as a valid call, how a
-// coordinate the model picked off a screenshot maps back onto the real display,
+// coordinate the model picked off a screenshot maps back onto a window,
 // and how a key name becomes something the OS understands. The parts that touch
 // the machine live in electron/computer/controller.ts — same split as
 // core/exec/sandbox.ts, and for the same reason: these rules are the ones worth
 // pinning down in tests.
 
 export type ComputerActionName =
+  | 'list_apps'
+  | 'switch_app'
   | 'screenshot'
   | 'cursor_position'
   | 'mouse_move'
@@ -30,11 +32,17 @@ export type ScrollDirection = 'up' | 'down' | 'left' | 'right';
 
 export interface ComputerRequest {
   action: ComputerActionName;
+  /** Window identifier returned by list_apps, used by switch_app. */
+  targetId?: string;
+  /** Bound by the application to the selection on which an action was proposed. */
+  targetRevision?: number;
+  /** Bound by the application to the screenshot actually shown to the model. */
+  frameId?: string;
   /** [x, y] in the coordinate space of the screenshot the model was shown. */
   coordinate?: [number, number];
   /** Drag destination, same space as `coordinate`. */
   start_coordinate?: [number, number];
-  /** Text to type, or the key combo for `key`/`hold_key` ("cmd+shift+4"). */
+  /** Text to type, or an app key combo such as "Return" or "cmd+s". */
   text?: string;
   scroll_direction?: ScrollDirection;
   scroll_amount?: number;
@@ -42,9 +50,9 @@ export interface ComputerRequest {
   duration?: number;
 }
 
-/** Actions that read the screen or pointer without changing anything. */
+/** Actions that inspect the selected app or wait without changing it. */
 export const READ_ONLY_ACTIONS: ReadonlySet<ComputerActionName> = new Set([
-  'screenshot', 'cursor_position', 'wait',
+  'list_apps', 'screenshot', 'cursor_position', 'wait',
 ]);
 
 const NEEDS_COORDINATE: ReadonlySet<ComputerActionName> = new Set([
@@ -60,7 +68,7 @@ const OPTIONAL_COORDINATE: ReadonlySet<ComputerActionName> = new Set([
 const NEEDS_TEXT: ReadonlySet<ComputerActionName> = new Set(['key', 'hold_key', 'type']);
 
 const ALL_ACTIONS: ReadonlySet<string> = new Set<ComputerActionName>([
-  'screenshot', 'cursor_position', 'mouse_move', 'left_click', 'right_click',
+  'list_apps', 'switch_app', 'screenshot', 'cursor_position', 'mouse_move', 'left_click', 'right_click',
   'middle_click', 'double_click', 'triple_click', 'left_mouse_down', 'left_mouse_up',
   'left_click_drag', 'key', 'hold_key', 'type', 'scroll', 'wait',
 ]);
@@ -79,6 +87,10 @@ export function validateComputerRequest(req: ComputerRequest): string | null {
   const action = req?.action;
   if (!action || !ALL_ACTIONS.has(action)) {
     return `Unknown computer action "${action}". Valid actions: ${[...ALL_ACTIONS].join(', ')}.`;
+  }
+
+  if (action === 'switch_app' && (typeof req.targetId !== 'string' || !req.targetId)) {
+    return 'Choose a window using a targetId returned by list_apps.';
   }
 
   if (NEEDS_COORDINATE.has(action) && !isCoordinate(req.coordinate)) {
@@ -102,7 +114,7 @@ export function validateComputerRequest(req: ComputerRequest): string | null {
     return `"text" is ${req.text!.length} characters; type at most ${MAX_TYPE_LENGTH} per call.`;
   }
   if ((action === 'key' || action === 'hold_key') && parseKeyCombo(req.text!) === null) {
-    return `Could not read the key combo "${req.text}". Use names like "Return", "cmd+shift+4", "ctrl+c".`;
+    return `Could not read the key combo "${req.text}". Use names like "Return", "cmd+s", or "ctrl+c".`;
   }
 
   if (action === 'scroll') {
@@ -143,6 +155,19 @@ export interface DisplayGeometry {
   logicalHeight: number;
   captureWidth: number;
   captureHeight: number;
+}
+
+export interface ComputerTarget {
+  id: string;
+  name: string;
+  title: string;
+}
+
+export interface ComputerFrame {
+  dataUrl: string;
+  geometry: DisplayGeometry;
+  target: ComputerTarget;
+  frameId: string;
 }
 
 /**
@@ -307,6 +332,8 @@ export const WINDOWS_VKEYS: Record<string, number> = {
 export function describeAction(req: ComputerRequest): string {
   const at = req.coordinate ? ` at (${req.coordinate[0]}, ${req.coordinate[1]})` : '';
   switch (req.action) {
+    case 'list_apps': return 'List available app windows';
+    case 'switch_app': return `Switch to app window ${req.targetId}`;
     case 'screenshot': return 'Take a screenshot';
     case 'cursor_position': return 'Read the pointer position';
     case 'mouse_move': return `Move the pointer${at}`;

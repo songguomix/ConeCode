@@ -6,7 +6,8 @@ import { ComputerPreviewWindow } from './preview-window';
 import { COMPUTER_PREVIEW_CHANNELS as CHANNELS } from '../../src/core/computer/preview';
 
 const geometry = { logicalWidth: 1200, logicalHeight: 800, captureWidth: 1200, captureHeight: 800 };
-const image = { dataUrl: 'data:image/png;base64,cGl4ZWxz', geometry };
+const target = { id: '11:1', name: 'Editor', title: 'Document' };
+const image = { dataUrl: 'data:image/png;base64,cGl4ZWxz', geometry, target, frameId: 'frame1' };
 
 function fakeWindow() {
   const webContents = Object.assign(new EventEmitter(), {
@@ -17,7 +18,7 @@ function fakeWindow() {
   let visible = false;
   const win = Object.assign(new EventEmitter(), {
     webContents, isDestroyed: () => destroyed,
-    setAlwaysOnTop: vi.fn(), setAspectRatio: vi.fn(), setVisibleOnAllWorkspaces: vi.fn(), setContentProtection: vi.fn(),
+    setAlwaysOnTop: vi.fn(), setAspectRatio: vi.fn(), setSize: vi.fn(), setVisibleOnAllWorkspaces: vi.fn(), setContentProtection: vi.fn(),
     showInactive: vi.fn(() => { visible = true; win.emit('show'); }), isVisible: () => visible,
     minimize: vi.fn(), isMinimized: vi.fn(() => false), restore: vi.fn(), focus: vi.fn(), loadURL: vi.fn(async () => undefined), loadFile: vi.fn(async () => undefined),
     close: vi.fn(() => { destroyed = true; win.emit('closed'); }),
@@ -29,7 +30,7 @@ function fakeWindow() {
 function harness(extra: { devServerUrl?: string } = {}) {
   const main = fakeWindow();
   const preview = fakeWindow();
-  const status = { platform: 'darwin', enabled: true, supported: true, accessibility: true, screenRecording: true, geometry };
+  const status = { platform: 'darwin', enabled: true, supported: true, accessibility: true, screenRecording: true, geometry, target, targetRevision: 1, frameId: 'frame1' };
   const createWindow = vi.fn((_options: BrowserWindowConstructorOptions) => preview as unknown as BrowserWindow);
   const manager = new ComputerPreviewWindow({
     createWindow, getMainWindow: () => main as unknown as BrowserWindow,
@@ -114,6 +115,19 @@ describe('native computer preview manager (mock Electron window)', () => {
     expect(h.main.webContents.send).toHaveBeenCalledWith('computer:status-changed', expect.objectContaining({ enabled: false }));
   });
 
+  it('clears the old preview and rejects an in-flight capture after switching apps', async () => {
+    const h = harness();
+    await expect(h.manager.capture(async () => image)).resolves.toEqual(image);
+    let finish!: (value: typeof image) => void;
+    const pending = h.manager.capture(() => new Promise((resolve) => { finish = resolve; }));
+    h.status.target = { id: '22:2', name: 'Browser', title: '' };
+    h.status.targetRevision += 1;
+    h.manager.statusChanged();
+    expect(h.manager.snapshot().shot).toBeNull();
+    finish(image);
+    await expect(pending).resolves.not.toHaveProperty('dataUrl');
+  });
+
   it('reports visibility to the main window and closing the viewer leaves control untouched', async () => {
     const h = harness(); await h.manager.open();
     expect(h.handlers.get(CHANNELS.getVisibility)!(h.event(h.main))).toEqual({ visible: true });
@@ -142,7 +156,8 @@ describe('native computer preview manager (mock Electron window)', () => {
     const h = harness();
     let finish!: (value: typeof image) => void;
     const earlier = h.manager.capture(() => new Promise((resolve) => { finish = resolve; }));
-    const newer = { ...image, dataUrl: 'data:image/png;base64,bmV3' };
+    const newer = { ...image, dataUrl: 'data:image/png;base64,bmV3', frameId: 'frame2' };
+    h.status.frameId = newer.frameId;
     expect(await h.manager.capture(async () => newer)).toEqual(newer);
     finish(image);
     expect(await earlier).not.toHaveProperty('dataUrl');

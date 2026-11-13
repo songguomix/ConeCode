@@ -12,6 +12,7 @@ import {
   type SlashCommand,
 } from '../../core/commands';
 import ModelSelector from '../model/ModelSelector';
+import QueuedMessages from './QueuedMessages';
 import { parseQuickCapture, captureMemory } from '../../core/memory/quickCapture';
 import { resolveDisplayPath } from '../../core/workspace/roots';
 
@@ -598,8 +599,9 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
           </div>
         )}
 
+        {activeConversationId && <QueuedMessages key={activeConversationId} conversationId={activeConversationId} />}
         {/* Composer box */}
-        <div className={`chat-composer rounded-[20px] border border-[var(--glass-border)] bg-[var(--glass-card)] backdrop-blur-2xl pl-3 pr-2.5 py-2 focus-within:border-[color-mix(in_srgb,var(--accent)_50%,transparent)] focus-within:ring-2 focus-within:ring-[color-mix(in_srgb,var(--accent)_15%,transparent)] transition-all ${
+        <div className={`chat-composer relative rounded-[20px] border border-[var(--glass-border)] bg-[var(--glass-card)] backdrop-blur-2xl pl-3 pr-2.5 py-2 focus-within:border-[color-mix(in_srgb,var(--accent)_50%,transparent)] focus-within:ring-2 focus-within:ring-[color-mix(in_srgb,var(--accent)_15%,transparent)] transition-all ${
           centered
             ? 'shadow-[0_12px_44px_rgba(0,0,0,0.08)] dark:shadow-[0_16px_50px_rgba(0,0,0,0.4)]'
             : 'shadow-[0_8px_32px_rgba(0,0,0,0.06)] dark:shadow-[0_12px_44px_rgba(0,0,0,0.35)]'

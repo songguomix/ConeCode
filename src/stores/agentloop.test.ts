@@ -9,6 +9,8 @@ import { useTodosStore } from './todos.store';
 import { useMemoryStore } from './memory.store';
 import { resetNativeToolFallback } from './chat.store';
 import { useCodeChangesStore } from './codeChanges.store';
+import { useComputerStore } from './computer.store';
+import type { ComputerFrame, ComputerRequest } from '../core/computer/computer';
 import type { AIModel, Message } from '../types';
 
 // End-to-end exercise of runAgentLoop against a fake provider, which is the only
@@ -126,6 +128,118 @@ describe('runAgentLoop with native tool calling', () => {
     // own tests in memoryIntegration.test.ts).
     useMemoryStore.setState({ entries: [], enabled: false, extracting: false, loaded: true });
     useCodeChangesStore.setState({ changes: [] });
+    useComputerStore.setState({ enabled: false, target: null, targetRevision: 0, frameId: null, lastShot: null, activity: [] });
+  });
+
+  function arrangeComputerWindows() {
+    const targets = [
+      { id: 'win-a', name: 'App A', title: 'Document A' },
+      { id: 'win-b', name: 'App B', title: 'Document B' },
+    ];
+    const shots = ['data:image/png;base64,AAAA', 'data:image/png;base64,BBBB'];
+    let selected = 0;
+    let targetRevision = 1;
+    let frameId: string | null = null;
+    const geometry = { logicalWidth: 600, logicalHeight: 400, captureWidth: 600, captureHeight: 400 };
+    const status = vi.fn(async () => ({
+      enabled: true, supported: true, accessibility: true, screenRecording: true, platform: 'darwin',
+      geometry, target: targets[selected], targetRevision, frameId,
+    }));
+    const select = () => {
+      selected = 1;
+      targetRevision += 1;
+      frameId = null;
+    };
+    const screenshot = vi.fn(async (expectedRevision?: number): Promise<ComputerFrame> => {
+      expect(expectedRevision).toBe(targetRevision);
+      frameId = `frame-${targetRevision}`;
+      return { dataUrl: shots[selected], geometry, target: targets[selected], frameId };
+    });
+    const act = vi.fn(async (req: ComputerRequest) => {
+      if (req.action === 'list_apps') return { ok: true, message: 'App A: win-a; App B: win-b', targets };
+      if (req.action === 'switch_app' && req.targetRevision === targetRevision) {
+        select();
+        return { ok: true, message: 'Selected App B', target: targets[selected] };
+      }
+      if (req.frameId === frameId) return { ok: true, message: 'Clicked' };
+      return { ok: false, message: 'The app window changed. Take a fresh screenshot.' };
+    });
+    window.electronAPI.computer = { status, screenshot, act } as unknown as typeof window.electronAPI.computer;
+    useComputerStore.setState({ enabled: true });
+    return { shots, act, screenshot, select };
+  }
+
+  it('switches app scopes without replaying the previous frame or losing user images', async () => {
+    const { shots, act, screenshot } = arrangeComputerWindows();
+    const attachment = 'data:image/png;base64,VVVS';
+    useSettingsStore.setState({ approvalMode: 'fullAuto' });
+    useWorkspaceStore.setState({ contextFiles: [{ path: 'input.png', content: '', isImage: true, dataUrl: attachment }] });
+    queued = [
+      toolCallResponse('computer', { action: 'screenshot' }),
+      toolCallResponse('computer', { action: 'list_apps' }),
+      toolCallResponse('computer', { action: 'switch_app', targetId: 'win-b', targetRevision: 123 }),
+      toolCallResponse('computer', { action: 'screenshot' }),
+      toolCallResponse('computer', { action: 'left_click', coordinate: [30, 40], frameId: 'model-supplied' }),
+      textResponse('done'),
+    ];
+
+    await useChatStore.getState().sendMessage('Open App B and click its button.', 'p1', 'gpt-test');
+
+    expect(act.mock.calls.map(([req]) => req)).toEqual([
+      { action: 'list_apps' },
+      { action: 'switch_app', targetId: 'win-b', targetRevision: 1 },
+      { action: 'left_click', coordinate: [30, 40], frameId: 'frame-2' },
+    ]);
+    expect(screenshot.mock.calls).toEqual([[1], [2]]);
+    const requests = streamCalls.map(({ messages }) => JSON.stringify(messages));
+    expect(requests[1]).toContain(shots[0]);
+    expect(requests[3]).not.toContain(shots[0]);
+    expect(requests[4]).not.toContain(shots[0]);
+    expect(requests[4]).toContain(shots[1]);
+    expect(requests.every((request) => request.includes(attachment))).toBe(true);
+    expect(JSON.stringify(created)).not.toContain(shots[0]);
+    expect(JSON.stringify(useChatStore.getState().messages)).not.toContain(shots[1]);
+  });
+
+  it('keeps delayed approval bound to the originally observed app frame', async () => {
+    const { shots, act, select } = arrangeComputerWindows();
+    queued = [
+      toolCallResponse('computer', { action: 'screenshot' }),
+      toolCallResponse('computer', { action: 'left_click', coordinate: [3, 4] }),
+    ];
+    await useChatStore.getState().sendMessage('Click the button in App A.', 'p1', 'gpt-test');
+    const [change] = useCodeChangesStore.getState().changes;
+    expect(change.description).toContain('App A');
+    expect(act).not.toHaveBeenCalled();
+
+    select();
+    const result = await useCodeChangesStore.getState().applyChange(change.id);
+    expect(act).toHaveBeenCalledWith({ action: 'left_click', coordinate: [3, 4], frameId: 'frame-1' });
+    expect(result).toMatchObject({ success: false, result: expect.stringContaining('app window changed') });
+    const activity = useComputerStore.getState().activity;
+    expect(activity[activity.length - 1].ok).toBe(false);
+    await vi.waitFor(() => expect(streamCalls).toHaveLength(3));
+    expect(JSON.stringify(streamCalls[2].messages)).not.toContain(shots[0]);
+  });
+
+  it('does not authorize prompt-mode coordinates from an image not yet shown', async () => {
+    const { shots, act } = arrangeComputerWindows();
+    useSettingsStore.setState({ toolCallMode: 'prompt', approvalMode: 'fullAuto' });
+    const command = (request: Record<string, unknown>) => '```json\n' + JSON.stringify({ action: 'computer', ...request }) + '\n```';
+    const click = command({ command: 'left_click', coordinate: [5, 10] });
+    queued = [
+      textResponse(command({ command: 'screenshot' }) + '\n' + click),
+      textResponse(click),
+      textResponse('done'),
+    ];
+
+    await useChatStore.getState().sendMessage('Inspect the selected app and click its button.', 'p1', 'gpt-test');
+
+    expect(act.mock.calls.map(([request]) => request)).toEqual([
+      { action: 'left_click', coordinate: [5, 10], frameId: 'frame-1' },
+    ]);
+    expect(JSON.stringify(streamCalls[1].messages)).toContain(shots[0]);
+    expect(JSON.stringify(streamCalls[2].messages)).not.toContain(shots[0]);
   });
 
   const editHistory = (): Message[] => [

@@ -10,6 +10,7 @@ import {
   GoogleDriveStorageProvider, type GoogleDriveBridge, CloudStorageProvider,
 } from '../core/memory/v2';
 import { useModelStore } from './model.store';
+import { completeDream } from '../core/memory/v2/dream/completion';
 import {
   loadWikiContext,
   loadWikiIndex,
@@ -19,7 +20,8 @@ import {
   sanitizeSlug,
   wikiKey,
 } from '../core/memory/v2/dream';
-import type { DreamReport, DreamSession, DreamStorage, WikiFile, WikiIndexEntry } from '../core/memory/v2/dream';
+import type { DreamLlm, DreamReport, DreamSession, DreamStorage, WikiFile, WikiIndexEntry } from '../core/memory/v2/dream';
+import type { AIModel } from '../types/model.types';
 
 // The single place the rest of the app talks to Memory 2.0.
 // When the Electron bridge is absent (unit tests, preview harness) the store
@@ -32,6 +34,8 @@ let autoSyncTimer: ReturnType<typeof setTimeout> | null = null;
 let failedAttempts = 0;
 let migrationInFlight = false;
 let initPromise: Promise<void> | null = null;
+let projectRevision = 0;
+let projectChanging = false;
 const endedSessions = new Set<string>();
 
 interface MemoryV2State {
@@ -215,20 +219,20 @@ function dreamStorage(): DreamStorage {
   };
 }
 
-async function dreamLlm(req: { system: string; user: string; maxTokens?: number }): Promise<string> {
-  const model = useModelStore.getState().getSelectedModel();
-  if (!model) return '';
-  const result = await (globalThis as any).window.electronAPI.chat.stream({
+function dreamLlm(
+  model: Pick<AIModel, 'providerId' | 'id' | 'maxOutputTokens'>,
+  req: Parameters<DreamLlm>[0]
+): Promise<string> {
+  return completeDream(req, model.maxOutputTokens, ({ system, user, maxTokens }) => window.electronAPI.chat.stream({
     providerId: model.providerId,
     modelId: model.id,
     silent: true,
-    maxTokens: Math.min(Math.max(req.maxTokens ?? 4000, 500), 6000),
+    maxTokens,
     messages: [
-      { role: 'system', content: req.system },
-      { role: 'user', content: req.user },
+      { role: 'system', content: system },
+      { role: 'user', content: user },
     ],
-  });
-  return extractText(result);
+  }));
 }
 
 /**
@@ -237,19 +241,26 @@ async function dreamLlm(req: { system: string; user: string; maxTokens?: number 
  */
 async function collectDreamSessions(now: number, rootPath: string | null): Promise<DreamSession[]> {
   const api = (globalThis as any).window?.electronAPI;
-  if (!api?.conversation?.list || !api?.message?.list) return [];
-  const conversations = await api.conversation.list().catch(() => []);
-  if (!Array.isArray(conversations)) return [];
-  const sessions: DreamSession[] = [];
-  for (const conversation of conversations.slice(0, 30)) {
-    const id = typeof conversation?.id === 'string' ? conversation.id : '';
+  if (!api?.conversation?.list || !api?.message?.list) throw new Error('Conversation history is unavailable.');
+  const conversations = await api.conversation.list();
+  if (!Array.isArray(conversations)) throw new Error('Could not read conversations for Dream.');
+  // Bound the scans within this workspace, rather than allowing recent chats
+  // from other projects to crowd out all of its idle chats.
+  const candidates = conversations.filter((conversation) => {
     const updatedAt = Number(conversation?.updatedAt) || 0;
-    if (!id || !updatedAt || now - updatedAt < 10 * 60_000) continue;
-    // Keep every project's notes isolated: only sessions from this workspace.
     const conversationRoot = typeof conversation?.rootPath === 'string' ? conversation.rootPath : null;
-    if (rootPath ? conversationRoot !== rootPath : conversationRoot !== null) continue;
-    const rows = await api.message.list(id).catch(() => []);
-    if (!Array.isArray(rows) || rows.length < 4) continue;
+    return typeof conversation?.id === 'string' && conversation.id
+      && updatedAt && now - updatedAt >= 10 * 60_000 && conversationRoot === rootPath;
+  }).slice(0, 30);
+  const sessions: DreamSession[] = [];
+  for (const conversation of candidates) {
+    const id = conversation.id;
+    const rows = await api.message.list(id);
+    if (!Array.isArray(rows)) throw new Error('Could not read conversation messages for Dream.');
+    if (!rows.some((row) => row?.role === 'user') || !rows.some((row) => row?.role === 'assistant')) continue;
+    // Persisting messages need not bump the conversation's own timestamp.
+    const updatedAt = rows.reduce((last, row) => Math.max(last, Number(row?.createdAt) || 0), Number(conversation.updatedAt));
+    if (now - updatedAt < 10 * 60_000) continue;
     sessions.push({
       id,
       title: typeof conversation.title === 'string' ? conversation.title : '',
@@ -287,15 +298,20 @@ async function collectDreamSessions(now: number, rootPath: string | null): Promi
 }
 
 let dreamTimer: ReturnType<typeof setInterval> | null = null;
+let dreamStartupTimer: ReturnType<typeof setTimeout> | null = null;
 
 function scheduleAutoDream(get: () => MemoryV2State) {
   if (dreamTimer) {
     clearInterval(dreamTimer);
     dreamTimer = null;
   }
+  if (dreamStartupTimer) {
+    clearTimeout(dreamStartupTimer);
+    dreamStartupTimer = null;
+  }
   if (!get().dreamAuto || typeof window === 'undefined') return;
   const tick = () => {
-    if (!get().active || get().dreaming) return;
+    if (!get().dreamAuto || !get().active || get().dreaming || projectChanging) return;
     let last = 0;
     try {
       last = Number(localStorage.getItem('memoryDreamLastAt') ?? 0);
@@ -306,7 +322,7 @@ function scheduleAutoDream(get: () => MemoryV2State) {
     void get().runDream();
   };
   dreamTimer = setInterval(tick, 60 * 60_000);
-  setTimeout(tick, 90_000);
+  dreamStartupTimer = setTimeout(tick, 90_000);
 }
 
 /**
@@ -454,24 +470,32 @@ export const useMemoryV2Store = create<MemoryV2State>((set, get) => ({
   },
 
   setProject: async (rootPath) => {
-    const previous = get().rootPath;
-    set({ rootPath });
-    if (!service) return;
+    if (!service) { set({ rootPath }); return; }
+    const revision = ++projectRevision;
+    const previous = get();
+    projectChanging = true;
     let resolved: string | undefined;
     if (rootPath && bridge()) {
       // Resolve a stable UUID that survives folder renames. A git remote makes
       // the same project shareable across devices.
       resolved = await bridge()!.projectId(rootPath).catch(() => undefined);
+      if (revision !== projectRevision) return;
       await (globalThis as any).window?.electronAPI?.memory2?.setRoot?.(rootPath).catch?.(() => undefined);
     } else if (bridge()) {
       await (globalThis as any).window?.electronAPI?.memory2?.setRoot?.(null).catch?.(() => undefined);
     }
+    if (revision !== projectRevision) return;
     service.setProject(rootPath, resolved);
-    set({ contextBlock: '', hits: [], selectedId: null, projectId: service.getProjectId(), wikiContext: '' });
+    const projectId = service.getProjectId();
+    projectChanging = false;
+    set({
+      rootPath, projectId, contextBlock: '', hits: [], selectedId: null, wikiContext: '',
+      ...(previous.projectId !== projectId ? { lastDream: null, dreamError: null, wikiEntries: [], wikiSelected: null } : {}),
+    });
     void get().refreshWikiContext();
     // Opening a different workspace migrates that project's legacy rows (the
     // migration is idempotent and never touches the old files).
-    if (previous !== rootPath && get().durable) void get().runMigration(false);
+    if (previous.rootPath !== rootPath && get().durable) void get().runMigration(false);
   },
 
   beginTask: async (taskText, sessionId) => {
@@ -494,17 +518,19 @@ export const useMemoryV2Store = create<MemoryV2State>((set, get) => ({
       set({ wikiContext: '' });
       return;
     }
+    const revision = projectRevision;
     try {
       const scope = get().projectId || 'default';
       const result = await loadWikiContext(dreamStorage(), scope, taskText);
       const last = await readLastDream(dreamStorage(), scope);
+      if (revision !== projectRevision || projectChanging) return;
       set({
         wikiContext: result.block,
         wikiEntries: result.items,
-        ...(last ? { lastDream: last } : {}),
+        lastDream: last,
       });
     } catch {
-      set({ wikiContext: '' });
+      if (revision === projectRevision && !projectChanging) set({ wikiContext: '' });
     }
   },
 
@@ -555,31 +581,35 @@ export const useMemoryV2Store = create<MemoryV2State>((set, get) => ({
       set({ dreamError: 'Memory 2.0 is not active.' });
       return null;
     }
-    if (get().dreaming) return null;
-    if (!useModelStore.getState().getSelectedModel()) {
+    if (get().dreaming || projectChanging) return null;
+    const model = useModelStore.getState().getSelectedModel();
+    if (!model) {
       set({ dreamError: 'Select a model before running a dream.' });
       return null;
     }
+    const { rootPath, projectId } = get();
+    const scope = projectId || 'default';
+    const stillCurrent = () => !projectChanging && get().rootPath === rootPath && get().projectId === projectId;
     set({ dreaming: true, dreamError: null });
     try {
       const now = Date.now();
-      const sessions = await collectDreamSessions(now, get().rootPath);
-      const scope = get().projectId || 'default';
-      const report = await runDreamPass(dreamStorage(), dreamLlm, { scope, sessions, now });
+      const sessions = await collectDreamSessions(now, rootPath);
+      const report = await runDreamPass(dreamStorage(), (req) => dreamLlm(model, req), { scope, sessions, now });
       try {
         localStorage.setItem('memoryDreamLastAt', String(now));
       } catch {
         // Non-fatal: auto-dream will simply try again next hour.
       }
-      set({ dreaming: false, lastDream: report });
-      await get().refreshWikiContext();
+      if (stillCurrent()) {
+        set({ lastDream: report });
+        await get().refreshWikiContext();
+      }
       return report;
     } catch (error) {
-      set({
-        dreaming: false,
-        dreamError: error instanceof Error ? error.message : String(error),
-      });
+      if (stillCurrent()) set({ dreamError: error instanceof Error ? error.message : String(error) });
       return null;
+    } finally {
+      set({ dreaming: false });
     }
   },
 
@@ -873,5 +903,17 @@ export function isMemoryV2Active(): boolean {
 export function memoryV2ContextBlock(): string {
   const state = useMemoryV2Store.getState();
   if (!state.active) return '';
-  return [state.contextBlock, state.wikiContext].filter(Boolean).join('\n\n');
+  // Only the durable record block: dream notes are mounted separately on the user channel.
+  return state.contextBlock;
+}
+
+/**
+ * Dream notes are model-written summaries of untrusted session content, so the caller must mount
+ * them on the USER channel: giving them the system channel would hand a poisoned note the same
+ * authority as the operator's own instructions.
+ */
+export function memoryV2WikiBlock(): string {
+  const state = useMemoryV2Store.getState();
+  if (!state.active) return '';
+  return state.wikiContext;
 }

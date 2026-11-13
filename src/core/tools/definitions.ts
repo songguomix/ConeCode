@@ -323,11 +323,12 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
   {
     name: 'computer',
     description:
-      'Control the physical computer: look at the screen and drive the real mouse and keyboard. ' +
-      'Coordinates are in the pixel space of the screenshot you were last shown — always take a screenshot first ' +
-      'and read the coordinates off that image, never guess them. A screenshot is returned after every action so ' +
-      'you can see the result. This drives the user\'s actual machine, so prefer a normal tool (exec, read_file, ' +
-      'web_fetch) whenever one would do the same job.',
+      'View and control one selected app window on the user\'s computer. Start with screenshot to inspect that window. ' +
+      'If the task requires a different app, call list_apps for available IDs, then switch_app with the exact ID. ' +
+      'Take a fresh screenshot after switching and before each input action. Use window-local image coordinates, never desktop coordinates. ' +
+      'Each pointer action requires a coordinate. On macOS, use left_click on accessible controls or keyboard input; other pointer gestures are unavailable. ' +
+      'Windows supports basic pointer input, text and unmodified keys. Do not use system shortcuts to switch apps. ' +
+      'Send a screenshot request and the input based on it in separate tool turns.',
     parameters: {
       type: 'object',
       properties: {
@@ -335,14 +336,15 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
           type: 'string',
           description: 'The interaction to perform',
           enum: [
-            'screenshot', 'cursor_position', 'mouse_move', 'left_click', 'right_click',
-            'middle_click', 'double_click', 'triple_click', 'left_mouse_down', 'left_mouse_up',
+            'list_apps', 'switch_app', 'screenshot', 'cursor_position', 'mouse_move', 'left_click', 'right_click',
+            'middle_click', 'double_click', 'triple_click',
             'left_click_drag', 'key', 'hold_key', 'type', 'scroll', 'wait',
           ],
         },
+        targetId: str('Exact app window ID returned by list_apps; required only for switch_app.'),
         coordinate: {
           type: 'array',
-          description: '[x, y] in screenshot pixels. Required for mouse_move and left_click_drag; optional for clicks and scroll, which otherwise act where the pointer already is.',
+          description: '[x, y] relative to the selected window screenshot. Required for pointer actions.',
           items: { type: 'integer' },
         },
         start_coordinate: {
@@ -350,7 +352,7 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
           description: '[x, y] the drag starts from, for left_click_drag',
           items: { type: 'integer' },
         },
-        text: str('Text to type, or the key combo for key/hold_key (e.g. "Return", "cmd+shift+4", "ctrl+c")'),
+        text: str('Text to type, or an app key for key/hold_key (e.g. "Return" or "cmd+s" on macOS).'),
         scroll_direction: { type: 'string', description: 'Direction to scroll', enum: ['up', 'down', 'left', 'right'] },
         scroll_amount: { type: 'integer', description: 'Number of scroll clicks (default 3)' },
         duration: { type: 'integer', description: 'Seconds, for wait and hold_key (max 30)' },
@@ -358,7 +360,7 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
       required: ['action'],
     },
     mutating: true,
-    promptExample: '{"action": "computer", "command": "left_click", "coordinate": [420, 310]}',
+    promptExample: '{"action": "computer", "command": "list_apps"} or {"action": "computer", "command": "switch_app", "targetId": "<id from list_apps>"} or {"action": "computer", "command": "left_click", "coordinate": [420, 310]}',
   },
   {
     name: 'system_info',

@@ -25,7 +25,7 @@ import type { Message } from '../../types';
 beforeEach(() => {
   useLanguageStore.getState().setLocale('en');
   useWorkspaceStore.setState({ contextFiles: [], selectedFile: null });
-  useChatStore.setState({ activeConversationId: 'test', streamingRuns: {}, messageEdits: {}, messages: [] });
+  useChatStore.setState({ activeConversationId: 'test', streamingRuns: {}, messageEdits: {}, messages: [], queuedMessages: {} });
   useInstallGateStore.getState().reset();
 });
 
@@ -73,4 +73,17 @@ describe('composer send availability', () => {
     useInstallGateStore.getState().begin('install', 'Dependencies');
     expect(sendButton()).toContain('disabled=""');
   });
+});
+
+it('renders the active conversation queue as an attached composer panel', () => {
+  useChatStore.setState({
+    streamingRuns: { test: { content: '', reasoningContent: '', status: 'thinking', toolName: null, retry: null } },
+    queuedMessages: {
+      test: [{ id: 'queued', content: 'Queued request', providerId: 'p1', modelId: 'm1', createdAt: 0, steer: false, steerError: null }],
+      other: [{ id: 'other', content: 'Another conversation', providerId: 'p1', modelId: 'm1', createdAt: 0, steer: false, steerError: null }],
+    },
+  });
+  const markup = renderToStaticMarkup(<ChatInput />);
+  expect(markup).toMatch(/<section aria-label="Queued".*Queued request.*Steer.*aria-label="Remove queued message".*aria-label="Queued message details".*<div class="chat-composer/);
+  expect(markup).not.toContain('Another conversation');
 });

@@ -4,11 +4,12 @@ import { ComputerPreviewSurface, newerPreviewState } from './ComputerPreviewWind
 import type { ComputerPreviewSnapshot } from '../../core/computer/preview';
 
 const pixel = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6R8sAAAAASUVORK5CYII=';
+const target = { id: '11:1', name: 'Editor', title: 'Document' };
 function snapshot(revision = 1): ComputerPreviewSnapshot {
   return {
     revision, updatedAt: 1000,
-    status: { platform: 'darwin', enabled: true, supported: true, accessibility: true, screenRecording: true, geometry: null },
-    shot: { dataUrl: pixel, capturedAt: 1000, geometry: { logicalWidth: 1200, logicalHeight: 800, captureWidth: 1200, captureHeight: 800 } },
+    status: { platform: 'darwin', enabled: true, supported: true, accessibility: true, screenRecording: true, geometry: null, target, targetRevision: 1, frameId: 'frame1' },
+    shot: { dataUrl: pixel, target, frameId: 'frame1', capturedAt: 1000, geometry: { logicalWidth: 1200, logicalHeight: 800, captureWidth: 1200, captureHeight: 800 } },
     activity: [{ id: 1, at: 1000, description: 'Private action description', ok: true }], inFlight: 0,
   };
 }

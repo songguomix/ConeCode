@@ -84,6 +84,7 @@ export interface DreamState {
   schema: 1;
   processed: Record<string, { updatedAt: number; hash: string; dreamedAt: number }>;
   lastRunAt: number | null;
+  organizerPending?: boolean;
 }
 
 export interface WikiIndexFile {

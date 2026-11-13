@@ -5,6 +5,26 @@ import type { ComputerStatus } from '../types/ipc.types';
 afterEach(() => vi.unstubAllGlobals());
 
 describe('computer control status across windows', () => {
+  it('shows only the current target frame in the main panel', () => {
+    let receive!: (status: ComputerStatus) => void;
+    vi.stubGlobal('window', { electronAPI: { computer: {
+      onStatus: (callback: typeof receive) => { receive = callback; return () => {}; },
+    } } });
+    const off = useComputerStore.getState().subscribeStatus();
+    const target = { id: '11:1', name: 'Editor', title: '' };
+    const geometry = { logicalWidth: 100, logicalHeight: 100, captureWidth: 100, captureHeight: 100 };
+    const status = { enabled: true, supported: true, platform: 'darwin', accessibility: true, screenRecording: true,
+      geometry, target, targetRevision: 1, frameId: 'frame1' };
+    const shot = { geometry, target, frameId: 'frame1', dataUrl: 'data:image/png;base64,editor' };
+    receive(status);
+    useComputerStore.getState().setLastShot(shot);
+    expect(useComputerStore.getState().lastShot).toBe(shot.dataUrl);
+    receive({ ...status, target: { id: '22:2', name: 'Browser', title: '' }, targetRevision: 2, frameId: null });
+    useComputerStore.getState().setLastShot(shot);
+    expect(useComputerStore.getState().lastShot).toBeNull();
+    off();
+  });
+
   it('reflects a floating-window panic and clears the old screen without enabling input', () => {
     let receive!: (status: ComputerStatus) => void;
     const unsubscribe = vi.fn();
@@ -12,7 +32,7 @@ describe('computer control status across windows', () => {
     vi.stubGlobal('window', { electronAPI: { computer: { onStatus: (callback: typeof receive) => { receive = callback; return unsubscribe; }, setEnabled } } });
     useComputerStore.setState({ enabled: true, lastShot: 'data:image/png;base64,old' });
     const off = useComputerStore.getState().subscribeStatus();
-    receive({ enabled: false, supported: true, platform: 'darwin', accessibility: true, screenRecording: true, geometry: null });
+    receive({ enabled: false, supported: true, platform: 'darwin', accessibility: true, screenRecording: true, geometry: null, target: null, targetRevision: 1, frameId: null });
     expect(useComputerStore.getState().enabled).toBe(false);
     expect(useComputerStore.getState().lastShot).toBeNull();
     expect(setEnabled).not.toHaveBeenCalled();
@@ -31,12 +51,15 @@ describe('computer control status across windows', () => {
     const off = useComputerStore.getState().subscribeStatus();
     useComputerStore.setState({ enabled: true, lastShot: 'data:image/png;base64,old' });
     const request = method === 'setEnabled' ? useComputerStore.getState().setEnabled(true) : useComputerStore.getState()[method]();
-    const stopped: ComputerStatus = { enabled: false, supported: true, platform: 'darwin', accessibility: true, screenRecording: true, geometry: null };
+    const stopped: ComputerStatus = { enabled: false, supported: true, platform: 'darwin', accessibility: true, screenRecording: true, geometry: null, target: null, targetRevision: 1, frameId: null };
     receive(stopped);
     finish({ ...stopped, enabled: true });
     await request;
     expect(useComputerStore.getState().enabled).toBe(false);
-    useComputerStore.getState().setLastShot('data:image/png;base64,late');
+    useComputerStore.getState().setLastShot({
+      dataUrl: 'data:image/png;base64,late', frameId: 'old', target: { id: '11:1', name: 'Editor', title: '' },
+      geometry: { logicalWidth: 100, logicalHeight: 100, captureWidth: 100, captureHeight: 100 },
+    });
     expect(useComputerStore.getState().lastShot).toBeNull();
     off();
   });

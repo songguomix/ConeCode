@@ -23,6 +23,7 @@ html.computer-preview-document #root {
   width: 100%;
   height: 100%;
   object-fit: contain;
+  background: #171717;
   pointer-events: none;
 }
 .computer-preview-placeholder {

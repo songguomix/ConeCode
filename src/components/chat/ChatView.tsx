@@ -46,8 +46,6 @@ export default function ChatView() {
   const planMode = useChatStore((s) => s.planMode);
   const setPlanMode = useChatStore((s) => s.setPlanMode);
   const sendMessage = useChatStore((s) => s.sendMessage);
-  const queued = useChatStore((s) => (activeConversationId ? s.queuedMessages[activeConversationId] || [] : []));
-  const dequeueMessage = useChatStore((s) => s.dequeueMessage);
   const getSelectedModel = useModelStore((s) => s.getSelectedModel);
   const selectedModel = useModelStore((s) => s.getSelectedModel());
   const health = useMemo(() => selectedModel ? responseHealth(rawMessages, selectedModel.providerId, selectedModel.id, !!(selectedModel.supportsReasoning || selectedModel.userEnabledReasoning)) : null, [rawMessages, selectedModel]);
@@ -455,9 +453,9 @@ export default function ChatView() {
 
       <GoalProgressRow />
 
-      <TodoList />
+      <DiffStatPill key={activeConversationId} />
 
-      <DiffStatPill />
+      <TodoList />
 
       {/* Pinned Command Approval Card - appears above ChatInput when reviewing a command */}
       {reviewCommand && approvalMode !== 'fullAuto' && (
@@ -501,30 +499,6 @@ export default function ChatView() {
             onSwitch={handleSwitchToWorkMode}
             onDismiss={() => lastAssistantMessage && setDismissedSuggestionId(lastAssistantMessage.id)}
           />
-        </div>
-      )}
-
-      {/* Queued follow-ups stay pinned to the composer (never buried in the
-          transcript): typed mid-run, they go out when the turn ends. Same
-          bubble as before — only its home moved above the input box. */}
-      {queued.length > 0 && (
-        <div className="max-w-[900px] mx-auto w-full px-4 mb-2 space-y-2">
-          {queued.map((q) => (
-            <div key={q.id} className="ml-auto max-w-[85%] sm:max-w-[72%] min-w-0">
-              <div className="rounded-2xl border border-dashed border-[color-mix(in_srgb,var(--accent)_50%,transparent)] bg-[color-mix(in_srgb,var(--accent-soft)_50%,transparent)] px-4 py-2.5">
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="text-[11px] font-medium text-[var(--accent)]">{t('queuedTag')}</span>
-                  <button
-                    onClick={() => activeConversationId && dequeueMessage(activeConversationId, q.id)}
-                    className="ml-auto text-[11px] text-[var(--text-muted)] hover:text-[var(--error)] transition-colors"
-                  >
-                    {t('dismiss')}
-                  </button>
-                </div>
-                <p className="text-[14px] text-[var(--text-primary)] whitespace-pre-wrap break-words">{q.content}</p>
-              </div>
-            </div>
-          ))}
         </div>
       )}
 

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { ComputerStatus } from '../types/ipc.types';
-import { describeAction, type ComputerRequest } from '../core/computer/computer';
+import { describeAction, type ComputerFrame, type ComputerRequest } from '../core/computer/computer';
 
 // Renderer-side state for letting the agent drive the real machine.
 //
@@ -31,6 +31,9 @@ interface ComputerStore {
   accessibility: boolean;
   screenRecording: boolean;
   geometry: ComputerStatus['geometry'];
+  target: ComputerStatus['target'];
+  targetRevision: number;
+  frameId: string | null;
   activity: ComputerActivity[];
   /** Most recent screenshot, so the panel can show what the agent is looking at. */
   lastShot: string | null;
@@ -43,11 +46,19 @@ interface ComputerStore {
   requestPermissions: () => Promise<void>;
   panic: () => Promise<void>;
   note: (req: ComputerRequest, ok: boolean, detail?: string) => void;
-  setLastShot: (dataUrl: string | null) => void;
+  setLastShot: (shot: ComputerFrame) => void;
   clearActivity: () => void;
 }
 
 const api = () => (window as any).electronAPI?.computer;
+
+function scopedStatus(current: ComputerStore, status: ComputerStatus): Partial<ComputerStore> {
+  return {
+    ...status,
+    ...(!status.enabled || status.targetRevision !== current.targetRevision || status.frameId !== current.frameId
+      ? { lastShot: null } : {}),
+  };
+}
 
 export const useComputerStore = create<ComputerStore>((set, get) => ({
   enabled: false,
@@ -56,6 +67,9 @@ export const useComputerStore = create<ComputerStore>((set, get) => ({
   accessibility: false,
   screenRecording: false,
   geometry: null,
+  target: null,
+  targetRevision: 0,
+  frameId: null,
   activity: [],
   lastShot: null,
   previewVisible: false,
@@ -64,13 +78,13 @@ export const useComputerStore = create<ComputerStore>((set, get) => ({
     const request = ++statusRequest;
     const epoch = statusEpoch;
     const status: ComputerStatus | undefined = await api()?.status();
-    if (status && epoch === statusEpoch && request === statusRequest) set({ ...status, ...(!status.enabled ? { lastShot: null } : {}) });
+    if (status && epoch === statusEpoch && request === statusRequest) set(scopedStatus(get(), status));
   },
 
   subscribeStatus: () => {
     const offStatus = api()?.onStatus?.((status: ComputerStatus) => {
       statusEpoch += 1;
-      set({ ...status, ...(!status.enabled ? { lastShot: null } : {}) });
+      set(scopedStatus(get(), status));
     });
     const offVisibility = api()?.onPreviewVisibility?.(({ visible }: { visible: boolean }) => {
       visibilityEpoch += 1;
@@ -90,14 +104,14 @@ export const useComputerStore = create<ComputerStore>((set, get) => ({
     const request = ++statusRequest;
     const epoch = statusEpoch;
     const status: ComputerStatus | undefined = await api()?.setEnabled(on);
-    if (status && epoch === statusEpoch && request === statusRequest) set({ ...status, ...(!status.enabled ? { lastShot: null } : {}) });
+    if (status && epoch === statusEpoch && request === statusRequest) set(scopedStatus(get(), status));
   },
 
   requestPermissions: async () => {
     const request = ++statusRequest;
     const epoch = statusEpoch;
     const status: ComputerStatus | undefined = await api()?.requestPermissions();
-    if (status && epoch === statusEpoch && request === statusRequest) set({ ...status });
+    if (status && epoch === statusEpoch && request === statusRequest) set(scopedStatus(get(), status));
   },
 
   panic: async () => {
@@ -114,6 +128,9 @@ export const useComputerStore = create<ComputerStore>((set, get) => ({
     ].slice(-MAX_ACTIVITY),
   })),
 
-  setLastShot: (dataUrl) => set({ lastShot: get().enabled ? dataUrl : null }),
+  setLastShot: (shot) => {
+    const { enabled, frameId, target } = get();
+    if (enabled && frameId === shot.frameId && target?.id === shot.target.id) set({ lastShot: shot.dataUrl });
+  },
   clearActivity: () => set({ activity: [] }),
 }));

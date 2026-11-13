@@ -28,6 +28,7 @@ import { useCodeChangesStore } from '../../stores/codeChanges.store';
 import { useUIStore } from '../../stores/ui.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { orderForDisplay } from '../../stores/chat.store';
+import { REMOTE_RSI_ACTION, type RemoteRsiAction } from '../../core/remote/rsiControl';
 import { rsiCanStart } from '../../core/agents/rsiStart';
 import { bootstrapRsiWorkspace, electronAsyncFs } from '../../core/agents/rsiBridge';
 import { commandsForConversation } from '../chat/approvalPresentation';
@@ -331,15 +332,31 @@ export default function RsiView() {
     void setComputerEnabled(false).catch((error) => setActionError(error instanceof Error ? error.message : t('rsiOperationFailed')));
   };
 
+  const remoteActions = useRef({ start, stop, canStart, activeConversationId });
+  remoteActions.current = { start, stop, canStart, activeConversationId };
+  useEffect(() => {
+    const handle = (event: Event) => {
+      const request = (event as CustomEvent<RemoteRsiAction>).detail;
+      const current = remoteActions.current;
+      if (request.conversationId !== current.activeConversationId) return;
+      if (request.action === 'start') {
+        if (!current.canStart || startLockRef.current) return;
+        request.accept();
+        void current.start();
+      } else {
+        request.accept();
+        current.stop();
+      }
+    };
+    window.addEventListener(REMOTE_RSI_ACTION, handle);
+    return () => window.removeEventListener(REMOTE_RSI_ACTION, handle);
+  }, []);
+
   const askScreen = async () => {
     setAsking(true);
+    setActionError(null);
     try {
-      await (window as any).electronAPI?.computer?.screenshot?.();
-    } catch {
-      /* denial surfaces as needsPermission */
-    }
-    try {
-      await refresh();
+      await window.electronAPI.computer.openScreenSettings();
     } catch (error) {
       setActionError(error instanceof Error ? error.message : t('rsiOperationFailed'));
     } finally {
@@ -807,7 +824,7 @@ export default function RsiView() {
                           disabled={asking}
                           className="px-2.5 py-1 rounded-xl bg-[var(--accent)] text-white text-[11px] font-medium hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50 shrink-0 cursor-pointer"
                         >
-                          {t('rsiAskScreen')}
+                          {t('computerOpenSettings')}
                         </button>
                         <button
                           type="button"

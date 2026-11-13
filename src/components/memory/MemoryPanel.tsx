@@ -365,6 +365,8 @@ function DreamCard({ t, onOpenWiki }: { t: T; onOpenWiki?: () => void }) {
   const hasModel = Boolean(models.size > 0 && selectedModelId && useModelStore.getState().getSelectedModel());
 
   const analyzed = lastDream?.sessions.filter((session) => session.status === 'analyzed').length ?? 0;
+  const failed = lastDream?.sessions.filter((session) => session.status === 'failed') ?? [];
+  const otherWarnings = lastDream?.warnings.filter((warning) => !warning.startsWith('analyzer:')) ?? [];
   return (
     <section className="rounded-xl border border-[var(--border)] bg-[var(--bg-1)] p-3">
       <div className="flex items-start justify-between gap-2">
@@ -419,10 +421,19 @@ function DreamCard({ t, onOpenWiki }: { t: T; onOpenWiki?: () => void }) {
             {lastDream.indexEntries} {t('memoryDreamTopics')} · {lastDream.merged.length} {t('memoryDreamMerged')}
             {lastDream.prunedHistory > 0 ? ` · ${lastDream.prunedHistory} ${t('memoryDreamPruned')}` : ''}
           </p>
-          {analyzed === 0 && <p>{t('memoryDreamNoSessions')}</p>}
-          {lastDream.warnings.length > 0 && (
+          {lastDream.sessions.length === 0 && <p>{t('memoryDreamNoSessions')}</p>}
+          {lastDream.sessions.length > 0 && analyzed === 0 && failed.length === 0 && (
+            <p>{t('memoryDreamNoFindings')}</p>
+          )}
+          {failed.length > 0 && (
+            <p className={`[overflow-wrap:anywhere] ${failed.length === lastDream.sessions.length ? 'text-[var(--error)]' : 'text-[var(--warning)]'}`}>
+              {t('memoryDreamFailedSessions')}: {failed.length}/{lastDream.sessions.length}
+              {failed[0].error ? ` · ${failed[0].error}` : ''}
+            </p>
+          )}
+          {otherWarnings.length > 0 && (
             <p className="text-[var(--warning)] [overflow-wrap:anywhere]">
-              {t('memoryDreamWarnings')}: {lastDream.warnings.slice(0, 2).join('; ')}
+              {t('memoryDreamWarnings')}: {otherWarnings.slice(0, 2).join('; ')}
             </p>
           )}
           <p>{t('memoryDreamReadonly')}</p>

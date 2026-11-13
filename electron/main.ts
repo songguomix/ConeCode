@@ -2,6 +2,7 @@ import { publishGithubRelease } from './githubRelease';
 import { getReplyThread, listReplyThreads, postReply } from './githubReply';
 import { DshMarketService } from './dsh-market/market-service';
 import { registerDshMarketIpc } from './dsh-market/ipc';
+import { registerUpdateIpc } from './updates/ipc';
 import { isDshChatServer } from '../src/core/dsh-market/naming';
 import { app, BrowserWindow, ipcMain, dialog, Menu, clipboard, shell, Notification, powerSaveBlocker, desktopCapturer, screen, systemPreferences, globalShortcut, nativeImage, safeStorage } from 'electron';
 import path from 'path';
@@ -475,7 +476,8 @@ function remoteStatus() {
     port,
     token,
     lanUrls,
-    tunnelUrl: running && remoteTunnelUrl ? remoteTunnelUrl + pwq + fpq : null,
+    // A tunnel terminates TLS with its public CA certificate; only LAN URLs pin the desktop certificate.
+    tunnelUrl: running && remoteTunnelUrl ? remoteTunnelUrl + pwq : null,
     clients: remoteServer.clientCount(),
     devices: remoteServer.clientList(),
     hasPassword: remoteServer.hasPassword(),
@@ -898,6 +900,7 @@ app.whenReady().then(() => {
     console.error('dsh-market initialization failed', error);
   });
   registerIPC();
+  registerUpdateIpc();
   initProviders();
   // Connect any globally-configured MCP servers in the background.
   mcpManager.reload(readMcpConfig(), getShellEnv()).catch(() => {});
@@ -1165,7 +1168,13 @@ function registerIPC() {
     return recents;
   });
 
-  ipcMain.handle('chat:stream', async (_, { providerId, modelId, messages, reasoningEffort, maxTokens, silent, emitChunks, tools, toolChoice, conversationId }) => {
+  ipcMain.handle('chat:stream', async (event, { providerId, modelId, messages, computerFrameId, reasoningEffort, maxTokens, silent, emitChunks, tools, toolChoice, conversationId }) => {
+    if (computerFrameId !== undefined) {
+      computerPreview.assertMain(event);
+      if (!computerController.isCurrentFrame(computerFrameId)) {
+        throw new Error('The Computer Use frame changed before it could be sent. Request a new screenshot.');
+      }
+    }
     const adapter = providerRegistry.getAdapter(providerId);
     const controller = new AbortController();
     // Background calls such as memory extraction never replace the visible
@@ -2101,7 +2110,7 @@ function registerIPC() {
     return true;
   });
 
-  // ---- Computer control (agent drives the real screen) ------------------
+  // ---- Computer control (one selected app window) ----------------------
   // Every one of these is a no-op until the user flips the master switch in the
   // panel; the controller itself refuses otherwise, so a compromised renderer
   // can't turn it on by calling `act` directly.
@@ -2119,9 +2128,14 @@ function registerIPC() {
     computerPreview.statusChanged();
     return status;
   });
-  ipcMain.handle('computer:screenshot', async (event) => {
+  ipcMain.handle('computer:openScreenSettings', (event) => {
     computerPreview.assertMain(event);
-    return computerPreview.capture(() => computerController.screenshot());
+    if (process.platform !== 'darwin') throw new Error('Screen Recording settings are only available on macOS.');
+    return shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');
+  });
+  ipcMain.handle('computer:screenshot', async (event, expectedRevision?: number) => {
+    computerPreview.assertMain(event);
+    return computerPreview.capture(() => computerController.screenshot(expectedRevision));
   });
   ipcMain.handle('computer:act', async (event, req: any) => {
     computerPreview.assertMain(event);

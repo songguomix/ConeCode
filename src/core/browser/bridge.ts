@@ -19,6 +19,19 @@ export function installBrowserBridge(target: { electronAPI?: unknown }): void {
     notification: { show: async () => false },
     screenshot: { setShortcut: async () => ({ ok: false, error: 'Requires desktop app' }) },
     app: { getVersion: async () => 'Browser preview' },
+    update: {
+      check: async () => ({
+        ok: false,
+        status: 'error',
+        updateAvailable: false,
+        currentVersion: 'Browser preview',
+        latest: null,
+        errorCode: 'unavailable',
+        detail: 'Update checks need the desktop app',
+      }),
+      download: async () => ({ ok: false, error: 'unsupported' as const }),
+      reveal: async () => false,
+    },
   };
   // Unknown desktop operations reject rather than pretending writes succeeded.
   const namespaces = new Map<string, object>();

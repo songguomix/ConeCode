@@ -1,5 +1,25 @@
 # Computer Use Agent runtime
 
+## ConeCode desktop
+
+Enable **Computer Use**, then choose an open window in the Computer Use panel. The
+agent can also list app names and switch windows as the task requires, using the
+current approval setting. Switching clears the preview; the next screenshot and
+all pointer coordinates belong to the newly selected window. A moved or resized
+window requires a fresh screenshot.
+
+On macOS and Windows, the desktop controller captures the target window directly.
+If capture or focus fails, it reports the error instead of using the desktop.
+macOS supports clicking accessible controls and sending keys or text to the
+selected window. Other pointer gestures are unavailable in this mode.
+Windows input is restricted to actions the app accepts through window messages;
+modified shortcuts, key holds, triple clicks, and drags are unavailable there.
+Windows may require the user to bring the requested app forward if it denies
+the focus change. Linux desktop Computer Use is unavailable. ConeCode’s
+separate manual screenshot tool still supports user-selected screen regions.
+
+## Standalone runtime
+
 The standalone implementation lives in [`cua/`](../cua/README.md). It is a
 local-first TypeScript/Playwright/macOS runtime with:
 

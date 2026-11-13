@@ -7,6 +7,7 @@ import { useMonitorStore } from './stores/monitor.store';
 import AppShell from './components/layout/AppShell';
 import { initRemoteBridge } from './core/remote/bridge';
 import { useFreeStore } from './stores/free.store';
+import { useUpdateStore } from './stores/update.store';
 import { useComputerStore } from './stores/computer.store';
 
 export default function App() {
@@ -84,6 +85,9 @@ export default function App() {
     // Follow the preview dev server even while its panel is closed, so the
     // sidebar's status dot and the log stay accurate.
     subscribePreview();
+    // Self-update: ask agibase for the newest release. A newer build opens the
+    // dialog; closing it parks the same offer in Settings → Updates.
+    void useUpdateStore.getState().initialize();
     // Re-register the stored screenshot hotkey (main forgets on quit) and
     // answer its trigger.
     const stopScreenshot = initScreenshot();
@@ -130,6 +134,15 @@ export default function App() {
     const timer = window.setInterval(refresh, 30000);
     window.addEventListener('focus', refresh);
     return () => { window.clearInterval(timer); window.removeEventListener('focus', refresh); };
+  }, []);
+
+  // Long sessions still notice a release: poll every 6h, plus when the window
+  // regains focus after a sleep. The store throttles repeats to 30 minutes.
+  useEffect(() => {
+    const recheck = () => { void useUpdateStore.getState().check({ auto: true }); };
+    const timer = window.setInterval(recheck, 6 * 60 * 60 * 1000);
+    window.addEventListener('focus', recheck);
+    return () => { window.clearInterval(timer); window.removeEventListener('focus', recheck); };
   }, []);
 
   // Project skills follow the active workspace. Keep this at app level so the

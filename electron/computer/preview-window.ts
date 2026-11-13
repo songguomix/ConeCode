@@ -2,7 +2,7 @@ import type { BrowserWindow, BrowserWindowConstructorOptions, IpcMain, IpcMainIn
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { describeAction, validateComputerRequest, type ComputerRequest, type DisplayGeometry } from '../../src/core/computer/computer';
+import { describeAction, validateComputerRequest, type ComputerFrame, type ComputerRequest } from '../../src/core/computer/computer';
 import { COMPUTER_PREVIEW_CHANNELS as CHANNELS, COMPUTER_PREVIEW_HASH, type ComputerPreviewSnapshot, type ComputerPreviewStatus, type ComputerPreviewAppearance } from '../../src/core/computer/preview';
 
 interface Options {
@@ -16,7 +16,7 @@ interface Options {
 }
 
 interface CaptureToken { generation: number; requestSeq: number }
-type CaptureResult = { dataUrl: string; geometry: DisplayGeometry } | { error: string; needsPermission?: 'screenRecording' };
+type CaptureResult = ComputerFrame | { error: string; needsPermission?: 'screenRecording' };
 
 /** Actual computer IPC outcomes, shared in memory with a least-privilege viewer. */
 export class ComputerPreviewWindow {
@@ -27,7 +27,7 @@ export class ComputerPreviewWindow {
   private activitySeq = 0;
   private state: ComputerPreviewSnapshot = {
     revision: 0, updatedAt: Date.now(),
-    status: { platform: process.platform, enabled: false, supported: false, accessibility: false, screenRecording: false, geometry: null },
+    status: { platform: process.platform, enabled: false, supported: false, accessibility: false, screenRecording: false, geometry: null, target: null, targetRevision: 0, frameId: null },
     shot: null, activity: [], inFlight: 0,
   };
 
@@ -102,8 +102,7 @@ export class ComputerPreviewWindow {
     win.setAlwaysOnTop(true, 'floating');
     win.setAspectRatio(ratio);
     win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-    // Best effort against preview-in-preview captures; platform limitations
-    // remain. This never triggers an additional capture or changes focus.
+    // The preview must never itself be an input or capture target.
     win.setContentProtection(true);
     win.webContents.on('will-navigate', (event) => event.preventDefault());
     win.webContents.on('will-frame-navigate', (event) => event.preventDefault());
@@ -155,7 +154,12 @@ export class ComputerPreviewWindow {
 
   statusChanged(forceClear = false): void {
     const status = this.options.getStatus();
-    if (forceClear || status.enabled !== this.state.status.enabled) this.clearShot();
+    if (forceClear || status.targetRevision !== this.state.status.targetRevision || status.enabled !== this.state.status.enabled) {
+      this.generation += 1;
+      this.state.shot = null;
+    } else if (this.state.shot && status.frameId !== this.state.shot.frameId) {
+      this.state.shot = null;
+    }
     this.state.status = status;
     const main = this.options.getMainWindow();
     if (main && !main.isDestroyed()) main.webContents.send('computer:status-changed', { ...status });
@@ -197,9 +201,20 @@ export class ComputerPreviewWindow {
   endScreenshot(result: CaptureResult, token: CaptureToken): boolean {
     this.state.inFlight = Math.max(0, this.state.inFlight - 1);
     // Disabling/re-enabling or emergency stop fences captures started earlier.
-    const accepted = token.generation === this.generation && token.requestSeq === this.captureSeq && this.options.getStatus().enabled && 'dataUrl' in result && /^data:image\/(?:png|jpe?g|webp);base64,/.test(result.dataUrl);
+    const status = this.options.getStatus();
+    const accepted = token.generation === this.generation && token.requestSeq === this.captureSeq
+      && status.enabled && 'dataUrl' in result && status.frameId === result.frameId
+      && status.target?.id === result.target.id && /^data:image\/(?:png|jpe?g|webp);base64,/.test(result.dataUrl);
     if (accepted && 'dataUrl' in result) {
       this.state.shot = { ...result, capturedAt: Date.now() };
+      const area = this.options.getWorkArea();
+      const ratio = result.geometry.captureWidth / result.geometry.captureHeight;
+      const width = Math.max(1, Math.round(Math.min(390, area.width, area.height * ratio)));
+      const win = this.window;
+      if (win && !win.isDestroyed()) {
+        win.setAspectRatio(ratio);
+        win.setSize(width, Math.max(1, Math.round(width / ratio)));
+      }
     }
     this.statusChanged();
     return accepted;

@@ -2,6 +2,7 @@ import http from 'http';
 import https from 'https';
 import { EventEmitter } from 'events';
 import crypto from 'crypto';
+import { StringDecoder } from 'string_decoder';
 import { getMobileClientHtml } from './mobileClient';
 import { loadRemoteTls, type RemoteTls } from './tls';
 
@@ -28,13 +29,14 @@ interface RemoteDevice {
   since: number;
 }
 
-class RemoteServer extends EventEmitter {
+export class RemoteServer extends EventEmitter {
   private server: https.Server | null = null;
   private starting: Promise<{ port: number; token: string }> | null = null;
   private generation = 0;
   // Connected phones, keyed by a per-connection id so the UI can list/kick them.
   private clients = new Map<string, RemoteDevice>();
   private clientSeq = 0;
+  private commands = new Set<http.IncomingMessage>();
   // IPs kicked this session; rejected with 403 so they can't reconnect. Cleared on stop.
   private blocked = new Set<string>();
   // The most recent state frame, replayed to any phone that (re)connects.
@@ -113,6 +115,8 @@ class RemoteServer extends EventEmitter {
 
   stop(): void {
     this.generation++;
+    for (const request of this.commands) request.destroy();
+    this.commands.clear();
     for (const c of this.clients.values()) {
       try { c.res.end(); } catch {}
     }
@@ -134,10 +138,16 @@ class RemoteServer extends EventEmitter {
 
   // Fan a frame out to every connected phone and remember it as the replay value.
   publish(frame: any): void {
+    if (frame?.type === 'state' && frame.snapshot) {
+      // Publish install metadata; Android selects bindings using its verified connection identity.
+      frame = { ...frame, snapshot: { ...frame.snapshot, computerId: this.fingerprint, screenControlProvider: 'uuRemote' } };
+    }
     if (frame && frame.type === 'state') this.latest = frame;
     const data = `data: ${JSON.stringify(frame)}\n\n`;
     for (const c of this.clients.values()) {
-      try { c.res.write(data); } catch {}
+      // A stalled SSE reader must not retain unbounded state/file replies.
+      if (c.res.writableLength > 4_000_000) { c.res.destroy(); continue; }
+      try { c.res.write(data); } catch { c.res.destroy(); }
     }
   }
 
@@ -232,7 +242,7 @@ class RemoteServer extends EventEmitter {
     }
 
     if (path === '/cmd' && req.method === 'POST') {
-      this.readCommand(req, res);
+      this.readCommand(req, res, url);
       return;
     }
 
@@ -267,22 +277,36 @@ class RemoteServer extends EventEmitter {
     res.on('close', close);
   }
 
-  private readCommand(req: http.IncomingMessage, res: http.ServerResponse): void {
+  private readCommand(req: http.IncomingMessage, res: http.ServerResponse, url: URL): void {
+    const generation = this.generation;
+    this.commands.add(req);
+    res.on('close', () => this.commands.delete(req));
+    req.setTimeout(15_000, () => req.destroy());
+    const authorized = () => generation === this.generation && !this.blocked.has(clientIp(req)) && this.authed(req, url);
     let body = '';
+    let bytes = 0;
     let tooBig = false;
+    // TCP may split a Chinese character or emoji across chunks. Decode incrementally
+    // instead of implicitly converting each Buffer to a UTF-8 string on its own.
+    const decoder = new StringDecoder('utf8');
     req.on('data', (chunk) => {
-      body += chunk;
+      const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      bytes += data.length;
       // Generous cap so phone "upload file" (base64) fits; still bounds abuse.
-      if (body.length > 30_000_000) {
+      if (bytes > 30_000_000) {
         tooBig = true;
         req.destroy();
+        return;
       }
+      body += decoder.write(data);
     });
     req.on('end', () => {
+      body += decoder.end();
       if (tooBig) {
         res.writeHead(413).end();
         return;
       }
+      if (!authorized()) { res.writeHead(403).end(); return; }
       try {
         const cmd = JSON.parse(body || '{}') as RemoteCommand;
         if (cmd && typeof cmd.type === 'string') this.emit('command', cmd);

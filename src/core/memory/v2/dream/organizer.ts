@@ -21,6 +21,9 @@ export async function planOrganization(
     return { merges: [], retired: [], warning: 'organizer response was not valid JSON' };
   }
   const record = parsed as { merges?: unknown; retire?: unknown };
+  if (!Array.isArray(record.merges) && !Array.isArray(record.retire)) {
+    return { merges: [], retired: [], warning: 'organizer response had no merges or retire array' };
+  }
   const known = new Set(input.entries.map((entry) => entry.slug));
   const merges: Array<{ from: string; to: string }> = [];
   const seen = new Set<string>();

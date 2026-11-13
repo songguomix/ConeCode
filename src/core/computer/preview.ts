@@ -1,4 +1,4 @@
-import type { DisplayGeometry } from './computer';
+import type { ComputerFrame, ComputerTarget, DisplayGeometry } from './computer';
 
 export const COMPUTER_PREVIEW_HASH = '#computer-preview';
 export const COMPUTER_PREVIEW_CHANNELS = {
@@ -13,13 +13,16 @@ export interface ComputerPreviewStatus {
   accessibility: boolean;
   screenRecording: boolean;
   geometry: DisplayGeometry | null;
+  target: ComputerTarget | null;
+  targetRevision: number;
+  frameId: string | null;
 }
 
 export interface ComputerPreviewSnapshot {
   revision: number;
   updatedAt: number;
   status: ComputerPreviewStatus;
-  shot: { dataUrl: string; capturedAt: number; geometry: DisplayGeometry } | null;
+  shot: (ComputerFrame & { capturedAt: number }) | null;
   activity: Array<{ id: number; at: number; description: string; ok: boolean; detail?: string }>;
   /** Operations still in progress; emergency stop is not a rollback. */
   inFlight: number;

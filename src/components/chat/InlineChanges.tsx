@@ -1,42 +1,10 @@
-import { memo, useMemo, useRef, useEffect, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import { FiCheck, FiX, FiRotateCcw, FiTerminal, FiTrash, FiCopy, FiMove, FiEdit, FiFilePlus, FiAlertTriangle } from 'react-icons/fi';
 import { useCodeChangesStore, useLanguageStore, useChatStore } from '../../stores';
 import { checkpointRewindIndex, type CodeChange } from '../../stores/codeChanges.store';
+import { buildDisplayDiff } from '../../core/editor/displayDiff';
 import { isCommandChange, pendingFileChanges } from './approvalPresentation';
-
-interface DiffLine {
-  type: 'added' | 'removed' | 'unchanged';
-  content: string;
-  oldLine?: number;
-  newLine?: number;
-}
-
-function computeDiff(oldText: string, newText: string): DiffLine[] {
-  const oldLines = oldText.split('\n');
-  const newLines = newText.split('\n');
-  const result: DiffLine[] = [];
-  let i = 0, j = 0;
-
-  while (i < oldLines.length || j < newLines.length) {
-    if (i < oldLines.length && j < newLines.length) {
-      if (oldLines[i] === newLines[j]) {
-        result.push({ type: 'unchanged', content: oldLines[i], oldLine: i + 1, newLine: j + 1 });
-        i++; j++;
-      } else {
-        result.push({ type: 'removed', content: oldLines[i], oldLine: i + 1 });
-        result.push({ type: 'added', content: newLines[j], newLine: j + 1 });
-        i++; j++;
-      }
-    } else if (i < oldLines.length) {
-      result.push({ type: 'removed', content: oldLines[i], oldLine: i + 1 });
-      i++;
-    } else {
-      result.push({ type: 'added', content: newLines[j], newLine: j + 1 });
-      j++;
-    }
-  }
-  return result;
-}
+import DiffPreview from './DiffPreview';
 
 function classify(change: CodeChange) {
   const kind = change.kind || 'edit';
@@ -356,21 +324,11 @@ function DiffReviewCard({ change }: { change: CodeChange }) {
   const failed = change.status === 'failed';
 
   const diff = useMemo(
-    () => (isFileEdit ? computeDiff(change.originalCode, change.newCode) : []),
+    () => (isFileEdit ? buildDisplayDiff(change.originalCode, change.newCode) : null),
     [change.originalCode, change.newCode, isFileEdit],
   );
-  const added = diff.filter((d) => d.type === 'added').length;
-  const removed = diff.filter((d) => d.type === 'removed').length;
-
-  // Land the diff view on the first actual change, skipping leading context.
-  const diffScrollRef = useRef<HTMLDivElement>(null);
-  const firstChangeIdx = useMemo(() => diff.findIndex((d) => d.type !== 'unchanged'), [diff]);
-  useEffect(() => {
-    const container = diffScrollRef.current;
-    if (!container || firstChangeIdx <= 0) return;
-    const lineEl = container.children[firstChangeIdx] as HTMLElement | undefined;
-    if (lineEl) container.scrollTop = Math.max(0, lineEl.offsetTop - lineEl.offsetHeight * 2);
-  }, [firstChangeIdx]);
+  const added = diff?.lines.filter((line) => line.type === 'added').length ?? 0;
+  const removed = diff?.lines.filter((line) => line.type === 'removed').length ?? 0;
 
   const accept = async () => {
     setBusy(true);
@@ -389,18 +347,19 @@ function DiffReviewCard({ change }: { change: CodeChange }) {
 
   return (
     <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-2)] overflow-hidden">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-[var(--border)] gap-2">
+      <div className="flex flex-wrap items-center justify-between px-3 py-2 border-b border-[var(--border)] gap-2">
         <div className="flex items-center gap-2 min-w-0">
           <span className={opColor(change)}>{opIcon(change)}</span>
-          <span className="text-sm font-medium truncate">{change.filePath.split('/').pop()}</span>
-          {isFileEdit && (added > 0 || removed > 0) && (
-            <span className="text-xs shrink-0">
-              <span className="text-green-600 dark:text-green-400 font-medium">+{added}</span>
-              <span className="text-red-600 dark:text-red-400 font-medium ml-1">-{removed}</span>
+          <span className="text-sm font-medium truncate" title={change.filePath}>{change.filePath.split(/[/\\]/).pop()}</span>
+          {diff && (added > 0 || removed > 0) && (
+            <span className="flex shrink-0 gap-1 text-xs" title={diff.approximate ? t('diffApproximateCounts') : undefined}>
+              {diff.approximate && '≈'}
+              {added > 0 && <span className="font-medium text-green-600 dark:text-green-400">+{added}</span>}
+              {removed > 0 && <span className="font-medium text-red-600 dark:text-red-400">−{removed}</span>}
             </span>
           )}
         </div>
-        <div className="flex items-center gap-1.5 shrink-0">
+        <div className="flex flex-wrap items-center gap-1.5">
           {pending ? (
             <>
               <button onClick={accept} disabled={busy}
@@ -463,25 +422,8 @@ function DiffReviewCard({ change }: { change: CodeChange }) {
         </div>
       )}
 
-      {isFileEdit && diff.length > 0 && (
-        <div ref={diffScrollRef} className="relative max-h-56 overflow-y-auto text-xs font-mono">
-          {diff.map((line, i) => (
-            <div key={i} className={`flex ${
-              line.type === 'added' ? 'bg-green-500/15 dark:bg-green-500/10' :
-              line.type === 'removed' ? 'bg-red-500/15 dark:bg-red-500/10' : ''
-            }`}>
-              <span className="w-10 text-right pr-2 text-[var(--text-muted)] shrink-0 select-none">{line.oldLine || ''}</span>
-              <span className="w-10 text-right pr-2 text-[var(--text-muted)] shrink-0 select-none">{line.newLine || ''}</span>
-              <span className={`w-5 text-center shrink-0 select-none ${
-                line.type === 'added' ? 'text-green-600 dark:text-green-400' :
-                line.type === 'removed' ? 'text-red-600 dark:text-red-400' : 'text-transparent'
-              }`}>
-                {line.type === 'added' ? '+' : line.type === 'removed' ? '-' : ' '}
-              </span>
-              <span className="flex-1 whitespace-pre px-2">{line.content}</span>
-            </div>
-          ))}
-        </div>
+      {diff && diff.lines.length > 0 && (
+        <DiffPreview lines={diff.lines} approximate={diff.approximate} label={`${t('gitDiff')}: ${change.filePath}`} />
       )}
     </div>
   );

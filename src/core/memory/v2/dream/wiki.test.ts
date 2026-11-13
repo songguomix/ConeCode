@@ -94,6 +94,9 @@ describe('dream wiki storage format', () => {
   it('extracts JSON from fences and surrounding prose', () => {
     expect(extractJsonObject('```json\n{"files":[]}\n```')).toEqual({ files: [] });
     expect(extractJsonObject('Here you go: {"merges":[]} thanks')).toEqual({ merges: [] });
+    expect(extractJsonObject('Example {not JSON}\n```sh\nls\n```\n```json\n{"files":[{"body":"a literal } and \\"quote\\""}]}\n```\nDone {now}'))
+      .toEqual({ files: [{ body: 'a literal } and "quote"' }] });
+    expect(extractJsonObject('{"files":[{"body":"truncated"}')).toBeNull();
     expect(extractJsonObject('not json')).toBeNull();
   });
 });

@@ -38,7 +38,7 @@ function installStubs() {
           streamCalls.push(params);
           return queued.shift() ?? textResponse('done');
         },
-        stop: async () => true,
+        stop: vi.fn(async () => true),
       },
       message: {
         create: async (m: any) => {
@@ -140,6 +140,60 @@ describe('mid-run message queue', () => {
     expect(useChatStore.getState().queuedMessages.conv1).toHaveLength(0);
   });
 
+  it('uses a steered message at the next model step, before ordinary follow-ups', async () => {
+    let finish!: (result: any) => void;
+    let finishSteered!: (result: any) => void;
+    window.electronAPI.chat.stream = vi.fn(async (params: any) => {
+      streamCalls.push(params);
+      if (streamCalls.length === 1) return new Promise((resolve) => { finish = resolve; });
+      if (streamCalls.length === 2) return new Promise((resolve) => { finishSteered = resolve; });
+      return textResponse('follow-up complete');
+    });
+    const live = useChatStore.getState().sendMessage('original request', 'p1', 'gpt-test');
+    await vi.waitFor(() => expect(streamCalls).toHaveLength(1));
+    const store = useChatStore.getState();
+    store.enqueueMessage('conv1', 'normal follow-up', 'p1', 'gpt-test');
+    store.enqueueMessage('conv1', 'change direction', 'p1', 'gpt-test');
+    store.steerQueuedMessage('conv1', useChatStore.getState().queuedMessages.conv1[1].id);
+    expect(streamCalls).toHaveLength(1);
+    finish(textResponse('first step complete'));
+
+    await vi.waitFor(() => expect(streamCalls).toHaveLength(2));
+    expect(streamCalls[1].messages.at(-1)).toMatchObject({ role: 'user', content: 'change direction' });
+    expect(useChatStore.getState().queuedMessages.conv1.map((item) => item.content)).toEqual(['normal follow-up']);
+    expect(window.electronAPI.chat.stop).not.toHaveBeenCalled();
+    finishSteered(textResponse('updated direction complete'));
+    await live;
+    await vi.waitFor(() => expect(streamCalls).toHaveLength(3));
+    expect(created.filter((message) => message.role === 'user').map((message) => message.content))
+      .toEqual(['original request', 'change direction', 'normal follow-up']);
+  });
+
+  it('keeps the exact steer write failure visible without sending the message again', async () => {
+    let finish!: (result: any) => void;
+    window.electronAPI.chat.stream = vi.fn(async (params: any) => {
+      streamCalls.push(params);
+      return new Promise((resolve) => { finish = resolve; });
+    });
+    const create = window.electronAPI.message.create;
+    const write = vi.fn(async (message: any) => {
+      if (message.content === 'cannot write') throw new Error('Disk is full');
+      return create(message);
+    });
+    window.electronAPI.message.create = write;
+    const live = useChatStore.getState().sendMessage('original request', 'p1', 'gpt-test');
+    await vi.waitFor(() => expect(streamCalls).toHaveLength(1));
+    const store = useChatStore.getState();
+    store.enqueueMessage('conv1', 'cannot write', 'p1', 'gpt-test');
+    store.steerQueuedMessage('conv1', useChatStore.getState().queuedMessages.conv1[0].id);
+    finish(textResponse('first step complete'));
+    await live;
+    await store.flushQueue('conv1');
+    expect(streamCalls).toHaveLength(1);
+    expect(write.mock.calls.filter(([message]) => message.content === 'cannot write')).toHaveLength(1);
+    expect(useChatStore.getState().queuedMessages.conv1).toMatchObject([{ content: 'cannot write', steer: false, steerError: 'Disk is full' }]);
+  });
+
   it('serializes concurrent flushes while the first queued response is pending', async () => {
     useChatStore.setState({ streamingRuns: { conv1: fakeRun() } });
     useChatStore.getState().enqueueMessage('conv1', 'first', 'p1', 'gpt-test');
@@ -164,6 +218,7 @@ describe('mid-run message queue', () => {
   it('holds the queue while approval or an answer is owed', async () => {
     useChatStore.setState({ streamingRuns: { conv1: fakeRun() } });
     useChatStore.getState().enqueueMessage('conv1', 'wait for it', 'p1', 'gpt-test');
+    useChatStore.getState().steerQueuedMessage('conv1', useChatStore.getState().queuedMessages.conv1[0].id);
     useChatStore.setState({ streamingRuns: {} });
     useCodeChangesStore.setState({
       changes: [{
@@ -180,6 +235,19 @@ describe('mid-run message queue', () => {
     await useChatStore.getState().flushQueue('conv1');
     expect(streamCalls).toHaveLength(0);
     expect(useChatStore.getState().queuedMessages.conv1).toHaveLength(1);
+  });
+
+  it('leaves queued messages intact when it cannot check for an unanswered question', async () => {
+    useChatStore.setState({ streamingRuns: { conv1: fakeRun() } });
+    useChatStore.getState().enqueueMessage('conv1', 'follow-up', 'p1', 'gpt-test');
+    useChatStore.setState({ streamingRuns: {} });
+    window.electronAPI.message.list = vi.fn().mockRejectedValue(new Error('Unable to read conversation'));
+
+    await useChatStore.getState().flushQueue('conv1');
+
+    expect(useChatStore.getState().error).toBe('Unable to read conversation');
+    expect(useChatStore.getState().queuedMessages.conv1).toHaveLength(1);
+    expect(streamCalls).toHaveLength(0);
   });
 
   it('drops the queue with a deleted conversation and never double-sends', async () => {

@@ -15,6 +15,16 @@ import { useThemeStore } from '../../stores/theme.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useSettingsStore } from '../../stores/settings.store';
 import type { CodeChange } from '../../stores/codeChanges.store';
+import { isHolding, useInstallGateStore } from '../../stores/installGate.store';
+import { remoteQuestion } from './questionScope';
+import { requestRsiAction } from './rsiControl';
+import { useUIStore } from '../../stores/ui.store';
+import { activateWorkspaceView } from '../workspace/activateView';
+import { isChatConversation, isRsiConversation } from '../workspace/conversations';
+import { rsiCanStart } from '../agents/rsiStart';
+import { useComputerStore } from '../../stores/computer.store';
+
+const pendingAnswers = new Set<string>();
 import { bulkApprovableChanges, changesForActiveConversation } from './approvalScope';
 
 function currentChanges(): CodeChange[] {
@@ -55,6 +65,10 @@ function buildSnapshot() {
   // conversation that currently has a run.
   const runningIds = Object.keys(chat.streamingRuns);
   const activeRun = chat.activeConversationId ? chat.streamingRuns[chat.activeConversationId] : undefined;
+  const question = remoteQuestion(chat.messages, chat.activeConversationId);
+  const activeConversation = chat.conversations.find((c) => c.id === chat.activeConversationId);
+  const computer = useComputerStore.getState();
+  const rsi = activeConversation?.rsi;
   return {
     // The desktop's resolved theme so the phone mirror matches light/dark live.
     theme: useThemeStore.getState().resolved,
@@ -66,6 +80,7 @@ function buildSnapshot() {
     conversations: chat.conversations.map((c) => ({
       id: c.id,
       title: c.title,
+      viewMode: isRsiConversation(c) ? 'rsi' : isChatConversation(c) ? 'chat' : 'work',
       isRunning: runningIds.includes(c.id),
       changedFiles: filesByConversation.get(c.id) || [],
     })),
@@ -82,6 +97,8 @@ function buildSnapshot() {
       toolCallId: m.toolCallId,
       toolName: m.toolName,
       isSummary: m.isSummary,
+      isQuestion: m.isQuestion,
+      questionOptions: m.questionOptions,
       summaryUpToId: m.summaryUpToId,
       // Native tool calls have no text body — send the names so a tool-only
       // turn shows what the agent did instead of an empty bubble.
@@ -89,7 +106,7 @@ function buildSnapshot() {
       thinkingTime: m.thinkingTime,
       tokensUsed: m.tokensUsed,
     })),
-    isStreaming: chat.isStreaming,
+    isStreaming: !!activeRun,
     streamingContent: activeRun?.content ?? '',
     streamingReasoningContent: activeRun?.reasoningContent ?? '',
     streamingStatus: activeRun?.status ?? null,
@@ -110,6 +127,23 @@ function buildSnapshot() {
     })),
     model: model ? { id: model.id, name: model.name, providerId: model.providerId } : null,
     reasoningEffort: chat.reasoningEffort,
+    capabilities: ['uuRemote', 'workModes', 'queue', 'renameConversation', 'changeDetail', 'questions', 'workspaceViews', 'rsiControls'],
+    error: chat.error,
+    question: question ? {
+      id: question.id, conversationId: question.conversationId, content: question.content,
+      options: question.questionOptions || [],
+      canReply: !activeRun && !chat.messageEdits[question.conversationId] &&
+        !pendingAnswers.has(question.conversationId) && !isHolding(useInstallGateStore.getState().jobs),
+    } : null,
+    viewMode: chat.agentMode === 'rsi' ? 'rsi' : useUIStore.getState().viewMode,
+    rsi: rsi ? {
+      ...rsi,
+      canStart: !activeRun && rsiCanStart({ isMac: computer.platform === 'darwin', screenRecording: computer.screenRecording, accessibility: computer.accessibility, hasModel: !!model }),
+    } : null,
+    agentMode: chat.agentMode,
+    planMode: chat.planMode,
+    reviewMode: chat.reviewMode,
+    queuedMessages: (chat.activeConversationId ? chat.queuedMessages?.[chat.activeConversationId] : []) || [],
   };
 }
 
@@ -145,6 +179,15 @@ function structuralSig(): string {
     model ? `${model.providerId}:${model.id}` : '',
     allModels.length + ':' + allModels.map((m) => `${m.providerId}:${m.id}`).join(','),
     chat.reasoningEffort,
+    chat.agentMode, chat.planMode, chat.reviewMode, chat.error,
+    useUIStore.getState().viewMode,
+    JSON.stringify(chat.conversations.find((c) => c.id === chat.activeConversationId)?.rsi || null),
+    useComputerStore.getState().screenRecording, useComputerStore.getState().accessibility,
+    lastMsg?.isQuestion, JSON.stringify(lastMsg?.questionOptions || []),
+    isHolding(useInstallGateStore.getState().jobs),
+    !!(chat.activeConversationId && chat.messageEdits[chat.activeConversationId]),
+    !!(chat.activeConversationId && pendingAnswers.has(chat.activeConversationId)),
+    JSON.stringify(chat.activeConversationId ? chat.queuedMessages?.[chat.activeConversationId] : []),
     useThemeStore.getState().resolved,
     useWorkspaceStore.getState().rootPath || '',
   ].join('|');
@@ -207,6 +250,82 @@ async function handleCommand(cmd: any) {
       const model = useModelStore.getState().getSelectedModel();
       if (!model || !cmd.text) return;
       await chat.sendMessage(String(cmd.text), model.providerId, model.id);
+      break;
+    }
+    case 'answerQuestion': {
+      const question = remoteQuestion(chat.messages, chat.activeConversationId);
+      if (!question || cmd.id !== question.id || cmd.conversationId !== question.conversationId ||
+        typeof cmd.text !== 'string' || !cmd.text.trim() || cmd.text.length > 16_384 ||
+        chat.streamingRuns[question.conversationId] || chat.messageEdits[question.conversationId] ||
+        pendingAnswers.has(question.conversationId) || isHolding(useInstallGateStore.getState().jobs)) {
+        reply(cmd.reqId, { ok: false });
+        break;
+      }
+      const model = useModelStore.getState().getSelectedModel();
+      const providerId = question.providerId || model?.providerId;
+      const modelId = question.modelId || model?.id;
+      if (!providerId || !modelId) { reply(cmd.reqId, { ok: false }); break; }
+      pendingAnswers.add(question.conversationId);
+      publishSoon();
+      reply(cmd.reqId, { ok: true });
+      try {
+        await chat.sendMessage(cmd.text.trim(), providerId, modelId);
+      } finally {
+        pendingAnswers.delete(question.conversationId);
+        publishSoon();
+      }
+      break;
+    }
+    case 'rsiControl': {
+      if (chat.agentMode !== 'rsi' || cmd.conversationId !== chat.activeConversationId ||
+        (cmd.action !== 'start' && cmd.action !== 'stop')) { reply(cmd.reqId, { ok: false }); break; }
+      reply(cmd.reqId, { ok: requestRsiAction(cmd.conversationId, cmd.action) });
+      break;
+    }
+    case 'rsiDirection': {
+      const current = chat.conversations.find((c) => c.id === chat.activeConversationId);
+      if (!current || !isRsiConversation(current) || cmd.conversationId !== current.id ||
+        chat.streamingRuns[current.id] || !cmd.direction || typeof cmd.direction !== 'object') {
+        reply(cmd.reqId, { ok: false }); break;
+      }
+      const fields = ['objective', 'priorities', 'metrics', 'scope', 'constraints'] as const;
+      if (!fields.every((key) => typeof cmd.direction[key] === 'string' && cmd.direction[key].length <= 16_384)) {
+        reply(cmd.reqId, { ok: false }); break;
+      }
+      await chat.updateRsiDirection(current.id, Object.fromEntries(fields.map((key) => [key, cmd.direction[key]])));
+      reply(cmd.reqId, { ok: true });
+      break;
+    }
+    case 'setViewMode':
+      if (cmd.value === 'chat' || cmd.value === 'work' || cmd.value === 'rsi') await activateWorkspaceView(cmd.value);
+      break;
+    case 'setAgentMode':
+      if (cmd.value === 'standard' || cmd.value === 'goal') chat.setAgentMode(cmd.value);
+      break;
+    case 'setPlanMode':
+      if (typeof cmd.value === 'boolean') chat.setPlanMode(cmd.value);
+      break;
+    case 'setReviewMode':
+      if (typeof cmd.value === 'boolean') chat.setReviewMode(cmd.value);
+      break;
+    case 'renameConversation':
+      if (typeof cmd.id === 'string' && typeof cmd.title === 'string' && cmd.title.trim() && cmd.title.length <= 200 && chat.conversations.some((c) => c.id === cmd.id)) {
+        await chat.renameConversation(cmd.id, cmd.title.trim());
+      }
+      break;
+    case 'enqueueMessage': {
+      const model = useModelStore.getState().getSelectedModel();
+      if (model && chat.activeConversationId && typeof cmd.text === 'string' && cmd.text.trim()) {
+        chat.enqueueMessage(chat.activeConversationId, cmd.text, model.providerId, model.id);
+      }
+      break;
+    }
+    case 'dequeueMessage':
+      if (chat.activeConversationId && typeof cmd.id === 'string') chat.dequeueMessage(chat.activeConversationId, cmd.id);
+      break;
+    case 'changeDetail': {
+      const change = currentChanges().find((c) => c.id === cmd.id);
+      reply(cmd.reqId, change ? { ok: true, originalCode: change.originalCode, newCode: change.newCode } : { ok: false });
       break;
     }
     case 'stop':
@@ -336,6 +455,9 @@ export function initRemoteBridge() {
   useModelStore.subscribe(publishSoon);
   useThemeStore.subscribe(publishSoon);
   useWorkspaceStore.subscribe(publishSoon);
+  useUIStore.subscribe(publishSoon);
+  useComputerStore.subscribe(publishSoon);
+  useInstallGateStore.subscribe(publishSoon);
   (window as any).electronAPI?.remote?.onCommand(handleCommand);
   publishSoon();
 }

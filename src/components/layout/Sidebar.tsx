@@ -7,6 +7,7 @@ import { useBackgroundStore } from '../../stores/background.store';
 import { useDshMarketStore } from '../../stores/dshMarket.store';
 import { groupConversationsByFolder, groupOpenProjectConversations, isChatConversation, isWorkConversation, isRsiConversation } from '../../core/workspace/conversations';
 import { rootLabel } from '../../core/workspace/roots';
+import { activateWorkspaceView } from '../../core/workspace/activateView';
 import HandoffPanel from '../handoff/HandoffPanel';
 import { mostUrgentDot, type DotKind } from './panelDot';
 import { rsiSidebarLayout } from './rsiLayout';
@@ -44,7 +45,6 @@ function shortTime(ts: number): string {
 
 export default function Sidebar() {
   const viewMode = useUIStore((s) => s.viewMode);
-  const setViewMode = useUIStore((s) => s.setViewMode);
   const [panelsOpen, setPanelsOpen] = useState(false);
   // The panels menu lives in body coordinates (portal): sidebar width,
   // overflow, or backdrop-blur must never clip or squeeze it. Right-aligned
@@ -672,25 +672,7 @@ export default function Sidebar() {
           {/* Chat / Work / RSI capsule pill */}
           <div className="flex-1 flex items-center p-0.5 rounded-xl bg-[color-mix(in_srgb,var(--bg-2)_80%,transparent)] border border-[var(--glass-border)] shadow-2xs">
             <button
-              onClick={() => {
-                setViewMode('chat');
-                const store = useChatStore.getState();
-                // Leaving RSI already hands off to a non-RSI conversation;
-                // running the lookup below too would create a second blank one.
-                if (store.agentMode === 'rsi') {
-                  store.setAgentMode('standard');
-                  return;
-                }
-                const current = store.conversations.find((c) => c.id === store.activeConversationId);
-                if (!current || !isChatConversation(current)) {
-                  const chatConv = store.conversations.find(isChatConversation);
-                  if (chatConv) {
-                    void store.setActiveConversation(chatConv.id);
-                  } else {
-                    void store.newConversation(selectedModel?.providerId || '', selectedModel?.id || '', null);
-                  }
-                }
-              }}
+              onClick={() => { void activateWorkspaceView('chat'); }}
               className={`flex-1 min-w-0 flex items-center justify-center gap-1 py-1.5 px-1.5 rounded-lg text-[12px] font-medium transition-all cursor-pointer ${
                 viewMode === 'chat' && agentMode !== 'rsi'
                   ? 'bg-[var(--glass-card)] text-[var(--accent)] shadow-xs font-semibold'
@@ -702,27 +684,7 @@ export default function Sidebar() {
               <span>{t('chat')}</span>
             </button>
             <button
-              onClick={() => {
-                setViewMode('work');
-                const store = useChatStore.getState();
-                // Same hand-off guard as the Chat tab: setAgentMode already
-                // selects/creates the Work conversation when leaving RSI.
-                if (store.agentMode === 'rsi') {
-                  store.setAgentMode('standard');
-                  return;
-                }
-                const current = store.conversations.find((c) => c.id === store.activeConversationId);
-                if (!current || !isWorkConversation(current)) {
-                  const workConv = store.conversations.find(isWorkConversation);
-                  if (workConv) {
-                    void store.setActiveConversation(workConv.id);
-                  } else if (useWorkspaceStore.getState().rootPath) {
-                    void store.newConversation(selectedModel?.providerId || '', selectedModel?.id || '', useWorkspaceStore.getState().rootPath);
-                  } else {
-                    void store.ensureWorkFolder();
-                  }
-                }
-              }}
+              onClick={() => { void activateWorkspaceView('work'); }}
               className={`flex-1 min-w-0 flex items-center justify-center gap-1 py-1.5 px-1.5 rounded-lg text-[12px] font-medium transition-all cursor-pointer ${
                 viewMode === 'work' && agentMode !== 'rsi'
                   ? 'bg-[var(--glass-card)] text-[var(--accent)] shadow-xs font-semibold'
@@ -734,12 +696,7 @@ export default function Sidebar() {
               <span>{t('work')}</span>
             </button>
             <button
-              onClick={() => {
-                // setAgentMode('rsi') reopens the newest RSI conversation (or
-                // creates the first one); doing the same lookup here as well
-                // used to spawn a duplicate blank conversation.
-                useChatStore.getState().setAgentMode('rsi');
-              }}
+              onClick={() => { void activateWorkspaceView('rsi'); }}
               className={`flex-1 min-w-0 flex items-center justify-center gap-1 py-1.5 px-1.5 rounded-lg text-[12px] font-medium transition-all cursor-pointer ${
                 agentMode === 'rsi'
                   ? 'bg-[var(--glass-card)] text-[var(--accent)] shadow-xs font-semibold'
