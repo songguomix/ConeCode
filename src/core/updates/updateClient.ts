@@ -15,8 +15,9 @@ export const UPDATE_PRODUCT_SLUG = 'conecode';
 export const UPDATE_TIMEOUT_MS = 12_000;
 
 export type UpdatePlatform = 'macos' | 'windows' | 'linux';
-export type UpdateStatus = 'ok' | 'no_update' | 'error';
+export type UpdateStatus = 'ok' | 'no_update' | 'no_compatible_release' | 'error';
 export type UpdateErrorCode =
+  | 'unsupported-platform'
   | 'unavailable'
   | 'network'
   | 'timeout'
@@ -106,12 +107,13 @@ export function compareVersions(a: string, b: string): number {
 }
 
 /** Map `process.platform` / release platform labels onto the API's words. */
-export function resolvePlatform(raw: unknown): UpdatePlatform {
-  const s = String(raw ?? '').toLowerCase().trim();
-  if (s.includes('darwin') || s.includes('mac') || s.includes('osx') || s.includes('apple')) return 'macos';
-  if (s.includes('win')) return 'windows';
-  if (s.includes('linux') || s.includes('ubuntu') || s.includes('debian') || s.includes('appimage')) return 'linux';
-  return 'linux';
+export function resolvePlatform(raw: unknown): UpdatePlatform | null {
+  if (typeof raw !== 'string') return null;
+  const label = raw.trim().toLowerCase();
+  if (['darwin', 'macos', 'mac', 'osx', 'apple', 'mac os'].includes(label)) return 'macos';
+  if (['win32', 'win64', 'win', 'windows'].includes(label)) return 'windows';
+  if (['linux', 'ubuntu', 'debian', 'appimage'].includes(label)) return 'linux';
+  return null;
 }
 
 export function buildUpdateUrl(options: {
@@ -126,7 +128,9 @@ export function buildUpdateUrl(options: {
   url.search = '';
   url.hash = '';
   url.searchParams.set('product', options.product || UPDATE_PRODUCT_SLUG);
-  url.searchParams.set('platform', resolvePlatform(options.platform));
+  const platform = resolvePlatform(options.platform);
+  if (!platform) throw new Error('Unsupported update platform');
+  url.searchParams.set('platform', platform);
   url.searchParams.set('version', options.currentVersion || '0.0.0');
   url.searchParams.set('format', 'json');
   return url.toString();
@@ -259,34 +263,55 @@ export function failureResult(
   };
 }
 
-/**
- * When the server cannot find an installer for our platform it falls back to
- * the first published release (`productReleases[0]`) — i.e. a macOS `.dmg` for
- * a Linux client. Prefer the matching entry from `all_platforms`, and if there
- * is none, report "up to date" rather than offering an uninstallable file.
- */
-function releaseForPlatform(
-  root: Record<string, unknown>,
-  latest: UpdateRelease,
-  platform: unknown,
-): { release: UpdateRelease | null; substituted: boolean } {
-  if (platform === undefined || platform === null) return { release: latest, substituted: false };
-  const clientPlatform = resolvePlatform(platform);
-  if (!latest.platform || resolvePlatform(latest.platform) === clientPlatform) {
-    return { release: latest, substituted: false };
-  }
+const INSTALLER_EXTENSIONS: Record<UpdatePlatform, RegExp> = {
+  macos: /\.dmg$/i,
+  windows: /\.exe$/i,
+  linux: /\.appimage$/i,
+};
 
-  const alternatives = root.all_platforms ?? root.allPlatforms;
-  if (Array.isArray(alternatives)) {
-    for (const entry of alternatives) {
-      const record = asRecord(entry);
-      if (!record) continue;
-      if (!pickString(record, 'platform') || resolvePlatform(record.platform) !== clientPlatform) continue;
-      const match = parseRelease(record);
-      if (match) return { release: match, substituted: true };
-    }
+function resolveArchitecture(value: string): string {
+  const arch = value.trim().toLowerCase();
+  if (arch === 'amd64' || arch === 'x86_64') return 'x64';
+  if (arch === 'aarch64') return 'arm64';
+  if (arch === 'x86' || /^i[3-6]86$/.test(arch)) return 'ia32';
+  return arch;
+}
+
+function isCompatibleRelease(
+  source: Record<string, unknown>,
+  release: UpdateRelease,
+  platform: UpdatePlatform,
+  arch?: string,
+): boolean {
+  if (release.platform && resolvePlatform(release.platform) !== platform) return false;
+
+  const extension = INSTALLER_EXTENSIONS[platform];
+  const path = release.downloadUrl ? new URL(release.downloadUrl).pathname : '';
+  let urlName = path.slice(path.lastIndexOf('/') + 1);
+  try {
+    urlName = decodeURIComponent(urlName);
+  } catch {
+    return false;
   }
-  return { release: null, substituted: true };
+  // An API download URL can be opaque. When it names an installer, check it
+  // as well as the server's fileName, since the two can disagree.
+  const directInstaller = /\.(?:dmg|exe|appimage|msi|pkg|deb|rpm|zip|tar\.gz)$/i.test(urlName);
+  const names = [release.fileName, directInstaller ? urlName : null].filter((name): name is string => Boolean(name));
+  if (names.some((name) => !extension.test(name))) return false;
+  if (names.length === 0 && (!release.platform || arch)) return false;
+  if (!arch) return true;
+
+  const declaredArch = pickString(source, 'arch', 'architecture');
+  const architectures = declaredArch ? [resolveArchitecture(declaredArch)] : [];
+  for (const name of names) {
+    const matches = name.matchAll(/(?:^|[._ -])(arm64|aarch64|x64|amd64|x86_64|ia32|x86|i[3-6]86|armv7l|armv7|armhf|riscv64|universal)(?=$|[._ -])/gi);
+    for (const match of matches) architectures.push(resolveArchitecture(match[1]));
+  }
+  // The published NSIS and AppImage x64 artifacts omit architecture in their
+  // names. Other architectures must be explicit in the metadata or filename.
+  if (architectures.length === 0) return platform !== 'macos' && arch === 'x64';
+  return architectures.every((candidate) => candidate === arch ||
+    (platform === 'macos' && candidate === 'universal' && (arch === 'x64' || arch === 'arm64')));
 }
 
 /** Normalize the `/update` payload. Never throws on malformed input. */
@@ -294,6 +319,7 @@ export function parseUpdatePayload(
   payload: unknown,
   currentVersion: string,
   platform?: unknown,
+  arch?: string,
 ): UpdateCheckResult {
   const root = asRecord(payload);
   if (!root) return failureResult(currentVersion, 'invalid-json', 'Update payload is not an object');
@@ -319,17 +345,35 @@ export function parseUpdatePayload(
   const parsedLatest = latestSource ? parseRelease(latestSource) : null;
   // The server answers `no_update` with no release object when a product has
   // nothing published yet — that is "up to date", not a broken payload.
-  if (!parsedLatest) {
+  if (!latestSource || !parsedLatest) {
     if (statusRaw === 'no_update') {
       return { ok: true, status: 'no_update', updateAvailable: false, currentVersion, latest: null };
     }
     return failureResult(currentVersion, 'invalid-json', 'Update payload has no release information');
   }
 
-  const { release: latest, substituted } = releaseForPlatform(root, parsedLatest, platform);
-  if (!latest) {
-    // Nothing installable on this machine.
-    return { ok: true, status: 'no_update', updateAvailable: false, currentVersion, latest: null };
+  let latest = parsedLatest;
+  let substituted = false;
+  if (platform != null) {
+    const clientPlatform = resolvePlatform(platform);
+    if (!clientPlatform) return failureResult(currentVersion, 'unsupported-platform', 'Unsupported update platform');
+    if (!isCompatibleRelease(latestSource, latest, clientPlatform, arch)) {
+      const alternatives = root.all_platforms ?? root.allPlatforms;
+      let match: UpdateRelease | null = null;
+      if (Array.isArray(alternatives)) {
+        for (const entry of alternatives) {
+          const record = asRecord(entry);
+          const candidate = record && parseRelease(record);
+          if (!record || !candidate?.downloadUrl || !isCompatibleRelease(record, candidate, clientPlatform, arch)) continue;
+          if (!match || compareVersions(candidate.version, match.version) > 0) match = candidate;
+        }
+      }
+      if (!match) {
+        return { ok: true, status: 'no_compatible_release', updateAvailable: false, currentVersion, latest: null };
+      }
+      latest = match;
+      substituted = true;
+    }
   }
 
   const availableFlag = root.update_available ?? root.updateAvailable;
@@ -361,6 +405,7 @@ export interface CheckForUpdateOptions {
   product?: string;
   currentVersion: string;
   platform: unknown;
+  arch?: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
   userAgent?: string;
@@ -368,6 +413,9 @@ export interface CheckForUpdateOptions {
 
 export async function checkForUpdate(options: CheckForUpdateOptions): Promise<UpdateCheckResult> {
   const currentVersion = (options.currentVersion || '').replace(/^v/i, '');
+  if (!resolvePlatform(options.platform)) {
+    return failureResult(currentVersion, 'unsupported-platform', 'Unsupported update platform');
+  }
   const fetchImpl = options.fetchImpl ?? (typeof globalThis.fetch === 'function' ? globalThis.fetch : undefined);
   if (!fetchImpl) return failureResult(currentVersion, 'unavailable', 'No fetch implementation available');
 
@@ -404,7 +452,7 @@ export async function checkForUpdate(options: CheckForUpdateOptions): Promise<Up
     } catch {
       return failureResult(currentVersion, 'invalid-json', 'Response is not valid JSON');
     }
-    return parseUpdatePayload(payload, currentVersion, options.platform);
+    return parseUpdatePayload(payload, currentVersion, options.platform, options.arch);
   } catch (error) {
     const { code, detail } = describeFetchError(error);
     return failureResult(currentVersion, code, detail);

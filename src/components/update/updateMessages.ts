@@ -10,6 +10,7 @@ const CHECK_ERROR_KEYS: Record<UpdateErrorCode, string> = {
   'invalid-json': 'updateErrorInvalidJson',
   server: 'updateErrorServer',
   unavailable: 'updateErrorUnavailable',
+  'unsupported-platform': 'updateNoCompatibleRelease',
 };
 
 const DOWNLOAD_ERROR_KEYS: Record<UpdateDownloadError, string> = {

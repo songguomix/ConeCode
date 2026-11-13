@@ -137,7 +137,7 @@ describe('parseUpdatePayload', () => {
     expect(result.latest?.downloadUrl).toBe('https://agibase.dev/api/download/linux-1');
   });
 
-  it('reports up to date when no build exists for this platform', () => {
+  it('reports that no compatible installer exists for this platform', () => {
     const result = parseUpdatePayload(
       {
         ...payload,
@@ -148,7 +148,7 @@ describe('parseUpdatePayload', () => {
       'windows',
     );
     expect(result.ok).toBe(true);
-    expect(result.status).toBe('no_update');
+    expect(result.status).toBe('no_compatible_release');
     expect(result.updateAvailable).toBe(false);
     expect(result.latest).toBeNull();
   });
@@ -157,6 +157,51 @@ describe('parseUpdatePayload', () => {
     const result = parseUpdatePayload({ ...payload }, '2.4.11', 'macos');
     expect(result.latest?.version).toBe('2.5.0');
     expect(result.updateAvailable).toBe(true);
+  });
+
+  it.each([
+    ['win32', undefined],
+    ['linux', 'unknown'],
+    ['win32', 'windows'],
+  ])('rejects a DMG for %s with platform label %s', (platform, label) => {
+    const result = parseUpdatePayload({ ...payload, latest: { ...payload.latest, platform: label } }, '2.4.11', platform, 'x64');
+    expect(result.status).toBe('no_compatible_release');
+    expect(result.latest).toBeNull();
+    expect(result.updateAvailable).toBe(false);
+  });
+
+  it('rejects a direct download URL that contradicts the reported filename', () => {
+    const latest = { ...payload.latest, platform: 'windows', fileName: 'ConeCode.exe', downloadUrl: 'https://github.com/ConeCode.dmg' };
+    expect(parseUpdatePayload({ ...payload, latest }, '2.4.11', 'win32', 'x64').status).toBe('no_compatible_release');
+  });
+
+  it('falls back to the newest compatible installer when the primary macOS build has the wrong architecture', () => {
+    const result = parseUpdatePayload({
+      ...payload,
+      update_available: false,
+      all_platforms: [
+        { ...payload.latest, version: '2.4.12', fileName: 'ConeCode-2.4.12-x64.dmg' },
+        { ...payload.latest, version: '2.5.1', fileName: 'ConeCode-2.5.1-x64.dmg' },
+        { ...payload.latest, version: '2.5.2', arch: 'aarch64', fileName: 'ConeCode-2.5.2-x64.dmg' },
+      ],
+    }, '2.4.11', 'darwin', 'x64');
+    expect(result.latest?.version).toBe('2.5.1');
+    expect(result.updateAvailable).toBe(true);
+  });
+
+  it.each([
+    ['darwin', 'arm64', 'ConeCode-2.4.12-arm64.dmg'],
+    ['darwin', 'x64', 'ConeCode-2.4.12-universal.dmg'],
+    ['win32', 'x64', 'ConeCode Setup 2.4.12.exe'],
+    ['linux', 'x64', 'ConeCode-2.4.12.AppImage'],
+  ])('accepts the compatible %s %s installer', (platform, arch, fileName) => {
+    const latest = { ...payload.latest, platform: undefined, fileName, version: '2.4.12' };
+    expect(parseUpdatePayload({ ...payload, latest }, '2.4.11', platform, arch).updateAvailable).toBe(true);
+  });
+
+  it('does not offer an unlabeled x64 AppImage to Linux arm64', () => {
+    const latest = { ...payload.latest, platform: 'linux', fileName: 'ConeCode-2.4.12.AppImage' };
+    expect(parseUpdatePayload({ ...payload, latest }, '2.4.11', 'linux', 'arm64').status).toBe('no_compatible_release');
   });
 
   it('surfaces server errors', () => {
@@ -209,6 +254,13 @@ describe('checkForUpdate', () => {
     const result = await checkForUpdate({ ...base, fetchImpl: fetchImpl as unknown as typeof fetch });
     expect(result.status).toBe('ok');
     expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it('does not query the server for an unsupported runtime platform', async () => {
+    const fetchImpl = vi.fn();
+    const result = await checkForUpdate({ ...base, platform: 'freebsd', fetchImpl });
+    expect(result.errorCode).toBe('unsupported-platform');
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it('reports http failures', async () => {

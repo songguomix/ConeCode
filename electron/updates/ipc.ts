@@ -156,6 +156,7 @@ export function registerUpdateIpc(): void {
       baseUrl: process.env.CONECODE_UPDATE_BASE_URL || undefined,
       currentVersion: app.getVersion(),
       platform: process.platform,
+      arch: process.arch,
       userAgent: `ConeCode/${app.getVersion()} (${process.platform}-${process.arch})`,
       fetchImpl: fetchUpdate as unknown as typeof fetch,
     }),

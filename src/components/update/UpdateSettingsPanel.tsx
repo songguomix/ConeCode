@@ -65,6 +65,8 @@ export default function UpdateSettingsPanel() {
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[var(--accent-soft)] border border-[color-mix(in_srgb,var(--accent)_30%,transparent)] text-[var(--accent)] font-semibold">
               {t('updateAvailableHint')} · v{latest?.version}
             </span>
+          ) : result?.status === 'no_compatible_release' && !checking ? (
+            <span className="text-[var(--text-secondary)]">{t('updateNoCompatibleRelease')}</span>
           ) : result?.ok && !checking ? (
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[var(--success-bg)] border border-[var(--success-border)] text-[var(--success)] font-medium">
               <FiCheckCircle size={11} /> {t('updateUpToDate')}
