@@ -699,6 +699,7 @@ export function buildToolset(
     planMode?: boolean;
     mcpTools?: McpToolInfo[];
     computerControl?: boolean;
+    costLock?: boolean;
     projectOpen?: boolean;
     isChatMode?: boolean;
     disabledPlugins?: string[];
@@ -719,6 +720,7 @@ export function buildToolset(
     // all — offering it would spend tokens on every turn and invite the model to
     // attempt something that can only fail.
     .filter((tl) => tl.name !== 'computer' || opts.computerControl === true)
+    .filter((tl) => tl.name !== 'cost_snapshot' || opts.costLock === true)
     // Same reasoning for the page tools: with no folder open there is nothing to
     // preview, so they'd be six tools of pure overhead on every request.
     .filter((tl) => !PAGE_TOOLS.has(tl.name) || opts.projectOpen === true)

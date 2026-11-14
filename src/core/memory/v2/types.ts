@@ -285,6 +285,7 @@ export interface Memory2State {
     enabled: boolean;
     maxContextChars: number;
     autoExtract: boolean;
+    autoReview?: boolean;
     /** Persist the current task as a working-memory row. */
     trackWorkingMemory: boolean;
     workingMemoryTTL: number;

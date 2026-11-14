@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { resetNativeToolFallback, useChatStore } from './chat.store';
+import { buildApiMessages, resetNativeToolFallback, useChatStore } from './chat.store';
 import { useCodeChangesStore } from './codeChanges.store';
 import { useInstallGateStore } from './installGate.store';
 import { useMemoryStore } from './memory.store';
@@ -36,7 +36,7 @@ const toolResponse = (name: string, args: Record<string, unknown>, id = 'call_1'
 });
 
 let responses: unknown[];
-let streamCalls: Array<{ messages: Array<{ role: string; content: unknown }> }>;
+let streamCalls: Array<{ messages: Array<{ role: string; content: unknown }>; tools?: Array<{ name: string }> }>;
 let transcripts: Record<string, Message[]>;
 let files: Map<string, string>;
 let execRun: ReturnType<typeof vi.fn>;
@@ -233,6 +233,20 @@ describe('RSI live execution evidence', () => {
     expect(streamCalls).toHaveLength(2);
     expect(currentRsi().runs.map((run) => run.status)).toEqual(['stopped', 'completed']);
     expect(useChatStore.getState().isStreaming).toBe(false);
+  });
+
+  it.each([false, true])('gates the cost prompt, tool and forced calls when cost lock is %s', async (costLock) => {
+    useSettingsStore.setState({ costLock });
+    responses = [toolResponse('cost_snapshot', {}), textResponse('Done.')];
+    await execute();
+
+    const first = streamCalls[0];
+    expect(first.tools?.some((tool) => tool.name === 'cost_snapshot')).toBe(costLock);
+    expect(first.messages.some((message) => String(message.content).includes('## Cost lock'))).toBe(costLock);
+    const result = transcripts[conversationId].find((message) => message.toolName === 'cost_snapshot');
+    expect(result?.content).toContain(costLock ? 'per-episode budget:' : 'Tool unavailable.');
+    useSettingsStore.setState({ costLock: false });
+    expect(JSON.stringify(buildApiMessages(transcripts[conversationId]))).not.toContain('per-episode budget:');
   });
 
   it('does not count old conversation spend against a new execution budget', async () => {

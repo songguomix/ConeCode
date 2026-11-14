@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   AGENT_MODES, GOAL_MODE_PROMPT, ORCHESTRATION_MODE_PROMPT, RSI_INVARIANTS,
-  RSI_MODE_PROMPT, agentModePrompt, isAgentMode,
+  RSI_COST_LOCK_PROMPT, RSI_MODE_PROMPT, agentModePrompt, isAgentMode,
 } from './modePrompts';
 
 describe('agentModePrompt', () => {
@@ -76,9 +76,9 @@ describe('RSI_MODE_PROMPT is anchored recursive self-improvement + RL', () => {
     expect(RSI_MODE_PROMPT).toContain('"external": true');
     expect(RSI_MODE_PROMPT).toContain('blastRadius');
     expect(RSI_MODE_PROMPT).toContain('editBudget');
-    expect(RSI_MODE_PROMPT).toContain('costBudgetUsd');
-    expect(RSI_MODE_PROMPT).toContain('cost_snapshot');
-    expect(RSI_MODE_PROMPT).toMatch(/Cost lock/i);
+    expect(RSI_MODE_PROMPT).not.toContain('cost_snapshot');
+    expect(RSI_COST_LOCK_PROMPT).toContain('cost_snapshot');
+    expect(RSI_COST_LOCK_PROMPT).toMatch(/Cost lock/i);
     expect(RSI_MODE_PROMPT).toContain('reusable');
     expect(RSI_MODE_PROMPT).toMatch(/before mutating/i);
     expect(RSI_MODE_PROMPT).toMatch(/Hard gate/);

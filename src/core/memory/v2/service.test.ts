@@ -47,6 +47,47 @@ const EXTRACTION = JSON.stringify({
 });
 
 describe('MemoryService', () => {
+  it('reviews only opted-in corrections and tombstones one refuted inference', async () => {
+    const correction = 'The app uses SQLite, not PostgreSQL, for local storage.';
+    const llm = vi.fn();
+    const { service } = await makeService({ llm });
+    const input = { origin: 'extracted', status: 'inferred', importance: 0.6 } as const;
+    const wrong = await service.saveMemory({
+      ...input, title: 'Local storage', content: 'The app uses PostgreSQL for local storage.',
+    });
+    const other = await service.saveMemory({
+      ...input, title: 'Storage backups', content: 'Local storage backups run at midnight.',
+    });
+    const protectedMemory = await service.saveMemory({
+      ...input, importance: 0.95, title: 'Storage policy', content: 'Local storage requires encryption.',
+    });
+    const opts = { messages: [{ role: 'user', content: correction }], taskText: correction, reviewCurrent: () => true };
+    await service.updateSettings({ autoExtract: false });
+    await service.endTask(opts);
+    expect(llm).not.toHaveBeenCalled();
+
+    await service.updateSettings({ autoReview: true });
+    llm.mockResolvedValueOnce(JSON.stringify({ verdict: 'incorrect', id: wrong.id, quote: 'Invented quote.' }));
+    await service.endTask(opts);
+    expect(service.getState().records.find((r) => r.id === wrong.id)?.deletedAt).toBeNull();
+
+    llm.mockImplementationOnce(async () => {
+      service.setProject('/repo/b', 'proj-b');
+      return JSON.stringify({ verdict: 'incorrect', id: wrong.id, quote: correction });
+    });
+    await service.endTask(opts);
+    expect(service.getState().records.find((r) => r.id === wrong.id)?.deletedAt).toBeNull();
+
+    service.setProject('/repo/a', 'proj-a');
+    llm.mockResolvedValueOnce(JSON.stringify({ verdict: 'incorrect', id: wrong.id, quote: correction }));
+    expect((await service.endTask(opts)).removedIncorrect).toBe(wrong.title);
+    const state = service.getState();
+    expect(state.records.filter((r) => r.deletedAt !== null).map((r) => r.id)).toEqual([wrong.id]);
+    expect(state.records.filter((r) => r.deletedAt === null).map((r) => r.id)).toEqual([other.id, protectedMemory.id]);
+    expect(state.changes[state.changes.length - 1]).toMatchObject({ op: 'delete', memoryId: wrong.id });
+    expect(service.getMemoryHistory(wrong.id).some((version) => version.reason.includes(correction))).toBe(true);
+  });
+
   it('extracts a durable decision at a value node and records provenance', async () => {
     const llm = vi.fn(async () => EXTRACTION);
     const { service } = await makeService({ llm });

@@ -93,6 +93,7 @@ interface MemoryV2State {
     messages: { role: string; content: string }[];
     sessionId?: string;
     taskText?: string;
+    reviewCurrent?: () => boolean;
     failed?: boolean;
     event?: any;
   }) => Promise<ExtractionResult | null>;
@@ -641,7 +642,12 @@ export const useMemoryV2Store = create<MemoryV2State>((set, get) => ({
   endTask: async (opts) => {
     if (!service || !get().active) return null;
     try {
-      const result = await service.endTask(opts);
+      const revision = projectRevision;
+      const reviewCurrent = opts.reviewCurrent;
+      const result = await service.endTask({
+        ...opts,
+        reviewCurrent: reviewCurrent && (() => revision === projectRevision && !projectChanging && reviewCurrent()),
+      });
       set({ lastExtraction: result });
       get().refresh();
       return result;

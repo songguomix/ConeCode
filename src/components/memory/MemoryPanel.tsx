@@ -464,6 +464,7 @@ function OverviewTab({ t, records, activeRecords, stats, settings, syncStatus, c
   onTab: (tab: Tab) => void;
 }) {
   const updateSettings = useMemoryV2Store((s) => s.updateSettings);
+  const removedIncorrect = useMemoryV2Store((s) => s.lastExtraction?.removedIncorrect);
   const runMigration = useMemoryV2Store((s) => s.runMigration);
   const backup = useMemoryV2Store((s) => s.backup);
   const restore = useMemoryV2Store((s) => s.restore);
@@ -624,6 +625,19 @@ function OverviewTab({ t, records, activeRecords, stats, settings, syncStatus, c
                 className="accent-[var(--accent)]"
               />
             </label>
+            <label className="flex items-center justify-between gap-2">
+              <span className="text-[var(--text-secondary)]">{t('memoryAutoReview')}</span>
+              <input
+                type="checkbox"
+                checked={settings?.autoReview === true}
+                onChange={(e) => void updateSettings({ autoReview: e.target.checked })}
+                className="accent-[var(--accent)]"
+              />
+            </label>
+            <p className="text-[var(--text-muted)]">{t('memoryAutoReviewHint')}</p>
+            {removedIncorrect && (
+              <p role="status">{t('memoryAutoReviewRemoved')} {removedIncorrect}</p>
+            )}
             <label className="flex items-center justify-between gap-2">
               <span className="text-[var(--text-secondary)]">{t('memoryTrackWorking')}</span>
               <input

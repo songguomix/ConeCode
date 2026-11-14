@@ -13,7 +13,7 @@ import { useMemoryV2Store, isMemoryV2Active, type TaskMemoryContext } from './me
 import { useFreeStore } from './free.store';
 import type { MemoryEntry } from '../core/memory/memory';
 import { formatMemoryFiles } from '../core/memory/memoryFiles';
-import { agentModePrompt, type AgentMode } from '../core/agents/modePrompts';
+import { agentModePrompt, RSI_COST_LOCK_PROMPT, type AgentMode } from '../core/agents/modePrompts';
 import {
   defaultRsiState, isRsiConversation, rsiDirectionPrompt, readRsiProgress, rsiWorkspaceDir,
   type RsiConversationState, type RsiDirectionConfig, type RsiRunRef,
@@ -608,9 +608,9 @@ async function runPerfSnapshot(): Promise<string> {
 // what this conversation burned, the per-episode budget, lock state.
 // Read-only — it never changes anything, it only reports.
 async function runCostSnapshot(convId?: string): Promise<string> {
+  if (useSettingsStore.getState().costLock !== true) return 'Tool unavailable.';
   const { useModelStore } = await import('./model.store');
   const modelTable = useModelStore.getState().models;
-  const settings = useSettingsStore.getState();
   const activeId = useChatStore.getState().activeConversationId;
   const target = convId || activeId;
   const turns = target && target === activeId
@@ -618,11 +618,13 @@ async function runCostSnapshot(convId?: string): Promise<string> {
     : target
       ? await window.electronAPI.message.list(target).catch(() => [])
       : [];
+  const settings = useSettingsStore.getState();
+  if (settings.costLock !== true) return 'Tool unavailable.';
   return buildCostSnapshot(
     turns,
     (providerId, modelId) => modelTable.get(providerId || '')?.find((m) => m.id === modelId)?.pricing,
     settings.maxEpisodeCost ?? 0.5,
-    !!settings.costLock,
+    true,
     { startSpendUsd: target ? rsiSpendBaselines.get(target) : undefined },
   );
 }
@@ -1306,9 +1308,21 @@ export function elideInlineDataImages(content: string): string {
     .replace(INLINE_DATA_URL, '[image elided from context]');
 }
 
+function modelVisibleContent(message: Message, costLock: boolean): string {
+  if (costLock || (message.role !== 'tool' && !message.isToolResult)) return message.content;
+  return message.content.replace(
+    /^Cost snapshot \(this conversation\):(?:\r?\n- [^\r\n]*)+/gm,
+    '[Cost snapshot hidden]',
+  );
+}
+
 export function buildApiMessages(messages: Message[]): ChatMessage[] {
   // Compaction shrinks what the MODEL sees; the transcript keeps everything.
-  const live = contextMessagesForUsage(messages);
+  const costLock = useSettingsStore.getState().costLock === true;
+  const live = contextMessagesForUsage(messages).map((message) => {
+    const content = modelVisibleContent(message, costLock);
+    return content === message.content ? message : { ...message, content };
+  });
   const answered = new Set<string>();
   for (const m of live) {
     if (m.role === 'tool' && m.toolCallId) answered.add(m.toolCallId);
@@ -1801,6 +1815,7 @@ function buildSystemMessages(
   const systemMessages: ChatMessage[] = [];
   const promptToolset = nativeTools ? [] : buildToolset({
     planMode,
+    costLock: settings.costLock,
     computerControl: isChatMode ? false : useComputerStore.getState().enabled,
     projectOpen: !isChatMode && !!ws.rootPath,
     isChatMode,
@@ -1937,6 +1952,9 @@ ${parallelRule}
     else if (agentMode === 'rsi') overlay = usePromptStore.getState().getPrompt('rsi');
     else overlay = agentModePrompt(agentMode);
     if (overlay) systemMessages.push({ role: 'system', content: overlay });
+    if (agentMode === 'rsi' && settings.costLock === true) {
+      systemMessages.push({ role: 'system', content: RSI_COST_LOCK_PROMPT });
+    }
   }
 
   // Enabled user-defined custom prompts
@@ -2029,7 +2047,7 @@ async function runHeadlessAgent(task: string, providerId: string, modelId: strin
   const { useModelStore } = await import('./model.store');
   // Same protocol choice as the main loop, narrowed to the read-only tools.
   const tools = shouldUseNativeTools(useModelStore.getState().getSelectedModel(), `${providerId}:${modelId}`)
-    ? buildToolset({ planMode: true }).filter((tl) => SUB_AGENT_ACTIONS.has(tl.name))
+    ? buildToolset({ planMode: true, costLock: useSettingsStore.getState().costLock }).filter((tl) => SUB_AGENT_ACTIONS.has(tl.name))
     : [];
   const native = tools.length > 0;
 
@@ -2189,8 +2207,9 @@ async function autoCompactIfNeeded(convId: string, providerId: string, modelId: 
 
   const older = msgs.slice(0, -AUTO_COMPACT_KEEP_RECENT);
   const recent = msgs.slice(-AUTO_COMPACT_KEEP_RECENT);
+  const costLock = useSettingsStore.getState().costLock === true;
   const transcript = older
-    .map((m) => `${m.role === 'assistant' ? 'Assistant' : (m.isToolResult ? 'Tool result' : 'User')}: ${m.content}`)
+    .map((m) => `${m.role === 'assistant' ? 'Assistant' : (m.isToolResult ? 'Tool result' : 'User')}: ${modelVisibleContent(m, costLock)}`)
     .join('\n\n');
 
   const abortController = new AbortController();
@@ -2484,6 +2503,7 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
       const toolset = shouldUseNativeTools(selectedModel, sessionKey)
         ? buildToolset({
             planMode: planMode || reviewMode,
+            costLock: useSettingsStore.getState().costLock,
             mcpTools: isChatMode ? [] : taskWorkspace.mcpTools,
             computerControl: isChatMode ? false : useComputerStore.getState().enabled,
             projectOpen: !isChatMode && !!taskWorkspace.rootPath,
@@ -4450,6 +4470,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       await useMemoryV2Store.getState().init(useWorkspaceStore.getState().rootPath).catch(() => undefined);
     }
     const v2Active = isMemoryV2Active();
+    const reviewRoot = useWorkspaceStore.getState().rootPath;
     await deliverToConversation(convId, content, providerId, modelId, options);
 
     // Task completion: sediment only at value nodes, or fall back to the legacy
@@ -4464,6 +4485,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         messages: exchangeMessages,
         sessionId: convId,
         taskText: content,
+        reviewCurrent: () => get().activeConversationId === convId
+          && useWorkspaceStore.getState().rootPath === reviewRoot,
         failed,
         // A chat turn finishing is not automatically a "task completed" value
         // node. Let the extractor detect decisions/solutions/completions from
@@ -4812,8 +4835,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     const msgs = ordered.filter((m) => !m.isLocalNotice && !covered.has(m.id));
     if (msgs.length < 2) return;
 
+    const costLock = useSettingsStore.getState().costLock === true;
     const transcript = msgs
-      .map((m) => `${m.role === 'assistant' ? 'Assistant' : (m.isToolResult ? 'Tool result' : 'User')}: ${m.content}`)
+      .map((m) => `${m.role === 'assistant' ? 'Assistant' : (m.isToolResult ? 'Tool result' : 'User')}: ${modelVisibleContent(m, costLock)}`)
       .join('\n\n');
 
     const abortController = new AbortController();
