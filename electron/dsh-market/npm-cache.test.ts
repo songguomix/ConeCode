@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { npmCacheDir, npmEnv } from './installer';
 import { MarketStateStore } from './state';
 
@@ -13,6 +13,7 @@ function tempDir(): string {
 }
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   delete process.env.CONECODE_NPM_CACHE;
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -45,5 +46,13 @@ describe('npm cache isolation', () => {
   it('omits npm_config_cache when no cache dir is known', () => {
     delete process.env.npm_config_cache;
     expect(npmEnv(undefined).npm_config_cache).toBeUndefined();
+  });
+
+  it('does not inherit a differently cased npm cache variable when ConeCode sets its own', () => {
+    vi.stubEnv('NPM_CONFIG_CACHE', path.join(tempDir(), 'host-cache'));
+    const cache = path.join(tempDir(), 'app-cache');
+    const env = npmEnv(cache);
+    expect(Object.keys(env).filter((key) => key.toLowerCase() === 'npm_config_cache')).toEqual(['npm_config_cache']);
+    expect(env.npm_config_cache).toBe(cache);
   });
 });

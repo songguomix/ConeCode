@@ -107,15 +107,20 @@ export function npmCacheDir(state: Pick<MarketStateStore, 'cacheDir'>): string {
 
 /** Environment for a child npm process; `npm_config_cache` points at our own cache when set. */
 export function npmEnv(cacheDir?: string): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
+  const options: NodeJS.ProcessEnv = {
     npm_config_update_notifier: 'false',
     npm_config_fund: 'false',
     npm_config_audit: 'false',
     npm_config_loglevel: 'error',
   };
-  if (cacheDir) env.npm_config_cache = cacheDir;
-  return env;
+  if (cacheDir) options.npm_config_cache = cacheDir;
+  const env = { ...process.env };
+  // npm treats its config keys case-insensitively. Windows also passes only one
+  // of two environment entries that differ solely by case to a child process.
+  for (const key of Object.keys(env)) {
+    if (Object.prototype.hasOwnProperty.call(options, key.toLowerCase())) delete env[key];
+  }
+  return { ...env, ...options };
 }
 
 export class NpmRunner {

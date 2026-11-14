@@ -67,7 +67,9 @@ function sanitizeSubdir(subdir?: string): string | undefined {
 
 class GitClient {
   async run(args: string[], cwd?: string, timeoutMs = 60_000): Promise<string> {
-    const child = spawn('git', args, {
+    // Git for Windows needs this opt-in even when Node can use the same paths.
+    const gitArgs = process.platform === 'win32' ? ['-c', 'core.longpaths=true', ...args] : args;
+    const child = spawn('git', gitArgs, {
       cwd,
       shell: false,
       windowsHide: true,
