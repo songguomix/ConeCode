@@ -391,7 +391,7 @@ export interface ElectronAPI {
     detail: (pluginId: string, version?: string) => Promise<PluginDetail>;
     versions: (pluginId: string) => Promise<{ latest: string | null; versions: string[] }>;
     inspectRepository: (input: string, ref?: string, subdir?: string) => Promise<RepositoryInspection>;
-    installRepository: (profileId: string, input: string, ref?: string, subdir?: string, opts?: { acceptRisk?: boolean; allowScripts?: boolean }) => Promise<InstalledPlugin>;
+    installRepository: (profileId: string, url: string, commit: string, subdir?: string, opts?: { acceptRisk?: boolean; allowScripts?: boolean }) => Promise<InstalledPlugin>;
     refreshSources: (sourceId?: string) => Promise<MarketSource[]>;
     addRemoteSource: (url: string, title?: string) => Promise<MarketSource>;
     addLocalSource: () => Promise<MarketSource | null>;

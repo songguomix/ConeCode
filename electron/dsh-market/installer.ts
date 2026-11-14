@@ -2,8 +2,9 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
+import { promisify } from 'node:util';
 import {
   type MarketVersionSource,
   type InstalledRow,
@@ -16,9 +17,13 @@ import {
   resolvePackageEntry,
   rowsFromPatches,
 } from './manifest';
-import { assertInside, pluginDirectoryName, safeFileSegment, validateExactVersion, validatePackageName } from './security';
+import { assertInside, buildInstallSpec, pluginDirectoryName, safeFileSegment, validateExactVersion, validateGitUrl, validatePackageName } from './security';
+import { materializeRepository } from './repository';
 import { NPM_INSTALL_TIMEOUT_MS, SHARED_DSH_RUNTIME } from './constants';
 import type { MarketStateStore } from './state';
+import { npmCommands, withNpmPath, type NpmCommand } from './npm-command';
+
+const execFileAsync = promisify(execFile);
 
 export interface NativeManifest {
   name: string;
@@ -65,6 +70,7 @@ export interface PrepareOptions {
   name: string;
   version: string;
   source: MarketVersionSource;
+  expectedIntegrity?: string;
   /** User explicitly allowed dependency lifecycle scripts. */
   allowScripts?: boolean;
   onLog: (line: string) => void;
@@ -72,7 +78,7 @@ export interface PrepareOptions {
 }
 
 export class NpmUnavailableError extends Error {
-  constructor(message = 'npm was not found. Install Node.js 24.9+ with npm 10+, then retry.') {
+  constructor(message = 'No working npm was found. Install Node.js with npm, or set CONECODE_NPM to your npm path, then retry.') {
     super(message);
     this.name = 'NpmUnavailableError';
   }
@@ -113,27 +119,31 @@ export function npmEnv(cacheDir?: string): NodeJS.ProcessEnv {
 }
 
 export class NpmRunner {
-  private cachedPath: string | null = null;
-  private cachedVersion: string | null = null;
+  private cached: { command: NpmCommand; version: string } | null = null;
   private children = new Set<ChildProcess>();
 
   constructor(private readonly cacheDir?: string) {}
 
   async locate(): Promise<{ path: string; version: string }> {
-    if (this.cachedPath && this.cachedVersion) return { path: this.cachedPath, version: this.cachedVersion };
-    const candidate = process.env.CONECODE_NPM || (process.platform === 'win32' ? 'npm.cmd' : 'npm');
-    const version = await new Promise<string>((resolve, reject) => {
-      const child = spawn(candidate, ['--version'], { shell: false, env: process.env });
-      let out = '';
-      let err = '';
-      child.stdout.on('data', (data) => { out += data.toString(); });
-      child.stderr.on('data', (data) => { err += data.toString(); });
-      child.on('error', () => reject(new NpmUnavailableError()));
-      child.on('close', (code) => code === 0 ? resolve(out.trim()) : reject(new NpmUnavailableError(`npm exited with ${code}: ${err.trim()}`)));
-    }).catch((error) => { throw error instanceof NpmUnavailableError ? error : new NpmUnavailableError(String(error)); });
-    this.cachedPath = candidate;
-    this.cachedVersion = version;
-    return { path: candidate, version };
+    const { command, version } = await this.resolveCommand();
+    return { path: command.path, version };
+  }
+
+  private async resolveCommand(): Promise<{ command: NpmCommand; version: string }> {
+    if (this.cached) return this.cached;
+    for (const command of npmCommands()) {
+      try {
+        const { stdout } = await execFileAsync(command.executable, [...command.args, '--version'], {
+          env: withNpmPath(npmEnv(), command),
+          windowsHide: true,
+          timeout: 5_000,
+          maxBuffer: 64 * 1024,
+        });
+        const version = stdout.trim();
+        if (version) return (this.cached = { command, version });
+      } catch { /* try the next installation */ }
+    }
+    throw new NpmUnavailableError();
   }
 
   async run(args: string[], cwd: string, options: {
@@ -141,7 +151,7 @@ export class NpmRunner {
     onLog?: (line: string) => void;
     signal?: AbortSignal;
   } = {}): Promise<{ code: number; stdout: string; stderr: string }> {
-    const { path: npm } = await this.locate();
+    const { command } = await this.resolveCommand();
     if (options.signal?.aborted) throw new InstallCancelledError();
     // npm cannot create a cache it has no permission for; fall back to its default in that case
     // instead of failing the whole install on our own bookkeeping.
@@ -150,11 +160,11 @@ export class NpmRunner {
       try { fs.mkdirSync(cacheDir, { recursive: true }); }
       catch { cacheDir = undefined; }
     }
-    const child = spawn(npm, args, {
+    const child = spawn(command.executable, [...command.args, ...args], {
       cwd,
-      shell: process.platform === 'win32',
+      shell: false,
       windowsHide: true,
-      env: npmEnv(cacheDir),
+      env: withNpmPath(npmEnv(cacheDir), command),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     this.children.add(child);
@@ -228,10 +238,12 @@ export function readNativeManifest(packageDir: string): NativeManifest | null {
   const capabilities = Array.isArray((conecode as any).capabilities)
     ? (conecode as any).capabilities.filter((item: unknown): item is string => typeof item === 'string')
     : [];
-  const entryPath = path.resolve(packageDir, entry);
-  const relative = path.relative(fs.realpathSync(packageDir), entryPath);
-  if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('conecode.plugin.json: entry escapes the package directory');
-  if (!fs.existsSync(entryPath)) throw new Error(`conecode.plugin.json: entry ${entry} is missing`);
+  const root = fs.realpathSync(packageDir);
+  const entryPath = assertInside(root, path.resolve(root, entry), 'conecode.plugin.json entry');
+  if (!fs.statSync(entryPath, { throwIfNoEntry: false })?.isFile()) {
+    throw new Error(`conecode.plugin.json: entry ${entry} is missing`);
+  }
+  const relative = path.relative(root, entryPath);
   return {
     name,
     version,
@@ -376,11 +388,12 @@ export class PackageInstaller {
   }
 
   private async prepareInto(options: PrepareOptions, stagingDir: string, directoryName: string): Promise<PreparedPackage> {
-    const { profileId, name, version, source, onLog, signal } = options;
+    const { profileId, name, version, source, expectedIntegrity, onLog, signal } = options;
     let packageDir: string;
     let format: 'dsh' | 'native';
     let native: NativeManifest | null = null;
     let requestedSpec: string;
+    let verifiedIntegrity: string | undefined;
 
     if (source.type === 'bundled-example') {
       if (!source.path) throw new Error('Bundled example path is missing');
@@ -402,7 +415,7 @@ export class PackageInstaller {
       if (fs.statSync(sourcePath).isDirectory()) {
         const directNative = readNativeManifest(sourcePath);
         if (directNative) {
-          copyDirectory(sourcePath, stagingDir);
+          copyDirectory(fs.realpathSync(sourcePath), stagingDir);
           native = readNativeManifest(stagingDir);
           packageDir = stagingDir;
           format = 'native';
@@ -414,7 +427,7 @@ export class PackageInstaller {
         } else {
           packageDir = path.join(stagingDir, 'node_modules', ...name.split('/'));
           fs.mkdirSync(path.dirname(packageDir), { recursive: true });
-          copyDirectory(sourcePath, packageDir);
+          copyDirectory(fs.realpathSync(sourcePath), packageDir);
           const manifest = readPackageManifest(packageDir);
           if (manifest.name !== name || manifest.version !== version) {
             throw new Error(`Local package is ${manifest.name}@${manifest.version}, expected ${name}@${version}`);
@@ -447,20 +460,48 @@ export class PackageInstaller {
       }
     } else {
       packageDir = path.join(stagingDir, 'node_modules', ...name.split('/'));
-      const subdir = source.subdir?.replace(/\\/g, '/').replace(/^\.\//, '');
-      if (subdir && (subdir.startsWith('/') || subdir.split('/').includes('..'))) throw new Error('Git package subdirectory must stay inside the repository.');
-      const dependencySpec = source.type === 'git'
-        ? `git+${source.url?.replace(/\.git$/, '')}.git#${source.commit}${subdir ? `&path:/${subdir}` : ''}`
-        : version;
-      const spec = source.type === 'git'
-        ? dependencySpec
-        : `${source.packageName || name}@${version}`;
+      const { spec } = buildInstallSpec(name, version, source);
+      let dependencySpec = source.type === 'git' ? spec : version;
+      const registryArgs = source.registry ? ['--registry', source.registry] : [];
+      let archiveDir: string | undefined;
+      let packSource: string | undefined;
+      let packIgnoresScripts = true;
+      if (source.type === 'npm' && expectedIntegrity !== undefined) {
+        // npm validates its registry's digest. Verify the downloaded bytes against the
+        // catalog independently before npm installs them or runs any lifecycle script.
+        packSource = spec;
+      } else if (source.type === 'git' && source.subdir) {
+        // npm accepts the `path:` fragment but can still try to pack the repository root.
+        const { url, commit } = validateGitUrl(`${source.url}#${source.commit}`);
+        const checkout = await materializeRepository(url, commit, path.join(stagingDir, '.conecode-git'));
+        if (signal.aborted) throw new InstallCancelledError();
+        packSource = assertInside(checkout, path.resolve(checkout, source.subdir.replace(/\\/g, '/')), 'Git package subdirectory');
+        packIgnoresScripts = !options.allowScripts;
+      }
+      if (packSource) {
+        archiveDir = path.join(stagingDir, '.conecode-archive');
+        fs.mkdirSync(archiveDir);
+        const packed = await this.runner.run([
+          'pack', '--pack-destination', archiveDir, ...(packIgnoresScripts ? ['--ignore-scripts'] : []),
+          ...registryArgs, '--', packSource,
+        ], stagingDir, { timeoutMs: NPM_INSTALL_TIMEOUT_MS, onLog, signal });
+        if (packed.code !== 0) throw new Error(`Could not prepare an archive for ${spec}. ${packed.stderr.slice(-900)}`);
+        const archives = fs.readdirSync(archiveDir).filter((file) => file.endsWith('.tgz'));
+        if (archives.length !== 1) throw new Error(`npm did not download a single archive for ${spec}.`);
+        const archive = path.join(archiveDir, archives[0]);
+        if (source.type === 'npm' && expectedIntegrity !== undefined) {
+          verifiedIntegrity = await verifyArchiveIntegrity(archive, expectedIntegrity, spec);
+        }
+        dependencySpec = `file:./${path.relative(stagingDir, archive).split(path.sep).join('/')}`;
+        if (source.type === 'git') fs.rmSync(path.join(stagingDir, '.conecode-git'), { recursive: true, force: true });
+      }
       this.writeInstallManifest(stagingDir, source.packageName || name, dependencySpec, source.registry);
       const args = ['install', '--no-audit', '--no-fund', '--legacy-peer-deps'];
       if (!options.allowScripts) args.push('--ignore-scripts');
-      if (source.registry) args.push('--registry', source.registry);
+      args.push(...registryArgs);
       const result = await this.runner.run(args, stagingDir, { timeoutMs: NPM_INSTALL_TIMEOUT_MS, onLog, signal });
       if (result.code !== 0) throw new Error(`npm install failed (exit ${result.code}). ${result.stderr.slice(-1000)}`);
+      if (archiveDir) fs.rmSync(archiveDir, { recursive: true, force: true });
       format = 'dsh';
       requestedSpec = spec;
     }
@@ -493,7 +534,7 @@ export class PackageInstaller {
       }];
     }
 
-    const integrity = await this.integrityOf(stagingDir, packageDir, format, name);
+    const integrity = verifiedIntegrity ?? await this.integrityOf(stagingDir, packageDir, format, name);
     const clientUnsupported = format === 'dsh' && !!manifest.dsh?.client;
     return {
       pluginId: name,
@@ -605,7 +646,12 @@ export class PackageInstaller {
       fs.renameSync(finalDir, backupDir);
     }
     fs.mkdirSync(path.dirname(finalDir), { recursive: true });
-    fs.renameSync(prepared.stagingDir, finalDir);
+    try {
+      fs.renameSync(prepared.stagingDir, finalDir);
+    } catch (error) {
+      if (backupDir) fs.renameSync(backupDir, finalDir);
+      throw error;
+    }
     return { finalDir, backupDir };
   }
 
@@ -654,14 +700,12 @@ function platformSupported(manifest: RawPackageManifest): boolean {
 }
 
 function resolveNativeEntry(packageDir: string, native: NativeManifest): string {
-  const resolved = path.resolve(packageDir, native.entry);
-  const relative = path.relative(fs.realpathSync(packageDir), resolved);
-  if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Native entry escapes the package');
-  if (!fs.existsSync(resolved)) throw new Error('Native entry is missing');
-  return fs.realpathSync(resolved);
+  const resolved = assertInside(packageDir, path.join(packageDir, native.entry), 'Native entry');
+  if (!fs.statSync(resolved, { throwIfNoEntry: false })?.isFile()) throw new Error('Native entry is missing');
+  return resolved;
 }
 
-function nativeManifestToPackage(native: NativeManifest): RawPackageManifest {
+export function nativeManifestToPackage(native: NativeManifest): RawPackageManifest {
   return {
     name: native.name,
     version: native.version,
@@ -672,6 +716,20 @@ function nativeManifestToPackage(native: NativeManifest): RawPackageManifest {
     repository: native.repository,
     conecode: { plugin: true, apiVersion: native.apiVersion, entry: native.entry, capabilities: native.capabilities },
   };
+}
+
+async function verifyArchiveIntegrity(file: string, expected: string, spec: string): Promise<string> {
+  const candidates = expected.trim().split(/\s+/);
+  for (const algorithm of ['sha512', 'sha384', 'sha256', 'sha1']) {
+    const digests = candidates.filter((item) => item.startsWith(`${algorithm}-`));
+    if (!digests.length) continue;
+    const hash = crypto.createHash(algorithm);
+    for await (const chunk of fs.createReadStream(file)) hash.update(chunk);
+    const actual = `${algorithm}-${hash.digest('base64')}`;
+    if (digests.includes(actual)) return actual;
+    throw new Error(`Package integrity mismatch for ${spec}. The archive does not match the catalog checksum.`);
+  }
+  throw new Error(`Invalid catalog checksum for ${spec}.`);
 }
 
 export function packageEntryPath(prepared: PreparedPackage): string {

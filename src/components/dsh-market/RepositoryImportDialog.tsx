@@ -44,7 +44,7 @@ export default function RepositoryImportDialog({ t, onClose, onInstalled }: {
     setError(null);
     setInstalling(true);
     try {
-      await installRepository(input.trim(), ref.trim() || undefined, subdir.trim() || undefined, acceptRisk, allowScripts);
+      await installRepository(inspection, acceptRisk, allowScripts);
       onInstalled();
       onClose();
     } catch (installError) {
@@ -79,6 +79,7 @@ export default function RepositoryImportDialog({ t, onClose, onInstalled }: {
             <label className="block text-[10px] uppercase tracking-wider text-[var(--text-muted)] mb-1">{t('repoUrl')}</label>
             <input
               value={input}
+              disabled={inspecting || installing}
               onChange={(event) => { setInput(event.target.value); setInspection(null); }}
               placeholder={t('repoUrlPh')}
               spellCheck={false}
@@ -91,6 +92,7 @@ export default function RepositoryImportDialog({ t, onClose, onInstalled }: {
               <label className="block text-[10px] uppercase tracking-wider text-[var(--text-muted)] mb-1">{t('repoRef')}</label>
               <input
                 value={ref}
+                disabled={inspecting || installing}
                 onChange={(event) => { setRef(event.target.value); setInspection(null); }}
                 placeholder={t('repoRefPh')}
                 spellCheck={false}
@@ -101,6 +103,7 @@ export default function RepositoryImportDialog({ t, onClose, onInstalled }: {
               <label className="block text-[10px] uppercase tracking-wider text-[var(--text-muted)] mb-1">{t('repoSubdir')}</label>
               <input
                 value={subdir}
+                disabled={inspecting || installing}
                 onChange={(event) => { setSubdir(event.target.value); setInspection(null); }}
                 placeholder={t('repoSubdirPh')}
                 spellCheck={false}
@@ -109,7 +112,7 @@ export default function RepositoryImportDialog({ t, onClose, onInstalled }: {
             </div>
           </div>
           <div className="flex items-center gap-3 flex-wrap">
-            <button onClick={() => void inspect()} disabled={!input.trim() || inspecting}
+            <button onClick={() => void inspect()} disabled={!input.trim() || inspecting || installing}
               className="h-9 px-3 rounded-xl bg-[var(--accent)] text-white text-[11px] font-medium inline-flex items-center gap-1.5 disabled:opacity-40">
               <FiSearch size={12} />{inspecting ? t('inspectingRepo') : t('inspectRepo')}
             </button>

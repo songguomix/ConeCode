@@ -146,8 +146,8 @@ describe.skipIf(!enabled)('real DSH community plugins', () => {
     expect(repoInspection.commit).toBe('ccab614d6045625c359f4416e0760f93f7abe260');
     const repoInstalled = await service.installRepository(
       'git-import',
-      'https://github.com/PerryLink/dsh-plugin-guide',
-      'v0.4.5',
+      repoInspection.url,
+      repoInspection.commit,
     );
     expect(repoInstalled.status).toBe('loaded');
     expect(repoInstalled.requestedSpec).toContain('ccab614d6045625c359f4416e0760f93f7abe260');

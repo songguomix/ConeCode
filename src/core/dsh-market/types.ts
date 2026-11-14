@@ -342,6 +342,7 @@ export interface BackupRecord {
   directory: string;
   createdAt: string;
   integrity?: string;
+  installation?: Pick<InstalledPlugin, 'source' | 'requestedSpec' | 'resolvedSpec' | 'catalogKnown' | 'title'>;
 }
 
 export interface PluginContributions {

@@ -1,0 +1,212 @@
+name: Plugin market installation
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/dsh-market.yml'
+      - 'electron/dsh-market/**'
+      - 'electron/preload.ts'
+      - 'resources/dsh-market/**'
+      - 'examples/native-plugins/**'
+      - 'src/components/dsh-market/**'
+      - 'src/core/dsh-market/**'
+      - 'src/stores/dshMarket.store*'
+      - 'package*.json'
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: 'Set to the package version on main to build and publish a release after validation.'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, windows-2025, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      DSH_MARKET_INSTALL_E2E: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test -- electron/dsh-market src/stores/dshMarket.store.test.ts
+
+  package:
+    if: github.event_name == 'workflow_dispatch' && inputs.release_version != '' && github.ref == 'refs/heads/main'
+    needs: regression
+    name: Build and verify (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            platform: mac
+            asset: cloudflared-darwin-arm64.tgz
+            sha256: 647615df99d49cd179ea5e13ef760b9bbfb33630f6ae62f87e33dfadda60adcc
+            target: --mac dmg --arm64 -c.mac.identity=-
+            resources: release/mac-arm64/ConeCode.app/Contents/Resources
+          - os: windows-2025
+            platform: win
+            asset: cloudflared-windows-amd64.exe
+            sha256: 4d2490e74082c5d48dbfedaf92576fa5bd1702379ab88eb7faa0cfbe8dc891b6
+            target: --win nsis --x64 -c.win.artifactName=ConeCode.Setup.${version}.exe
+            resources: release/win-unpacked/resources
+          - os: ubuntu-24.04
+            platform: linux
+            asset: cloudflared-linux-amd64
+            sha256: 3bfc539f45d2620c71debb7a86be0efa737ed5ccbad9eb85c787116900e5c586
+            target: --linux AppImage --x64
+            resources: release/linux-unpacked/resources
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      VERSION: ${{ inputs.release_version }}
+      PLATFORM: ${{ matrix.platform }}
+      CLOUDFLARED_ASSET: ${{ matrix.asset }}
+      CLOUDFLARED_SHA256: ${{ matrix.sha256 }}
+      BUILDER_TARGET: ${{ matrix.target }}
+      PACKAGED_RESOURCES: ${{ matrix.resources }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Check release version
+        shell: bash
+        run: |
+          set -eu
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "$VERSION" = "$(node -p 'require("./package.json").version')"
+          test -s "docs/releases/$VERSION.md"
+      - name: Verify and stage Cloudflare tunnel executable
+        shell: bash
+        run: |
+          set -eu
+          curl -fLsS --retry 3 "https://github.com/cloudflare/cloudflared/releases/download/2026.10.1/$CLOUDFLARED_ASSET" -o "$CLOUDFLARED_ASSET"
+          node -e 'const fs = require("node:fs"), c = require("node:crypto"); const [p, expected] = process.argv.slice(1); if (c.createHash("sha256").update(fs.readFileSync(p)).digest("hex") !== expected) throw Error("Cloudflare checksum mismatch");' "$CLOUDFLARED_ASSET" "$CLOUDFLARED_SHA256"
+          case "$PLATFORM" in
+            mac) tar -xOf "$CLOUDFLARED_ASSET" cloudflared > resources/bin/cloudflared-darwin-arm64 ;;
+            win) mv "$CLOUDFLARED_ASSET" resources/bin/cloudflared-win-x64.exe ;;
+            linux) mv "$CLOUDFLARED_ASSET" resources/bin/cloudflared-linux-x64 ;;
+          esac
+          if [[ "$PLATFORM" != win ]]; then chmod +x resources/bin/cloudflared-*; fi
+      - run: npm ci
+      - run: npm run build
+      - name: Package installer
+        shell: bash
+        run: npx --no-install electron-builder $BUILDER_TARGET --publish=never
+      - name: Check installer metadata, checksums and resources
+        shell: bash
+        run: node scripts/verify-release-package.mjs "$PLATFORM" "$VERSION" "$PACKAGED_RESOURCES"
+      - name: Verify and mount the DMG
+        if: matrix.platform == 'mac'
+        shell: bash
+        run: |
+          set -eu
+          dmg="release-assets/ConeCode-$VERSION-arm64.dmg"
+          hdiutil verify "$dmg"
+          mountpoint=$(mktemp -d)
+          hdiutil attach -readonly -nobrowse -mountpoint "$mountpoint" "$dmg"
+          trap 'hdiutil detach "$mountpoint"' EXIT
+          codesign --verify --deep --strict "$mountpoint/ConeCode.app"
+          cmp "$mountpoint/ConeCode.app/Contents/Resources/app.asar" "$PACKAGED_RESOURCES/app.asar"
+      - name: Run the Windows installer silently
+        if: matrix.platform == 'win'
+        shell: pwsh
+        run: |
+          $destination = Join-Path $env:SystemDrive "ConeCodeReleaseTest"
+          $installer = "release-assets\ConeCode.Setup.$env:VERSION.exe"
+          $process = Start-Process -FilePath $installer -ArgumentList "/S", "/D=$destination" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "NSIS installer exited with $($process.ExitCode)" }
+          $installed = Get-FileHash (Join-Path $destination "resources\app.asar")
+          $packaged = Get-FileHash (Join-Path $env:PACKAGED_RESOURCES "app.asar")
+          if ($installed.Hash -ne $packaged.Hash) { throw "Installed app.asar does not match the packaged app" }
+      - name: Extract the Linux AppImage
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          set -eu
+          chmod +x "release-assets/ConeCode-$VERSION.AppImage"
+          "release-assets/ConeCode-$VERSION.AppImage" --appimage-extract >/dev/null
+          cmp squashfs-root/resources/app.asar "$PACKAGED_RESOURCES/app.asar"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: conecode-${{ matrix.platform }}
+          path: release-assets/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  publish:
+    if: github.event_name == 'workflow_dispatch' && inputs.release_version != '' && github.ref == 'refs/heads/main'
+    needs: package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    concurrency:
+      group: publish-conecode-${{ inputs.release_version }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ inputs.release_version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: conecode-*
+          merge-multiple: true
+          path: release-assets
+      - name: Check all artifacts, tag main and verify the draft before publishing
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "$VERSION" = "$(node -p 'require("./package.json").version')"
+          main_ref=$(git ls-remote --exit-code origin refs/heads/main | cut -f1)
+          test "$main_ref" = "$GITHUB_SHA"
+          tag="v$VERSION"
+          if git ls-remote --exit-code origin "refs/tags/$tag" >/dev/null; then
+            echo "Refusing to replace existing tag $tag" >&2
+            exit 1
+          else
+            test "$?" -eq 2
+          fi
+          mac="ConeCode-$VERSION-arm64.dmg"
+          win="ConeCode.Setup.$VERSION.exe"
+          linux="ConeCode-$VERSION.AppImage"
+          sums="SHA256SUMS-$VERSION.txt"
+          (
+            cd release-assets
+            cat "$mac.sha256" "$win.sha256" "$linux.sha256" > "$sums"
+            sha256sum -c --strict "$sums"
+          )
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            tag -a "$tag" "$GITHUB_SHA" -m "ConeCode $VERSION"
+          git push origin "refs/tags/$tag"
+          gh release create "$tag" --repo "$GITHUB_REPOSITORY" --verify-tag --draft \
+            --title "ConeCode $VERSION" --notes-file "docs/releases/$VERSION.md"
+          for asset in "$mac" "$win" "$linux" "$sums"; do
+            gh release upload "$tag" "release-assets/$asset" --repo "$GITHUB_REPOSITORY"
+          done
+          release_id=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json databaseId --jq .databaseId)
+          gh api "repos/$GITHUB_REPOSITORY/releases/$release_id/assets" > remote-assets.json
+          jq -e 'length == 4 and all(.[]; .state == "uploaded")' remote-assets.json >/dev/null
+          for asset in "$mac" "$win" "$linux" "$sums"; do
+            expected=$(sha256sum "release-assets/$asset" | cut -d ' ' -f1)
+            actual=$(jq -r --arg name "$asset" '.[] | select(.name == $name) | .digest' remote-assets.json)
+            test "$actual" = "sha256:$expected"
+          done
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --latest

@@ -7,6 +7,7 @@ import type {
   MarketSource,
   MarketVersion,
   PluginDetail,
+  RepositoryInspection,
 } from '../core/dsh-market/types';
 
 type Tab = 'discover' | 'installed' | 'sources';
@@ -60,7 +61,7 @@ interface DshMarketStore {
   removeSource: (sourceId: string) => Promise<void>;
   inspectLocal: () => Promise<void>;
   installLocal: (acceptRisk?: boolean) => Promise<void>;
-  installRepository: (input: string, ref?: string, subdir?: string, acceptRisk?: boolean, allowScripts?: boolean) => Promise<void>;
+  installRepository: (inspection: RepositoryInspection, acceptRisk?: boolean, allowScripts?: boolean) => Promise<void>;
   clearLocalPreview: () => void;
   switchProfile: (profileId: string) => Promise<void>;
   createProfile: (profileId: string, name?: string) => Promise<void>;
@@ -99,6 +100,14 @@ function messageOf(error: unknown): string {
 }
 
 export const useDshMarketStore = create<DshMarketStore>((set, get) => {
+  let detailRequest = 0;
+  const clearSelection = () => {
+    detailRequest++;
+    set({ selectedPluginId: null, detail: null, detailLoading: false, logs: null });
+  };
+  const refreshSelected = async (request: number, pluginId: string, version?: string) => {
+    if (request === detailRequest && get().selectedPluginId === pluginId) await get().selectPlugin(pluginId, version);
+  };
   const query = (): CatalogQuery => ({
     query: get().query,
     category: get().category || 'all',
@@ -192,10 +201,14 @@ export const useDshMarketStore = create<DshMarketStore>((set, get) => {
       if (!get().snapshot) await get().initialize();
     },
 
-    closePanel: () => set({ open: false, selectedPluginId: null, detail: null, localPreview: null }),
+    closePanel: () => {
+      clearSelection();
+      set({ open: false, localPreview: null });
+    },
 
     setTab: (tab) => {
-      set({ tab, selectedPluginId: null, detail: null });
+      clearSelection();
+      set({ tab });
       if (tab !== 'discover') void get().refresh();
     },
 
@@ -240,63 +253,69 @@ export const useDshMarketStore = create<DshMarketStore>((set, get) => {
     },
 
     selectPlugin: async (pluginId, version) => {
-      set({ selectedPluginId: pluginId, detailLoading: true, logs: null, operationLog: null });
+      const request = ++detailRequest;
+      set({ selectedPluginId: pluginId, detail: null, detailLoading: true, logs: null, operationLog: null });
       try {
         const detail = await api().detail(pluginId, version);
-        set({ detail, detailLoading: false });
+        if (request === detailRequest) set({ detail, detailLoading: false });
       } catch (error) {
-        set({ error: messageOf(error), detailLoading: false });
+        if (request === detailRequest) set({ error: messageOf(error), detailLoading: false });
       }
     },
 
-    clearSelection: () => set({ selectedPluginId: null, detail: null, logs: null }),
+    clearSelection,
 
     install: async (pluginId, version, acceptRisk, allowScripts) => {
+      const selection = detailRequest;
       const profileId = get().snapshot?.profile.id;
       if (!profileId) throw new Error('No active profile');
       set({ operationLog: '' });
       await run(() => api().install(profileId, pluginId, version, { acceptRisk, allowScripts }), {
         notice: `Installed ${pluginId}`,
       });
-      if (get().selectedPluginId) await get().selectPlugin(pluginId, version);
+      await refreshSelected(selection, pluginId, version);
     },
 
     update: async (pluginId, version) => {
+      const selection = detailRequest;
       const profileId = get().snapshot?.profile.id;
       if (!profileId) throw new Error('No active profile');
       set({ operationLog: '' });
       await run(() => api().install(profileId, pluginId, version), { notice: `Updated ${pluginId} to ${version}` });
-      if (get().selectedPluginId) await get().selectPlugin(pluginId, version);
+      await refreshSelected(selection, pluginId, version);
     },
 
     rollback: async (pluginId, version) => {
+      const selection = detailRequest;
       const profileId = get().snapshot?.profile.id;
       if (!profileId) throw new Error('No active profile');
       await run(() => api().rollback(profileId, pluginId, version), { notice: `Rolled back ${pluginId}` });
-      if (get().selectedPluginId) await get().selectPlugin(pluginId);
+      await refreshSelected(selection, pluginId);
     },
 
     uninstall: async (pluginId, deleteData) => {
       const profileId = get().snapshot?.profile.id;
       if (!profileId) throw new Error('No active profile');
       await run(() => api().uninstall(profileId, pluginId, deleteData), { notice: `Uninstalled ${pluginId}` });
-      set({ detail: null, selectedPluginId: null, logs: null });
+      if (get().selectedPluginId === pluginId) clearSelection();
     },
 
     setEnabled: async (pluginId, enabled) => {
+      const selection = detailRequest;
       const profileId = get().snapshot?.profile.id;
       if (!profileId) throw new Error('No active profile');
       await run(() => api().setEnabled(profileId, pluginId, enabled), {
         notice: `${enabled ? 'Enabled' : 'Disabled'} ${pluginId}`,
       });
-      if (get().selectedPluginId) await get().selectPlugin(pluginId);
+      await refreshSelected(selection, pluginId);
     },
 
     saveConfig: async (pluginId, configs) => {
+      const selection = detailRequest;
       const profileId = get().snapshot?.profile.id;
       if (!profileId) throw new Error('No active profile');
       await run(() => api().saveConfig(profileId, pluginId, configs), { notice: `Configuration saved for ${pluginId}` });
-      if (get().selectedPluginId) await get().selectPlugin(pluginId);
+      await refreshSelected(selection, pluginId);
     },
 
     cancel: async (requestId) => {
@@ -361,12 +380,12 @@ export const useDshMarketStore = create<DshMarketStore>((set, get) => {
       }
     },
 
-    installRepository: async (input, ref, subdir, acceptRisk, allowScripts) => {
+    installRepository: async ({ url, commit, subdir }, acceptRisk, allowScripts) => {
       const profileId = get().snapshot?.profile.id;
       if (!profileId) throw new Error('No active profile');
       set({ operationLog: '' });
-      await run(() => api().installRepository(profileId, input, ref, subdir, { acceptRisk, allowScripts }), {
-        notice: `Installed repository ${input}`,
+      await run(() => api().installRepository(profileId, url, commit, subdir, { acceptRisk, allowScripts }), {
+        notice: `Installed repository ${url}`,
       });
       set({ tab: 'installed' });
     },
@@ -387,7 +406,7 @@ export const useDshMarketStore = create<DshMarketStore>((set, get) => {
 
     switchProfile: async (profileId) => {
       await run(() => api().switchProfile(profileId), { notice: `Switched to profile ${profileId}` });
-      set({ detail: null, selectedPluginId: null });
+      clearSelection();
       void refreshWorkspaceTools();
     },
 

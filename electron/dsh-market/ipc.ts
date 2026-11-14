@@ -31,7 +31,7 @@ export function registerDshMarketIpc(options: DshMarketIpcOptions): void {
   ipcMain.handle('dsh-market:detail', (_, pluginId: string, version?: string) => service.detail(pluginId, version));
   ipcMain.handle('dsh-market:versions', (_, pluginId: string) => service.versions(pluginId));
   ipcMain.handle('dsh-market:inspect-repository', (_, input: string, ref?: string, subdir?: string) => service.inspectRepository(input, ref, subdir));
-  ipcMain.handle('dsh-market:install-repository', (_, profileId: string, input: string, ref?: string, subdir?: string, opts?: { acceptRisk?: boolean; allowScripts?: boolean }) => service.installRepository(profileId, input, ref, subdir, opts || {}));
+  ipcMain.handle('dsh-market:install-repository', (_, profileId: string, url: string, commit: string, subdir?: string, opts?: { acceptRisk?: boolean; allowScripts?: boolean }) => service.installRepository(profileId, url, commit, subdir, opts || {}));
   ipcMain.handle('dsh-market:refresh-sources', (_, sourceId?: string) => service.refreshSources(sourceId));
   ipcMain.handle('dsh-market:add-remote-source', (_, url: string, title?: string) => service.addRemoteSource(url, title));
   ipcMain.handle('dsh-market:add-local-source', async () => {

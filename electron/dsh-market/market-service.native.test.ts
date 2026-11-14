@@ -85,4 +85,63 @@ describe.skipIf(!workerBuilt)('DshMarketService native flow', () => {
     const contributions = await service.contributions('default', 'hello-conecode');
     expect(contributions).toEqual({ tools: [], commands: [], skills: [] });
   }, 60_000);
+
+  it('imports a linked native folder and preserves both versions if rollback activation fails', async () => {
+    function packageAt(version: string, greeting: string): string {
+      const source = path.join(tempRoot(), 'native');
+      fs.cpSync(path.join(process.cwd(), 'examples', 'native-plugins', 'hello-conecode'), source, { recursive: true });
+      const manifestFile = path.join(source, 'conecode.plugin.json');
+      const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+      fs.writeFileSync(manifestFile, JSON.stringify({ ...manifest, version }));
+      const entry = path.join(source, 'index.mjs');
+      const code = fs.readFileSync(entry, 'utf8').replace(": 'Hello';", ': defaultGreeting;');
+      fs.writeFileSync(entry, `import defaultGreeting from './greeting.mjs';\n${code}`);
+      fs.writeFileSync(path.join(source, 'greeting.mjs'), `export default ${JSON.stringify(greeting)};\n`);
+      return source;
+    }
+    const original = await service.installLocal('default', packageAt('1.0.0', 'Old version'));
+    const source = packageAt('1.1.0', 'New version');
+    const linked = path.join(tempRoot(), 'linked');
+    fs.symlinkSync(source, linked, process.platform === 'win32' ? 'junction' : 'dir');
+    await expect(service.inspectLocalPlugin(linked)).resolves.toMatchObject({ version: { version: '1.1.0' } });
+    const updated = await service.installLocal('default', linked);
+    expect(updated.entry).toBe(original.entry);
+    const greet = async () => (await service.invokeTool('default', updated.id, 'hello_conecode', { name: 'Ada' })).value;
+    expect(await greet()).toMatchObject({ message: 'New version, Ada!' });
+    const backup = updated.backups.find((item) => item.version === original.version)!;
+    // Old installations recorded only the backup directory, version and digest.
+    service.state.patchPlugin('default', updated.id, { backups: [{ ...backup, installation: undefined }] });
+    const activate = vi.spyOn(service.runtime, 'load').mockResolvedValueOnce({
+      id: updated.id, status: 'load-failed', error: 'target activation failed',
+    });
+    try {
+      await expect(service.rollback('default', updated.id, original.version)).rejects.toThrow('target activation failed');
+    } finally {
+      activate.mockRestore();
+    }
+    expect(fs.existsSync(backup.directory)).toBe(true);
+    expect(service.state.installedByMarketId('default', updated.id)?.version).toBe(updated.version);
+    expect(await greet()).toMatchObject({ message: 'New version, Ada!' });
+    const rolledBack = await service.rollback('default', updated.id, original.version);
+    expect(rolledBack.entry).toBe(original.entry);
+    expect(rolledBack.manifestRaw.version).toBe(original.version);
+    expect(rolledBack.integrity).toBe(original.integrity);
+    expect(await greet()).toMatchObject({ message: 'Old version, Ada!' });
+    expect((await service.rollback('default', updated.id, updated.version)).requestedSpec).toBe(updated.requestedSpec);
+    await service.uninstall('default', updated.id);
+  }, 30_000);
+
+  it('keeps the last refresh error with its cached catalog across restarts', async () => {
+    const directory = tempRoot();
+    const file = path.join(directory, 'catalog.json');
+    fs.copyFileSync('resources/dsh-market/catalog.json', file);
+    const source = await service.addLocalSource(directory);
+    fs.writeFileSync(file, 'invalid json');
+    const [failed] = (await service.refreshSources(source.id)).filter((item) => item.id === source.id);
+    expect(failed).toMatchObject({ stale: true, cachedEntries: source.cachedEntries, lastError: 'Catalog file is not valid JSON' });
+    await service.state.flush();
+    await service.runtime.shutdown();
+    service = new DshMarketService({ rootDir: root, appPath: process.cwd(), versions: { app: 'test', electron: 'unknown' } });
+    expect((await service.snapshot()).sources.find((item) => item.id === source.id)).toMatchObject(failed);
+  });
 });

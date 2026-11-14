@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { stringify as stringifyYaml } from 'yaml';
 import type {
+  BackupRecord,
   CatalogPage,
   CatalogQuery,
   CompatibilityResult,
@@ -32,7 +33,7 @@ import { chatServerName, isDshChatServer } from '../../src/core/dsh-market/namin
 import { MarketStateStore } from './state';
 import { DshRuntimeManager } from './runtime-manager';
 import type { RuntimePluginSpec, RuntimePluginState } from './runtime-host';
-import { PackageInstaller, InstallCancelledError, readNativeManifest, type PreparedPackage } from './installer';
+import { PackageInstaller, InstallCancelledError, nativeManifestToPackage, readNativeManifest, type PreparedPackage } from './installer';
 import {
   computeCompatibility,
   loadBundlePatches,
@@ -59,6 +60,7 @@ import {
   normalizeUserInputUrl,
   pluginDirectoryName,
   safeFileSegment,
+  validateGitUrl,
   validateProfileId,
 } from './security';
 import { MAX_CATALOG_BYTES, MAX_README_BYTES } from './constants';
@@ -109,6 +111,8 @@ export class DshMarketService {
   private verifications: Record<string, PluginVerification>;
   private catalogs = new Map<string, MarketCatalog>();
   private activeOperations = new Map<string, ActiveOperation>();
+  private uninstalledPackages = new Set<string>();
+  private runtimeMutations = Promise.resolve();
   private emitSink: ((event: MarketEvent) => void) | undefined;
   private initialized = false;
   private initializing: Promise<void> | null = null;
@@ -255,12 +259,13 @@ export class DshMarketService {
         else {
           try {
             const cache = readJson<{ fetchedAt?: string }>(this.sourceCachePath(source));
-            lastSyncAt = cache.fetchedAt || source.lastSyncAt;
+            lastSyncAt = source.lastSyncAt || cache.fetchedAt || null;
           } catch {
             // keep the recorded sync time
           }
         }
-        updated.push({ ...source, lastSyncAt, cachedEntries: catalog.plugins.length, lastError: null, stale: false });
+        const status = source.kind === 'bundled' ? { lastError: null, stale: false } : {};
+        updated.push({ ...source, ...status, lastSyncAt, cachedEntries: catalog.plugins.length });
       } catch (error) {
         updated.push(source);
         this.warnings.push(`${source.title}: ${error instanceof Error ? error.message : String(error)}`);
@@ -358,15 +363,16 @@ export class DshMarketService {
         }
       }
       fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
+      const fetchedAt = isoNow();
       fs.writeFileSync(cacheFile, JSON.stringify({
-        fetchedAt: isoNow(),
+        fetchedAt,
         document,
         title: catalog.title,
       }, null, 2), 'utf8');
       this.catalogs.set(source.id, catalog);
       return {
         ...source,
-        lastSyncAt: isoNow(),
+        lastSyncAt: fetchedAt,
         lastError: null,
         cachedEntries: catalog.plugins.length,
         cachePath: cacheFile,
@@ -862,6 +868,29 @@ export class DshMarketService {
     this.writeProjection(profileId);
   }
 
+  private async reloadRuntimeAfterPackageChange(profileId: string, pluginId: string, format: InstalledPlugin['format']): Promise<void> {
+    // Worker imports cache the entry and its dependencies by path. Replacing files at
+    // that path needs a fresh module graph, including when the previous plugin is disabled.
+    const others = this.state.installed(profileId).filter((item) => item.id !== pluginId);
+    await this.runtime.shutdown();
+    await this.runtime.ensureStarted(profileId, this.dshHome, format === 'dsh' || others.some((item) => item.format === 'dsh'));
+    await this.restoreInstalledPlugins(profileId, others);
+  }
+
+  private async lockRuntimeMutation(): Promise<() => void> {
+    const pending = this.runtimeMutations;
+    let release!: () => void;
+    this.runtimeMutations = new Promise<void>((resolve) => { release = resolve; });
+    await pending;
+    return release;
+  }
+
+  private async withRuntimeMutation<T>(work: () => Promise<T>): Promise<T> {
+    const release = await this.lockRuntimeMutation();
+    try { return await work(); }
+    finally { release(); }
+  }
+
   /**
    * Compose every enabled bundle's row list in profile order, then apply each
    * bundle's non-insert patch verbs over the accumulated rows. This is the
@@ -1060,13 +1089,14 @@ export class DshMarketService {
       this.state.setExemption(profileId, `${plugin.name}@${selected.version}`, DSH_BASELINE.version, true);
     }
     const begin = this.beginOperation(profileId, plugin.name, options.kind);
+    const packageKey = `${profileId}:${plugin.name}`;
     const log = (line: string) => {
       this.state.appendLog(profileId, plugin.name, line);
       this.emit({ type: 'log', pluginId: plugin.name, message: line, level: /error|fail/i.test(line) ? 'error' : 'info' });
     };
     let prepared: PreparedPackage | null = null;
     let swapped: { finalDir: string; backupDir: string | null } | null = null;
-    let oldState = previous;
+    let releaseRuntime: (() => void) | undefined;
     try {
       this.updateOperation(begin.operation, { phase: 'resolving', message: `Resolving ${plugin.name}@${selected.version}` });
       const spec = buildInstallSpec(plugin.name, selected.version, selected.source);
@@ -1077,11 +1107,15 @@ export class DshMarketService {
         name: plugin.name,
         version: selected.version,
         source: selected.source,
+        expectedIntegrity: selected.integrity,
         allowScripts: options.allowScripts,
         onLog: log,
         signal: begin.controller.signal,
       });
       if (prepared.rows.length === 0) throw new Error('The bundle patch inserted no mountable plugin rows.');
+      releaseRuntime = await this.lockRuntimeMutation();
+      if (begin.controller.signal.aborted) throw new InstallCancelledError();
+      previous = this.state.installedByMarketId(profileId, plugin.name);
       const before = this.runtime.getInfo();
       await this.runtime.ensureStarted(profileId, this.dshHome, prepared.format === 'dsh');
       // Provisioning DSH storage can replace the worker used by native
@@ -1099,22 +1133,18 @@ export class DshMarketService {
       if (begin.controller.signal.aborted) throw new InstallCancelledError();
       this.updateOperation(begin.operation, { phase: 'activating', message: 'Swapping the verified package into the profile' });
       swapped = this.installer.swapIn(prepared);
+      if (previous?.format === 'dsh' && prepared.format === 'native') this.installer.unlinkPlugin(profileId, previous.name);
       this.installer.linkPlugin(profileId, prepared.name, swapped.finalDir, prepared.packageRelativeDir);
       const record = this.preparedToInstalled(prepared, plugin, selected, swapped.finalDir, previous);
       record.compatibility = probedCompatibility;
       if (previous?.enabled === false) record.enabled = false;
       if (previous) {
-        const backup: InstalledPlugin['backups'][number] = {
-          version: previous.version,
-          directory: swapped.backupDir || '',
-          createdAt: isoNow(),
-          ...(previous.integrity ? { integrity: previous.integrity } : {}),
-        };
-        record.backups = [...previous.backups, backup]
-          .filter((item) => !!item.directory)
-          .slice(-3);
+        if (swapped.backupDir) record.backups = [...previous.backups, backupRecord(previous, swapped.backupDir)].slice(-3);
       }
       this.state.updatePlugin(profileId, record);
+      if (previous || this.uninstalledPackages.has(packageKey)) {
+        await this.reloadRuntimeAfterPackageChange(profileId, record.id, record.format);
+      }
       if (record.enabled) {
         const loaded = await this.runtime.load(this.runtimeSpec(record));
         if (loaded.status !== 'loaded' && loaded.status !== 'disabled') {
@@ -1131,6 +1161,7 @@ export class DshMarketService {
       }
       this.installer.removeBackup(swapped.backupDir && !record.backups.some((item) => item.directory === swapped!.backupDir) ? swapped.backupDir : null);
       this.writeProjection(profileId);
+      this.uninstalledPackages.delete(packageKey);
       this.updateOperation(begin.operation, { phase: 'done', message: `${options.kind === 'update' ? 'Updated' : 'Installed'} ${plugin.name}@${selected.version}`, finishedAt: isoNow() });
       this.emit({ type: 'installed', pluginId: record.id });
       return record;
@@ -1143,8 +1174,10 @@ export class DshMarketService {
           if (previous) {
             if (swapped.backupDir && fs.existsSync(swapped.backupDir)) {
               this.installer.restore(swapped.finalDir, swapped.backupDir);
+              if (previous.format === 'native' && prepared?.format === 'dsh') this.installer.unlinkPlugin(profileId, previous.name);
               this.installer.linkPlugin(profileId, previous.name, swapped.finalDir, previous.format === 'native' ? '.' : `node_modules/${previous.name}`);
               this.state.updatePlugin(profileId, previous);
+              await this.reloadRuntimeAfterPackageChange(profileId, previous.id, previous.format);
               if (previous.enabled) await this.runtime.load(this.runtimeSpec(previous)).catch(() => {});
             } else {
               // No backup was found: keep the previous state but mark the
@@ -1174,9 +1207,8 @@ export class DshMarketService {
       this.emit({ type: 'installed', pluginId: plugin.name });
       throw error;
     } finally {
+      releaseRuntime?.();
       this.activeOperations.delete(`${profileId}:${plugin.name}`);
-      void oldState;
-      oldState = null;
     }
   }
 
@@ -1302,13 +1334,15 @@ export class DshMarketService {
 
   async installRepository(
     profileId: string,
-    input: string,
-    ref?: string,
+    url: string,
+    commit: string,
     subdir?: string,
     options: { acceptRisk?: boolean; allowScripts?: boolean } = {},
   ): Promise<InstalledPlugin> {
     await this.ensureReady();
-    const inspection = await this.inspectRepository(input, ref, subdir);
+    const pinned = validateGitUrl(`${url}#${commit}`);
+    if (pinned.commit !== commit) throw new Error('Installation requires the exact commit from the repository preview.');
+    const inspection = await this.inspectRepository(pinned.url, pinned.commit, subdir);
     const previous = this.state.installedByMarketId(profileId, inspection.plugin.name);
     return this.installVersion(profileId, inspection.plugin, inspection.version, previous, {
       acceptRisk: options.acceptRisk,
@@ -1330,89 +1364,158 @@ export class DshMarketService {
 
   async rollback(profileId: string, pluginId: string, version?: string): Promise<InstalledPlugin> {
     await this.ensureReady();
+    return this.withRuntimeMutation(() => this.applyRollback(profileId, pluginId, version));
+  }
+
+  private async applyRollback(profileId: string, pluginId: string, version?: string): Promise<InstalledPlugin> {
     const plugin = this.state.installedByMarketId(profileId, pluginId);
     if (!plugin) throw new Error(`Plugin ${pluginId} is not installed in profile ${profileId}.`);
-    const candidates = plugin.backups.filter((backup) => !version || backup.version === version);
-    const backup = candidates[candidates.length - 1];
-    if (!backup || !backup.directory || !fs.existsSync(backup.directory)) {
+    const backup = [...plugin.backups].reverse().find((item) =>
+      (!version || item.version === version) && item.directory && fs.existsSync(item.directory));
+    if (!backup) {
       throw new Error('No usable rollback package is recorded for this plugin.');
     }
+    const directoryName = pluginDirName(plugin);
+    const backupRoot = path.join(this.state.backupsDir(profileId), directoryName);
+    const target = assertInside(backupRoot, backup.directory, 'Rollback package');
+    if (target === fs.realpathSync(backupRoot)) throw new Error('Invalid rollback package directory.');
+    const finalDir = this.installer.finalDirectory(profileId, directoryName);
+    const currentBackup = path.join(backupRoot, `pre-rollback-${makeRequestId()}`);
     const begin = this.beginOperation(profileId, plugin.name, 'rollback');
     const log = (line: string) => {
       this.state.appendLog(profileId, plugin.name, line);
       this.emit({ type: 'log', pluginId: plugin.name, message: line });
     };
-    let swapped: { finalDir: string; backupDir: string | null } | null = null;
+    let unloaded = false;
+    let currentMoved = false;
+    let backupMoved = false;
+    let rebuilt: InstalledPlugin | undefined;
     try {
       this.updateOperation(begin.operation, { phase: 'activating', message: `Rolling back to ${backup.version}` });
-      await this.runtime.ensureStarted(profileId, this.dshHome);
-      if (plugin.enabled) await this.runtime.unload(plugin.id);
-      const finalDir = this.installer.finalDirectory(profileId, pluginDirName(plugin));
-      const currentBackup = `${path.join(this.state.backupsDir(profileId), pluginDirName(plugin))}/pre-rollback-${Date.now()}`;
-      fs.mkdirSync(path.dirname(currentBackup), { recursive: true });
+      rebuilt = this.readRollbackPackage(plugin, backup, target, finalDir, currentBackup);
+      const before = this.runtime.getInfo();
+      await this.runtime.ensureStarted(profileId, this.dshHome, rebuilt.format === 'dsh');
+      if (before.threadId !== this.runtime.getInfo().threadId) {
+        await this.restoreInstalledPlugins(profileId, this.state.installed(profileId));
+      }
+      if (begin.controller.signal.aborted) throw new InstallCancelledError();
+      if (plugin.enabled) {
+        unloaded = true;
+        await this.runtime.unload(plugin.id);
+      }
+      if (begin.controller.signal.aborted) throw new InstallCancelledError();
       fs.renameSync(finalDir, currentBackup);
-      fs.renameSync(backup.directory, finalDir);
-      swapped = { finalDir, backupDir: currentBackup };
-      const targetManifest = readPackageManifest(path.join(finalDir, plugin.format === 'native' ? '.' : `node_modules/${plugin.name}`));
-      const packageDir = path.join(finalDir, plugin.format === 'native' ? '.' : `node_modules/${plugin.name}`);
-      const rebuilt: InstalledPlugin = {
-        ...plugin,
-        version: targetManifest.version!,
-        status: plugin.enabled ? 'loaded' : 'disabled',
-        updatedAt: isoNow(),
-        rows: plugin.format === 'native'
-          ? [{ ...plugin.rows[0], entryPath: path.join(finalDir, readNativeManifest(finalDir)?.entry || 'index.mjs') }]
-          : rowsFromPatches(packageDir, plugin.name, loadBundlePatches(packageDir, targetManifest)).map((row) => ({
-              ...row,
-              config: plugin.rows.find((old) => old.id === row.id)?.config ?? row.config,
-            })),
-        entry: plugin.format === 'native'
-          ? path.join(finalDir, readNativeManifest(finalDir)?.entry || 'index.mjs')
-          : resolvePackageEntry(packageDir, '.'),
-        packageDir,
-        backups: [
-          ...plugin.backups.filter((item) => item.directory !== backup.directory),
-          { version: plugin.version, directory: currentBackup, createdAt: isoNow(), ...(plugin.integrity ? { integrity: plugin.integrity } : {}) },
-        ].slice(-3),
-        lastError: null,
-        restartRequired: false,
-        contributions: { tools: [], commands: [], skills: [] },
-      };
+      currentMoved = true;
+      fs.renameSync(target, finalDir);
+      backupMoved = true;
+      if (plugin.format === 'dsh' && rebuilt.format === 'native') this.installer.unlinkPlugin(profileId, plugin.name);
+      this.installer.linkPlugin(profileId, rebuilt.name, finalDir, path.relative(finalDir, rebuilt.packageDir) || '.');
       this.state.updatePlugin(profileId, rebuilt);
+      await this.reloadRuntimeAfterPackageChange(profileId, rebuilt.id, rebuilt.format);
       if (rebuilt.enabled) {
         const loaded = await this.runtime.load(this.runtimeSpec(rebuilt));
-        rebuilt.status = loaded.status === 'loaded' ? 'loaded' : loaded.status;
-        rebuilt.lastError = loaded.error || null;
+        if (begin.controller.signal.aborted) throw new InstallCancelledError();
+        if (loaded.status !== 'loaded') throw new Error(loaded.error || `Rollback activation failed (${loaded.status}).`);
         rebuilt.contributions = loaded.contributions || { tools: [], commands: [], skills: [] };
-        rebuilt.requiredServices = loaded.requiredServices || rebuilt.requiredServices || [];
+        rebuilt.requiredServices = loaded.requiredServices || [];
+        const catalogEntry = syntheticMarketPlugin(rebuilt);
+        rebuilt.compatibility = this.compatibilityWithProbe(catalogEntry, catalogEntry.versions[0], profileId, loaded);
         this.state.updatePlugin(profileId, rebuilt);
       }
       this.writeProjection(profileId);
       this.updateOperation(begin.operation, { phase: 'done', message: `Rolled back to ${backup.version}`, finishedAt: isoNow() });
+      this.emit({ type: 'installed', pluginId: rebuilt.id });
       return rebuilt;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       log(`Rollback failed: ${message}`);
-      if (swapped) {
+      if (currentMoved || unloaded) {
         try {
-          fs.rmSync(swapped.finalDir, { recursive: true, force: true });
-          fs.renameSync(swapped.backupDir!, swapped.finalDir);
+          if (backupMoved) {
+            if (plugin.enabled) await this.runtime.unload(plugin.id).catch(() => {});
+            fs.renameSync(finalDir, target);
+          }
+          if (currentMoved) fs.renameSync(currentBackup, finalDir);
           this.state.updatePlugin(profileId, plugin);
-          this.installer.linkPlugin(profileId, plugin.name, swapped.finalDir, plugin.format === 'native' ? '.' : `node_modules/${plugin.name}`);
-          if (plugin.enabled) await this.runtime.load(this.runtimeSpec(plugin)).catch(() => {});
-        } catch {
-          // leave the manual state visible
+          if (backupMoved && plugin.format === 'native' && rebuilt?.format === 'dsh') this.installer.unlinkPlugin(profileId, plugin.name);
+          this.installer.linkPlugin(profileId, plugin.name, finalDir, path.relative(finalDir, plugin.packageDir) || '.');
+          if (backupMoved) await this.reloadRuntimeAfterPackageChange(profileId, plugin.id, plugin.format);
+          if (plugin.enabled) {
+            const restored = await this.runtime.load(this.runtimeSpec(plugin));
+            if (restored.status !== 'loaded') throw new Error(restored.error || 'Could not reactivate the previous version.');
+          }
+        } catch (restoreError) {
+          const recoveryError = restoreError instanceof Error ? restoreError.message : String(restoreError);
+          log(`Could not restore the previous version: ${recoveryError}`);
+          this.state.patchPlugin(profileId, plugin.id, { status: 'restart-required', restartRequired: true, lastError: recoveryError });
         }
+        this.writeProjection(profileId);
       }
-      this.updateOperation(begin.operation, { phase: 'failed', message: 'Rollback failed', error: message, finishedAt: isoNow() });
+      const cancelled = error instanceof InstallCancelledError;
+      this.updateOperation(begin.operation, { phase: cancelled ? 'cancelled' : 'failed', message: cancelled ? 'Rollback cancelled' : 'Rollback failed', error: message, finishedAt: isoNow() });
+      this.emit({ type: 'installed', pluginId: plugin.id });
       throw error;
     } finally {
       this.activeOperations.delete(`${profileId}:${plugin.name}`);
     }
   }
 
+  private readRollbackPackage(plugin: InstalledPlugin, backup: BackupRecord, target: string, finalDir: string, currentBackup: string): InstalledPlugin {
+    const native = readNativeManifest(target);
+    const packageRelativeDir = native ? '.' : path.join('node_modules', ...plugin.name.split('/'));
+    const targetPackage = path.join(target, packageRelativeDir);
+    const manifest = native ? nativeManifestToPackage(native) : readPackageManifest(targetPackage);
+    if (manifest.name !== plugin.name || manifest.version !== backup.version) {
+      throw new Error(`Rollback package is ${manifest.name}@${manifest.version}, expected ${plugin.name}@${backup.version}.`);
+    }
+    const patches = native ? null : loadBundlePatches(targetPackage, manifest);
+    const packageDir = path.join(finalDir, packageRelativeDir);
+    const toFinalPath = (file: string) => path.join(packageDir, path.relative(targetPackage, file));
+    const entry = native ? path.join(packageDir, native.entry) : toFinalPath(resolvePackageEntry(targetPackage, '.'));
+    const rows: InstalledRow[] = patches
+      ? rowsFromPatches(targetPackage, plugin.name, patches).map((row) => ({ ...row, entryPath: toFinalPath(row.entryPath) }))
+      : [{ id: 'native', name: plugin.name, entryPath: entry, config: {}, disabled: false, inject: [] }];
+    if (!rows.length) throw new Error('Rollback package has no mountable plugin rows.');
+    const rebuilt: InstalledPlugin = {
+      ...plugin,
+      ...backup.installation,
+      source: backup.installation?.source,
+      requestedSpec: backup.installation?.requestedSpec ?? `backup:${plugin.name}@${backup.version}`,
+      resolvedSpec: backup.installation?.resolvedSpec ?? `${plugin.name}@${backup.version}`,
+      integrity: backup.integrity,
+      version: backup.version,
+      format: native ? 'native' : 'dsh',
+      status: plugin.enabled ? 'loaded' : 'disabled',
+      updatedAt: isoNow(),
+      rows: rows.map((row) => {
+        const previous = plugin.rows.find((item) => item.id === row.id);
+        return previous ? { ...row, config: previous.config } : row;
+      }),
+      entry,
+      packageDir,
+      dsh: manifest.dsh,
+      manifestRaw: manifest,
+      license: manifest.license,
+      repository: manifestRepository(manifest),
+      bundleOverrides: patches?.patches.filter((patch) => !Array.isArray(patch.insert)),
+      clientUnsupported: !native && !!manifest.dsh?.client,
+      backups: [...plugin.backups.filter((item) => item.directory !== backup.directory), backupRecord(plugin, currentBackup)].slice(-3),
+      lastError: null,
+      restartRequired: false,
+      requiredServices: [],
+      contributions: { tools: [], commands: [], skills: [] },
+    };
+    const catalogEntry = syntheticMarketPlugin(rebuilt);
+    rebuilt.compatibility = this.compatibilityFor(catalogEntry, catalogEntry.versions[0], plugin.profileId);
+    return rebuilt;
+  }
+
   async uninstall(profileId: string, pluginId: string, deleteData = false): Promise<void> {
     await this.ensureReady();
+    return this.withRuntimeMutation(() => this.applyUninstall(profileId, pluginId, deleteData));
+  }
+
+  private async applyUninstall(profileId: string, pluginId: string, deleteData: boolean): Promise<void> {
     const plugin = this.state.installedByMarketId(profileId, pluginId);
     if (!plugin) throw new Error(`Plugin ${pluginId} is not installed in profile ${profileId}.`);
     const begin = this.beginOperation(profileId, plugin.name, 'uninstall');
@@ -1431,6 +1534,7 @@ export class DshMarketService {
       fs.rmSync(backupRoot, { recursive: true, force: true });
       if (deleteData) fs.rmSync(path.join(this.state.dataDir(profileId), pluginDirName(plugin)), { recursive: true, force: true });
       this.state.removePlugin(profileId, plugin.id);
+      this.uninstalledPackages.add(`${profileId}:${plugin.name}`);
       this.writeProjection(profileId);
       this.updateOperation(begin.operation, {
         phase: 'done',
@@ -1450,6 +1554,10 @@ export class DshMarketService {
 
   async setEnabled(profileId: string, pluginId: string, enabled: boolean): Promise<InstalledPlugin> {
     await this.ensureReady();
+    return this.withRuntimeMutation(() => this.applyEnabled(profileId, pluginId, enabled));
+  }
+
+  private async applyEnabled(profileId: string, pluginId: string, enabled: boolean): Promise<InstalledPlugin> {
     let plugin = this.state.installedByMarketId(profileId, pluginId);
     if (!plugin) throw new Error(`Plugin ${pluginId} is not installed in profile ${profileId}.`);
     if (plugin.enabled === enabled) return plugin;
@@ -1480,6 +1588,10 @@ export class DshMarketService {
 
   async saveConfig(profileId: string, pluginId: string, rowConfigs: Record<string, unknown>): Promise<InstalledPlugin> {
     await this.ensureReady();
+    return this.withRuntimeMutation(() => this.applyConfig(profileId, pluginId, rowConfigs));
+  }
+
+  private async applyConfig(profileId: string, pluginId: string, rowConfigs: Record<string, unknown>): Promise<InstalledPlugin> {
     const plugin = this.state.installedByMarketId(profileId, pluginId);
     if (!plugin) throw new Error(`Plugin ${pluginId} is not installed in profile ${profileId}.`);
     const previous = structuredClone(plugin);
@@ -1513,6 +1625,10 @@ export class DshMarketService {
 
   async switchProfile(profileId: string): Promise<void> {
     await this.ensureReady();
+    return this.withRuntimeMutation(() => this.applyProfileSwitch(profileId));
+  }
+
+  private async applyProfileSwitch(profileId: string): Promise<void> {
     validateProfileId(profileId);
     if (this.activeOperations.size > 0) throw new Error('Finish or cancel active plugin operations before switching profiles.');
     if (this.state.activeProfileId() === profileId) return;
@@ -1532,10 +1648,12 @@ export class DshMarketService {
   }
 
   async restartRuntime(): Promise<void> {
-    if (this.activeOperations.size > 0) throw new Error('Finish or cancel active plugin operations before restarting the runtime.');
-    await this.runtime.shutdown();
-    await this.loadAllEnabled(this.state.activeProfileId());
-    this.emit({ type: 'runtime', message: 'Runtime restarted' });
+    return this.withRuntimeMutation(async () => {
+      if (this.activeOperations.size > 0) throw new Error('Finish or cancel active plugin operations before restarting the runtime.');
+      await this.runtime.shutdown();
+      await this.loadAllEnabled(this.state.activeProfileId());
+      this.emit({ type: 'runtime', message: 'Runtime restarted' });
+    });
   }
 
   async invokeTool(profileId: string, pluginId: string, toolName: string, args: unknown, rowId?: string): Promise<InvokeResult> {
@@ -1679,6 +1797,17 @@ export class DshMarketService {
 
 function pluginDirName(plugin: InstalledPlugin): string {
   return pluginDirectoryName(plugin.name);
+}
+
+function backupRecord(plugin: InstalledPlugin, directory: string): BackupRecord {
+  const { source, requestedSpec, resolvedSpec, catalogKnown, title } = plugin;
+  return {
+    version: plugin.version,
+    directory,
+    createdAt: isoNow(),
+    integrity: plugin.integrity,
+    installation: { source, requestedSpec, resolvedSpec, catalogKnown, title },
+  };
 }
 
 function extractScreenshots(readme: string): string[] {

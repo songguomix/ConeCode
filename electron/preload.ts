@@ -187,7 +187,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     detail: (pluginId: string, version?: string) => ipcRenderer.invoke('dsh-market:detail', pluginId, version),
     versions: (pluginId: string) => ipcRenderer.invoke('dsh-market:versions', pluginId),
     inspectRepository: (input: string, ref?: string, subdir?: string) => ipcRenderer.invoke('dsh-market:inspect-repository', input, ref, subdir),
-    installRepository: (profileId: string, input: string, ref?: string, subdir?: string, opts?: any) => ipcRenderer.invoke('dsh-market:install-repository', profileId, input, ref, subdir, opts),
+    installRepository: (profileId: string, url: string, commit: string, subdir?: string, opts?: any) => ipcRenderer.invoke('dsh-market:install-repository', profileId, url, commit, subdir, opts),
     refreshSources: (sourceId?: string) => ipcRenderer.invoke('dsh-market:refresh-sources', sourceId),
     addRemoteSource: (url: string, title?: string) => ipcRenderer.invoke('dsh-market:add-remote-source', url, title),
     addLocalSource: () => ipcRenderer.invoke('dsh-market:add-local-source'),

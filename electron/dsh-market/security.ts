@@ -13,11 +13,6 @@ function assertArgvSafe(value: string, label: string): void {
   if (!value || value.startsWith('-') || /[\0\r\n]/.test(value)) {
     throw new Error(`${label} is not a safe package spec`);
   }
-  // On Windows the npm shim is launched through cmd.exe, so do not admit
-  // characters that cmd would treat as syntax. macOS/Linux spawn argv directly.
-  if (process.platform === 'win32' && /[&|;<>()$`"']/.test(value)) {
-    throw new Error(`${label} contains characters that are unsafe for the Windows npm launcher`);
-  }
 }
 
 export function validatePackageName(name: string): string {
@@ -78,7 +73,7 @@ export function buildInstallSpec(name: string, version: string, source: MarketVe
   validateExactVersion(version);
   if (source.registry) validateRegistryUrl(source.registry);
   if (source.type === 'npm') {
-    const spec = `${source.packageName || name}@${version}`;
+    const spec = `${validatePackageName(source.packageName || name)}@${version}`;
     assertArgvSafe(spec, 'npm spec');
     return { spec, registry: source.registry };
   }

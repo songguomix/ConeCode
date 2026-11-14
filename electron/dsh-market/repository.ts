@@ -141,9 +141,7 @@ export async function materializeRepository(
 ): Promise<string> {
   fs.mkdirSync(workRoot, { recursive: true });
   const id = crypto.createHash('sha256').update(`${url}\0${commit}`).digest('hex').slice(0, 16);
-  const dir = assertInside(workRoot, path.join(workRoot, `repo-${id}`), 'repository cache');
-  fs.rmSync(dir, { recursive: true, force: true });
-  fs.mkdirSync(dir, { recursive: true });
+  const dir = fs.mkdtempSync(path.join(workRoot, `repo-${id}-`));
   try {
     await git.run(['init', '-q', dir]);
     await git.run(['remote', 'add', 'origin', url], dir);
