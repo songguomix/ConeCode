@@ -12,7 +12,7 @@ import { assertMutable, createRecord, deriveProjectId } from './model';
 import type { NewMemoryInput } from './model';
 import {
   buildExtractionRequest, detectValueSignals, isLowValueExchange, isSubstantiveTask,
-  parseExtractionV2, shouldExtract, type ExchangeMessage, type ValueEventKind,
+  parseExtractionV2, shouldExtract, type ExchangeMessage, type MemoryExtractionRequest, type ValueEventKind,
 } from './extract';
 import { classify, dedupeCandidates } from './classify';
 import {
@@ -41,7 +41,7 @@ export interface MemoryServiceOptions {
   deviceId: string;
   now?: () => number;
   /** Provider-backed extraction call. Injected so tests never hit a network. */
-  llm?: (req: { system: string; user: string }) => Promise<string>;
+  llm?: (req: MemoryExtractionRequest) => Promise<string>;
   /** Factory for the cloud provider (injectable for tests). */
   cloudFactory?: (config: CloudConfig, deviceId: string) => MemoryStorageProvider;
   onChange?: (state: Memory2State) => void;

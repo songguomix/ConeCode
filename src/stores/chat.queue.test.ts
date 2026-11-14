@@ -1,3 +1,4 @@
+import { useMemoryV2Store } from './memoryV2.store';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useChatStore, resetNativeToolFallback } from './chat.store';
 import { useModelStore } from './model.store';
@@ -138,6 +139,26 @@ describe('mid-run message queue', () => {
     expect(created.filter((m) => m.role === 'user' && !m.isToolResult).map((m) => m.content))
       .toEqual(['first follow-up', 'second follow-up', 'third follow-up']);
     expect(useChatStore.getState().queuedMessages.conv1).toHaveLength(0);
+  });
+
+  it('retrieves memory for a queued task when it is delivered', async () => {
+    const previous = useMemoryV2Store.getState();
+    const beginTask = vi.fn(async (task: string) => ({ records: `Memory for ${task}`, wiki: '' }));
+    useMemoryV2Store.setState({ active: true, initialized: true, rootPath: '/proj', beginTask });
+    try {
+      await useChatStore.getState().sendMessage('original task', 'p1', 'gpt-test');
+      useChatStore.setState({ streamingRuns: { conv1: fakeRun() } });
+      expect(useChatStore.getState().enqueueMessage('conv1', 'next task', 'p1', 'gpt-test')).toBe('queued');
+      useChatStore.setState({ streamingRuns: {} });
+      await useChatStore.getState().flushQueue('conv1');
+      expect(streamCalls).toHaveLength(2);
+      expect(beginTask.mock.calls.map(([task]) => task)).toEqual(['original task', 'next task']);
+      expect(JSON.stringify(streamCalls[1].messages)).toContain('Memory for next task');
+      expect(JSON.stringify(streamCalls[1].messages)).not.toContain('Memory for original task');
+      await vi.waitFor(() => expect(useChatStore.getState().streamingRuns.conv1).toBeUndefined());
+    } finally {
+      useMemoryV2Store.setState(previous);
+    }
   });
 
   it('uses a steered message at the next model step, before ordinary follow-ups', async () => {

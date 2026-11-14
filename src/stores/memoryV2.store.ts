@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { MemoryExtractionRequest } from '../core/memory/v2/extract';
 import { v4 as uuidv4 } from 'uuid';
 import {
   MemoryService, LocalStorageProvider, CompositeStorageProvider, retryDelayMs,
@@ -191,7 +192,7 @@ function extractText(result: any): string {
   return '';
 }
 
-async function llm(req: { system: string; user: string }): Promise<string> {
+async function llm(req: MemoryExtractionRequest): Promise<string> {
   const model = useModelStore.getState().getSelectedModel();
   if (!model) return '';
   const result = await (globalThis as any).window.electronAPI.chat.stream({
@@ -199,7 +200,11 @@ async function llm(req: { system: string; user: string }): Promise<string> {
     modelId: model.id,
     silent: true,
     maxTokens: 900,
-    messages: [{ role: 'system', content: req.system }, { role: 'user', content: req.user }],
+    messages: [
+      { role: 'system', content: req.system },
+      { role: 'user', content: req.reference, cacheControl: { type: 'ephemeral' } },
+      { role: 'user', content: req.user },
+    ],
   });
   return extractText(result);
 }

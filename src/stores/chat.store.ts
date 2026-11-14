@@ -136,6 +136,8 @@ export interface SendMessageOptions {
   keepComposerImages?: boolean;
   /** Internal task context captured when retrieval completes. */
   taskMemory?: TaskMemoryContext;
+  /** Synthetic continuation uses the current task memory. */
+  reuseTaskMemory?: boolean;
 }
 const taskMemoryByConversation = new Map<string, TaskMemoryContext>();
 const rsiSpendBaselines = new Map<string, number>();
@@ -902,9 +904,28 @@ async function deliverToConversation(convId: string, content: string, providerId
     });
   }
 
+  if (!options.reuseTaskMemory) {
+    options = { ...options, taskMemory: await recallTaskMemory(convId, content) };
+  }
   const canContinue = await autoCompactIfNeeded(convId, providerId, modelId);
   if (!canContinue) return;
   await runAgentLoop(convId, providerId, modelId, options);
+}
+
+async function recallTaskMemory(convId: string, content: string): Promise<TaskMemoryContext | undefined> {
+  const memory = useMemoryV2Store.getState();
+  const chat = useChatStore.getState();
+  const conversation = chat.conversations.find((item) => item.id === convId);
+  const rootPath = chat.activeConversationId === convId
+    ? useWorkspaceStore.getState().rootPath
+    : conversation?.rootPath ?? null;
+  // A background turn must never retrieve from the project open in another chat.
+  if (content.trim() && memory.active && memory.settings?.enabled !== false && !conversation?.isChatMode && rootPath === memory.rootPath) {
+    const taskMemory = await memory.beginTask(content, convId);
+    taskMemoryByConversation.set(convId, taskMemory);
+    return taskMemory;
+  }
+  taskMemoryByConversation.delete(convId);
 }
 
 function isTransientStreamError(error: any): boolean {
@@ -2299,7 +2320,11 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
     : { ...workspaceAtStart, allRoots: () => workspaceRoots };
   // Recall belongs to the initiating request, not to whatever conversation
   // updates the global memory panel while this agent is running.
-  const taskMemory = options.taskMemory ?? taskMemoryByConversation.get(convId) ?? {
+  const memory = useMemoryV2Store.getState();
+  const recalled = memory.active && memory.settings?.enabled !== false
+    ? options.taskMemory ?? taskMemoryByConversation.get(convId)
+    : undefined;
+  const taskMemory = recalled ?? {
     records: isMemoryV2Active() ? '' : useMemoryStore.getState().promptBlock(taskWorkspace.rootPath),
     wiki: '',
   };
@@ -4425,14 +4450,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       await useMemoryV2Store.getState().init(useWorkspaceStore.getState().rootPath).catch(() => undefined);
     }
     const v2Active = isMemoryV2Active();
-    if (v2Active) {
-      const taskMemory = await useMemoryV2Store.getState().beginTask(content, convId);
-      taskMemoryByConversation.set(convId, taskMemory);
-      options = { ...options, taskMemory };
-    } else {
-      taskMemoryByConversation.delete(convId);
-    }
-
     await deliverToConversation(convId, content, providerId, modelId, options);
 
     // Task completion: sediment only at value nodes, or fall back to the legacy
@@ -4651,8 +4668,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       set((s) => ({ conversations: s.conversations.map((c) => c.id === convId
         ? { ...c, providerId, modelId, updatedAt: Date.now() } : c) }));
       if (get().activeConversationId !== convId) return;
+      const taskMemory = await recallTaskMemory(convId, content);
+      if (get().activeConversationId !== convId) return;
       if (await autoCompactIfNeeded(convId, providerId, modelId)) {
-        await runAgentLoop(convId, providerId, modelId);
+        await runAgentLoop(convId, providerId, modelId, { taskMemory });
       }
     } catch (error) {
       if (get().activeConversationId === convId) set({ error: String(error) });
@@ -4739,7 +4758,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       modelId = sel.id;
     }
     set({ error: null });
-    await deliverToConversation(convId, useLanguageStore.getState().t('continuePrompt'), providerId, modelId, { rsiExecution: resumeRsiExecution(convId), rsiResume: true, keepComposerImages: true });
+    await deliverToConversation(convId, useLanguageStore.getState().t('continuePrompt'), providerId, modelId, { rsiExecution: resumeRsiExecution(convId), rsiResume: true, keepComposerImages: true, reuseTaskMemory: true });
   },
 
   // Drop the tail of the transcript, in storage as well as in memory, so a

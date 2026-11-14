@@ -74,12 +74,26 @@ function matchesAxWindow(element, target) {
     Math.abs(point[1] - target.y) <= 1 && Math.abs(size[0] - target.width) <= 1 &&
     Math.abs(size[1] - target.height) <= 1;
 }
-function verifyFocus(windows, target, axApp) {
-  var top = windows.find(function (w) { return w.kCGWindowOwnerPID === target.pid; });
-  return frontPid() === target.pid && top && top.kCGWindowNumber === Number(target.id) &&
-    matchesAxWindow(axAttribute(axApp, 'AXFocusedWindow'), target);
+function sameAxElement(first, second) {
+  return first && second && $.CFEqual(first, second);
 }
-function findAxWindow(axApp, target) {
+function uniqueQuartzWindow(windows, target) {
+  var matching = windows.filter(function (window) {
+    if (window.kCGWindowOwnerPID !== target.pid) return false;
+    var bounds = window.kCGWindowBounds;
+    return Math.abs(bounds.X - target.x) <= 2 && Math.abs(bounds.Y - target.y) <= 2 &&
+      Math.abs(bounds.Width - target.width) <= 2 && Math.abs(bounds.Height - target.height) <= 2;
+  });
+  return matching.length === 1 && matching[0].kCGWindowNumber === Number(target.id);
+}
+function verifyFocus(windows, target, axApp, axWindow) {
+  // Quartz z-order is not key focus. An app can have a floating panel above
+  // its focused document. Check the AX identity and the Quartz target separately.
+  return axWindow && frontPid() === target.pid && uniqueQuartzWindow(windows, target) &&
+    matchesAxWindow(axWindow, target) && sameAxElement(axAttribute(axApp, 'AXFocusedWindow'), axWindow);
+}
+function findAxWindow(windows, axApp, target) {
+  if (!uniqueQuartzWindow(windows, target)) return null;
   var candidates = axAttribute(axApp, 'AXWindows');
   var matching = [];
   if (candidates) {
@@ -99,7 +113,8 @@ function findAxWindow(axApp, target) {
 function focusSelectedWindow(target, axApp) {
   var windows = onScreenWindows();
   selectedWindow(windows, target);
-  if (verifyFocus(windows, target, axApp)) return;
+  var axWindow = findAxWindow(windows, axApp, target);
+  if (verifyFocus(windows, target, axApp, axWindow)) return axWindow;
 
   var initialFront = frontPid();
   var reachedTarget = initialFront === target.pid;
@@ -113,7 +128,7 @@ function focusSelectedWindow(target, axApp) {
     for (var poll = 0; poll < 8; poll++) {
       windows = onScreenWindows();
       selectedWindow(windows, target);
-      if (verifyFocus(windows, target, axApp)) return;
+      if (verifyFocus(windows, target, axApp, axWindow)) return axWindow;
       var front = frontPid();
       if (front === target.pid) reachedTarget = true;
       if (front && front !== target.pid && (reachedTarget || front !== initialFront)) {
@@ -123,15 +138,15 @@ function focusSelectedWindow(target, axApp) {
         if (front !== target.pid) {
           $.AXUIElementSetAttributeValue(axApp, $('AXFrontmost'), $(true));
         }
-        var window = findAxWindow(axApp, target);
-        if (window) {
+        axWindow = findAxWindow(windows, axApp, target);
+        if (axWindow) {
           // Not all AX attributes are writable. Validate the resulting focus
           // rather than treating a failed setter as a failed window switch.
-          $.AXUIElementSetAttributeValue(window, $('AXMain'), $(true));
-          $.AXUIElementPerformAction(window, $('AXRaise'));
+          $.AXUIElementSetAttributeValue(axWindow, $('AXMain'), $(true));
+          $.AXUIElementPerformAction(axWindow, $('AXRaise'));
           if (frontPid() === target.pid) {
             reachedTarget = true;
-            $.AXUIElementSetAttributeValue(axApp, $('AXFocusedWindow'), window);
+            $.AXUIElementSetAttributeValue(axApp, $('AXFocusedWindow'), axWindow);
           }
         }
       }
@@ -140,9 +155,11 @@ function focusSelectedWindow(target, axApp) {
   }
   windows = onScreenWindows();
   selectedWindow(windows, target);
-  if (!verifyFocus(windows, target, axApp)) {
-    throw new Error('Could not focus the selected app window. Click that window to bring it forward, then try again.');
+  if (verifyFocus(windows, target, axApp, axWindow)) return axWindow;
+  if (!axWindow) {
+    throw new Error('Could not identify the selected window through Accessibility. If the app has multiple windows of the same size and position, resize the target and capture it again.');
   }
+  throw new Error('Could not focus the selected app window. Click that window to bring it forward, then retry the input action.');
 }
 `;
 
@@ -177,14 +194,6 @@ JSON.stringify(onScreenWindows().flatMap(function (w) {
   return JSON.parse(output) as NativeWindow[];
 }
 
-export async function activateMacWindow(window: NativeWindow, signal?: AbortSignal): Promise<void> {
-  await runJxa(`${WINDOWS}${AX}
-var target = ${JSON.stringify(window)};
-if (!$.AXIsProcessTrusted()) throw new Error('ConeCode needs Accessibility permission to switch app windows.');
-focusSelectedWindow(target, $.AXUIElementCreateApplication(target.pid));
-'ok';`, signal);
-}
-
 export async function captureMacWindow(window: NativeWindow, signal?: AbortSignal): Promise<Buffer> {
   const assertLive = async () => {
     const live = (await listMacWindows(signal)).find((item) => sameWindow(item, window));
@@ -217,14 +226,14 @@ export async function runMacInput(window: NativeWindow, source: string, signal?:
 var scopedWindow = ${JSON.stringify(window)};
 var scopedAX = $.AXUIElementCreateApplication(scopedWindow.pid);
 if (!$.AXIsProcessTrusted()) throw new Error('ConeCode needs Accessibility permission to send app input.');
-focusSelectedWindow(scopedWindow, scopedAX);
+var scopedAXWindow = focusSelectedWindow(scopedWindow, scopedAX);
 var pendingRelease = null;
 function postScopedEvent(event) {
   var type = $.CGEventGetType(event);
   if (type !== 10 && type !== 11) throw new Error('The macOS app input channel supports keyboard events only.');
   var windows = onScreenWindows();
   selectedWindow(windows, scopedWindow);
-  if (!verifyFocus(windows, scopedWindow, scopedAX)) throw new Error('The selected app window lost focus. No further input was sent.');
+  if (!verifyFocus(windows, scopedWindow, scopedAX, scopedAXWindow)) throw new Error('The selected app window lost focus. No further input was sent.');
   if (type === 10) {
     pendingRelease = $.CGEventCreateCopy(event);
     $.CGEventSetType(pendingRelease, 11);
@@ -251,7 +260,7 @@ var target = ${JSON.stringify(window)};
 var point = ${JSON.stringify(point)};
 var axApp = $.AXUIElementCreateApplication(target.pid);
 if (!$.AXIsProcessTrusted()) throw new Error('ConeCode needs Accessibility permission to click in an app.');
-focusSelectedWindow(target, axApp);
+var axWindow = focusSelectedWindow(target, axApp);
 var windows = onScreenWindows();
 selectedWindow(windows, target);
 scopedPoint(windows, target, point);
@@ -261,9 +270,11 @@ if ($.AXUIElementCopyElementAtPosition(axApp, point.x, point.y, hit) !== 0) {
 }
 var element = ObjC.castRefToObject(hit[0]);
 var elementWindow = axAttribute(element, 'AXWindow');
-var focusWindow = axAttribute(axApp, 'AXFocusedWindow');
-if (!elementWindow || !focusWindow || !elementWindow.isEqual(focusWindow) ||
-    !verifyFocus(onScreenWindows(), target, axApp)) {
+windows = onScreenWindows();
+selectedWindow(windows, target);
+scopedPoint(windows, target, point);
+if (!sameAxElement(elementWindow, axWindow) ||
+    !verifyFocus(windows, target, axApp, axWindow)) {
   throw new Error('The control does not belong to the selected app window.');
 }
 if ($.AXUIElementPerformAction(element, $('AXPress')) !== 0) {

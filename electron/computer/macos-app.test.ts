@@ -1,6 +1,6 @@
 import { runInNewContext } from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
-import { activateMacWindow, runMacInput } from './macos-app';
+import { pressMacPoint, runMacInput } from './macos-app';
 import type { NativeWindow } from './app-target';
 
 const { launch } = vi.hoisted(() => ({ launch: vi.fn() }));
@@ -14,10 +14,11 @@ const quartz = (window: NativeWindow) => ({
   kCGWindowBounds: { X: window.x, Y: window.y, Width: window.width, Height: window.height },
 });
 
-function simulate({ allowFocus = true, stealFocus = false, duplicate = false } = {}) {
-  let frontPid = 202;
-  let focused: NativeWindow = other;
+function simulate({ allowFocus = true, stealFocus = false, duplicate = false, floatingPanel = false, duplicateQuartz = false } = {}) {
+  let frontPid = floatingPanel ? target.pid : 202;
+  let focused: NativeWindow = floatingPanel ? target : other;
   let windows = [quartz(other), quartz(target)];
+  if (duplicateQuartz) windows.push(quartz({ ...target, id: '14' }));
   const post = vi.fn();
   const raise = vi.fn((_window: NativeWindow) => {
     windows = [quartz(target), quartz(other)];
@@ -37,6 +38,7 @@ function simulate({ allowFocus = true, stealFocus = false, duplicate = false } =
     }) },
     CGWindowListCopyWindowInfo: () => windows,
     AXIsProcessTrusted: () => true,
+    CFEqual: (first: NativeWindow, second: NativeWindow) => first === second,
     AXUIElementCreateApplication: () => axApp,
     AXUIElementSetAttributeValue: attributes,
     AXUIElementPerformAction: raise,
@@ -95,7 +97,7 @@ describe('macOS scoped window focus', () => {
   it('refuses input and shows a recovery hint when macOS leaves another window focused', async () => {
     const { post } = simulate({ allowFocus: false });
     await expect(runMacInput(target, 'postScopedEvent({});')).rejects.toThrow(
-      /^Could not focus the selected app window\. Click that window to bring it forward, then try again\.$/,
+      /^Could not focus the selected app window\. Click that window to bring it forward, then retry the input action\.$/,
     );
     expect(post).not.toHaveBeenCalled();
   });
@@ -108,8 +110,29 @@ describe('macOS scoped window focus', () => {
   });
 
   it('does not raise either AX window when two candidates share the same bounds and title', async () => {
-    const { raise } = simulate({ duplicate: true });
-    await expect(activateMacWindow(target)).rejects.toThrow('Could not focus');
+    const { raise, post } = simulate({ duplicate: true });
+    await expect(runMacInput(target, 'postScopedEvent({});')).rejects.toThrow('Could not identify');
     expect(raise).not.toHaveBeenCalled();
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it('blocks input when two Quartz windows could match a single AX window', async () => {
+    const { post, raise } = simulate({ duplicateQuartz: true });
+    await expect(runMacInput(target, 'postScopedEvent({});')).rejects.toThrow('Could not identify');
+    expect(post).not.toHaveBeenCalled();
+    expect(raise).not.toHaveBeenCalled();
+  });
+
+  it('still blocks a pointer action where the floating panel covers the document', async () => {
+    const { raise } = simulate({ floatingPanel: true });
+    await expect(pressMacPoint(target, { x: 80, y: 60 })).rejects.toThrow('Another window covers the input point');
+    expect(raise).not.toHaveBeenCalled();
+  });
+
+  it('allows keyboard input when another window of the same app is above the focused document', async () => {
+    const { raise, post } = simulate({ floatingPanel: true });
+    await expect(runMacInput(target, 'postScopedEvent({});')).resolves.toBe('ok');
+    expect(raise).not.toHaveBeenCalled();
+    expect(post).toHaveBeenCalledExactlyOnceWith(target.pid, {});
   });
 });

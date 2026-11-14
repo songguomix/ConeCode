@@ -3,19 +3,19 @@ import { ComputerController } from './controller';
 import type { NativeWindow } from './app-target';
 
 const native = vi.hoisted(() => ({
-  list: vi.fn(), activate: vi.fn(), capture: vi.fn(), press: vi.fn(), input: vi.fn(), image: vi.fn(),
+  list: vi.fn(), accessibility: vi.fn(), capture: vi.fn(), press: vi.fn(), input: vi.fn(), image: vi.fn(),
 }));
 
 vi.mock('electron', () => ({
   nativeImage: { createFromBuffer: native.image },
   screen: { getCursorScreenPoint: () => ({ x: 1, y: 1 }) },
   systemPreferences: {
-    isTrustedAccessibilityClient: () => true,
+    isTrustedAccessibilityClient: native.accessibility,
     getMediaAccessStatus: () => 'granted',
   },
 }));
 vi.mock('./macos-app', () => ({
-  listMacWindows: native.list, activateMacWindow: native.activate,
+  listMacWindows: native.list,
   captureMacWindow: native.capture, pressMacPoint: native.press, runMacInput: native.input,
 }));
 
@@ -28,7 +28,7 @@ beforeEach(() => {
   Object.defineProperty(process, 'platform', { value: 'darwin' });
   vi.clearAllMocks();
   native.list.mockResolvedValue([a, b, { ...b, id: '3', pid: process.pid }]);
-  native.activate.mockResolvedValue(undefined);
+  native.accessibility.mockReturnValue(true);
   native.capture.mockResolvedValue(Buffer.from('app frame'));
   native.press.mockResolvedValue(undefined);
   native.input.mockResolvedValue('ok');
@@ -63,6 +63,15 @@ describe('desktop computer app scope', () => {
     expect(result.message).not.toContain(b.title);
     expect(native.capture).not.toHaveBeenCalled();
     await expect(controller.screenshot()).resolves.toHaveProperty('error');
+  });
+
+  it('selects and captures a macOS window without Accessibility permission, but blocks input', async () => {
+    native.accessibility.mockReturnValue(false);
+    await expect(select('111:1')).resolves.toMatchObject({ ok: true });
+    const frame = await screenshot();
+    await expect(controller.act({ action: 'key', text: 'Return', frameId: frame.frameId }))
+      .resolves.toMatchObject({ ok: false, needsPermission: 'accessibility' });
+    expect(native.input).not.toHaveBeenCalled();
   });
 
   it('captures only the selected window and maps screenshot coordinates including a negative desktop origin', async () => {

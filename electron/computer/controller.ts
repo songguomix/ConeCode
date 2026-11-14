@@ -8,7 +8,7 @@ import {
 } from '../../src/core/computer/computer';
 import type { ComputerPreviewStatus } from '../../src/core/computer/preview';
 import { capturePoint, publicTarget, sameWindow, sameWindowBounds, windowPoint, type NativeWindow } from './app-target';
-import { activateMacWindow, captureMacWindow, listMacWindows, pressMacPoint, runMacInput } from './macos-app';
+import { captureMacWindow, listMacWindows, pressMacPoint, runMacInput } from './macos-app';
 import { activateWindow, captureWindow, listWindows, performWindowsAction, windowsCursorPoint } from './windows-app';
 
 export type { ComputerRequest };
@@ -154,7 +154,8 @@ export class ComputerController {
 
     const status = this.status();
     if (!status.supported) return { ok: false, message: `App window control is not supported on ${status.platform}.` };
-    if (!status.accessibility && !READ_ONLY_ACTIONS.has(req.action)) {
+    const selectsMacWindow = status.platform === 'darwin' && req.action === 'switch_app';
+    if (!status.accessibility && !selectsMacWindow && !READ_ONLY_ACTIONS.has(req.action)) {
       return { ok: false, needsPermission: 'accessibility', message: 'Enable Accessibility for ConeCode in System Settings › Privacy & Security, then restart ConeCode.' };
     }
     if (req.action === 'key' || req.action === 'hold_key') {
@@ -201,12 +202,14 @@ export class ComputerController {
       const target = (await this.windows(signal)).find((window) => publicTarget(window).id === id);
       if (!target) throw new Error('This app window is unavailable. List open apps again.');
       signal.throwIfAborted();
-      await (process.platform === 'darwin' ? activateMacWindow(target, signal) : activateWindow(target, signal));
+      // Quartz can capture an individual background window. Focus is checked
+      // later, when macOS actually needs to send input to the captured target.
+      if (process.platform !== 'darwin') await activateWindow(target, signal);
       signal.throwIfAborted();
       this.target = target;
       this.frame = null;
       this.targetRevision += 1;
-      return { ok: true, target: publicTarget(target), message: `Switched to ${target.name}. Take a fresh screenshot before acting.` };
+      return { ok: true, target: publicTarget(target), message: `Selected ${target.name}. Take a fresh screenshot before acting.` };
     });
   }
 

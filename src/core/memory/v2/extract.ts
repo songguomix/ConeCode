@@ -209,25 +209,34 @@ export function parseExtractionV2(raw: string): ParsedMemoryV2[] {
   return out;
 }
 
-/** Build the extractor request body, including what is already known (dedupe signal). */
+export interface MemoryExtractionRequest {
+  system: string;
+  reference: string;
+  user: string;
+}
+
+/** Build the extractor request with reusable memory before task-specific data. */
 export function buildExtractionRequest(opts: {
   messages: ExchangeMessage[];
   known: string[];
   signals: ValueSignal[];
   projectName?: string;
   taskText?: string;
-}): { system: string; user: string } {
+}): MemoryExtractionRequest {
   const transcript = opts.messages
     .slice(-12)
     .map((m) => `${m.role === 'assistant' ? 'Assistant' : m.role === 'user' ? 'User' : 'Tool'}: ${m.content.slice(0, 2500)}`)
     .join('\n\n');
+  const known = [...new Set(opts.known.map((item) => item.slice(0, 240)))].sort();
   return {
     system: EXTRACTION_V2_PROMPT,
+    reference: [
+      opts.projectName ? `Current project: ${opts.projectName}` : 'No project open',
+      `Existing memory (do not repeat):\n${known.length ? known.map((item) => `- ${item}`).join('\n') : '(empty)'}`,
+    ].join('\n\n'),
     user: [
       `Value nodes detected: ${opts.signals.map((s) => s.kind).join(', ') || 'none'}`,
-      opts.projectName ? `Current project: ${opts.projectName}` : 'No project open',
       opts.taskText ? `Task: ${opts.taskText.slice(0, 400)}` : '',
-      `Existing memory (do not repeat):\n${opts.known.length ? opts.known.map((k) => `- ${k.slice(0, 240)}`).join('\n') : '(empty)'}`,
       `---\nExchange:\n${transcript}`,
     ].filter(Boolean).join('\n\n'),
   };
