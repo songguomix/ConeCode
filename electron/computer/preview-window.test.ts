@@ -3,7 +3,9 @@ import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import type { BrowserWindow, BrowserWindowConstructorOptions, IpcMainInvokeEvent } from 'electron';
 import { ComputerPreviewWindow } from './preview-window';
-import { COMPUTER_PREVIEW_CHANNELS as CHANNELS } from '../../src/core/computer/preview';
+import type { ComputerActionResult, Screenshot } from './controller';
+import type { ComputerRequest } from '../../src/core/computer/computer';
+import { COMPUTER_PREVIEW_CHANNELS as CHANNELS, type ComputerPreviewStatus } from '../../src/core/computer/preview';
 
 const geometry = { logicalWidth: 1200, logicalHeight: 800, captureWidth: 1200, captureHeight: 800 };
 const target = { id: '11:1', name: 'Editor', title: 'Document' };
@@ -16,9 +18,14 @@ function fakeWindow() {
   });
   let destroyed = false;
   let visible = false;
+  let width = 390;
+  let height = 260;
   const win = Object.assign(new EventEmitter(), {
     webContents, isDestroyed: () => destroyed,
-    setAlwaysOnTop: vi.fn(), setAspectRatio: vi.fn(), setSize: vi.fn(), setVisibleOnAllWorkspaces: vi.fn(), setContentProtection: vi.fn(),
+    setAlwaysOnTop: vi.fn(), setAspectRatio: vi.fn(),
+    setSize: vi.fn((w: number, h: number) => { width = w; height = h; }),
+    getSize: () => [width, height],
+    setVisibleOnAllWorkspaces: vi.fn(), setContentProtection: vi.fn(),
     showInactive: vi.fn(() => { visible = true; win.emit('show'); }), isVisible: () => visible,
     minimize: vi.fn(), isMinimized: vi.fn(() => false), restore: vi.fn(), focus: vi.fn(), loadURL: vi.fn(async () => undefined), loadFile: vi.fn(async () => undefined),
     close: vi.fn(() => { destroyed = true; win.emit('closed'); }),
@@ -30,17 +37,23 @@ function fakeWindow() {
 function harness(extra: { devServerUrl?: string } = {}) {
   const main = fakeWindow();
   const preview = fakeWindow();
-  const status = { platform: 'darwin', enabled: true, supported: true, accessibility: true, screenRecording: true, geometry, target, targetRevision: 1, frameId: 'frame1' };
+  const status: ComputerPreviewStatus = { platform: 'darwin', enabled: true, supported: true, accessibility: true, screenRecording: true, geometry, target, targetRevision: 1, frameId: 'frame1' };
+  const act = vi.fn(async (_request: ComputerRequest): Promise<ComputerActionResult> => ({ ok: true, message: 'Sent' }));
+  const screenshot = vi.fn(async (_targetRevision?: number): Promise<Screenshot> => {
+    status.frameId = 'next-frame';
+    return { ...image, frameId: status.frameId };
+  });
   const createWindow = vi.fn((_options: BrowserWindowConstructorOptions) => preview as unknown as BrowserWindow);
   const manager = new ComputerPreviewWindow({
     createWindow, getMainWindow: () => main as unknown as BrowserWindow,
     getStatus: () => ({ ...status }), getWorkArea: () => ({ x: 0, y: 0, width: 1200, height: 800 }),
+    act, screenshot,
     preloadPath: '/app/computer-preview-preload.js', indexFile: path.resolve('index.html'), devServerUrl: extra.devServerUrl,
   });
   const handlers = new Map<string, (event: IpcMainInvokeEvent, ...args: any[]) => any>();
   manager.register({ handle: (channel: string, handler: (event: IpcMainInvokeEvent, ...args: any[]) => any) => { handlers.set(channel, handler); } } as any);
   const event = (win: ReturnType<typeof fakeWindow>) => ({ sender: win.webContents, senderFrame: win.webContents.mainFrame }) as unknown as IpcMainInvokeEvent;
-  return { manager, main, preview, createWindow, status, handlers, event };
+  return { manager, main, preview, createWindow, status, act, screenshot, handlers, event };
 }
 
 describe('native computer preview manager (mock Electron window)', () => {
@@ -201,5 +214,109 @@ describe('native computer preview manager (mock Electron window)', () => {
     expect(h.manager.snapshot().appearance).toEqual({ locale: 'ja', theme: 'light' });
     expect(await open(h.event(h.main), { locale: 'en', theme: 'dark', apiKey: 'must-not-pass' })).toMatchObject({ ok: false });
     expect(h.manager.snapshot().appearance).toEqual({ locale: 'ja', theme: 'light' });
+  });
+
+  it('accepts a preview click only for its displayed current frame and refreshes the same target', async () => {
+    const h = harness();
+    await h.manager.open();
+    await h.manager.capture(async () => image);
+    const action = h.handlers.get(CHANNELS.act)!;
+    const sender = h.event(h.preview);
+    const click = { frameId: image.frameId, action: 'left_click', coordinate: [480, 320] };
+    await expect(async () => action(h.event(h.main), click)).rejects.toThrow(/preview window/);
+    await expect(async () => action({ ...sender, senderFrame: {} } as IpcMainInvokeEvent, click)).rejects.toThrow(/preview window/);
+
+    for (const invalid of [
+      { ...click, frameId: 'stale' },
+      { ...click, coordinate: [geometry.captureWidth, 0] },
+      { ...click, targetRevision: 99 },
+      { ...click, targetId: 'other-app' },
+      { ...click, action: 'switch_app' },
+      { ...click, action: 'right_click' },
+    ]) {
+      expect(await action(sender, invalid)).toMatchObject({ ok: false });
+    }
+    expect(h.act).not.toHaveBeenCalled();
+    expect(h.screenshot).not.toHaveBeenCalled();
+
+    h.preview.setSize(540, 360);
+    expect(await action(sender, click)).toMatchObject({ ok: true });
+    expect(h.act).toHaveBeenCalledOnce();
+    expect(h.act).toHaveBeenCalledWith(expect.objectContaining(click));
+    expect(h.screenshot).toHaveBeenCalledExactlyOnceWith(h.status.targetRevision);
+    expect(h.preview.getSize()).toEqual([540, 360]);
+    const { shot, pointer, inFlight } = h.manager.snapshot();
+    expect(shot?.frameId).toBe('next-frame');
+    expect(pointer).toMatchObject({ ...click, frameId: 'next-frame', phase: 'sent', source: 'manual' });
+    expect(inFlight).toBe(0);
+    expect(await action(sender, click)).toMatchObject({ ok: false });
+    expect(h.act).toHaveBeenCalledOnce();
+  });
+
+  it('refreshes a selected target with no current frame without allowing stale selections', async () => {
+    const h = harness();
+    h.status.frameId = null;
+    await h.manager.open();
+    const refresh = h.handlers.get(CHANNELS.refresh)!;
+    const sender = h.event(h.preview);
+    await expect(async () => refresh(h.event(h.main), 1)).rejects.toThrow(/preview window/);
+    expect(await refresh(sender, 0)).toMatchObject({ ok: false });
+    expect(h.screenshot).not.toHaveBeenCalled();
+    expect(await refresh(sender, 1)).toMatchObject({ ok: true });
+    expect(h.manager.snapshot().shot?.frameId).toBe('next-frame');
+
+    h.status.enabled = false;
+    expect(await refresh(sender, 1)).toMatchObject({ ok: false });
+    expect(h.screenshot).toHaveBeenCalledOnce();
+  });
+
+  it('visualizes a pending agent click and does not publish an old pointer after the target changes', async () => {
+    const h = harness();
+    await h.manager.open();
+    await h.manager.capture(async () => image);
+    let finish!: (result: ComputerActionResult) => void;
+    h.act.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const click: ComputerRequest = { action: 'left_click', frameId: image.frameId, coordinate: [480, 320] };
+    const pending = h.manager.runAction(click);
+    expect(h.manager.snapshot().pointer).toMatchObject({ ...click, phase: 'pending', source: 'agent' });
+    expect(await h.handlers.get(CHANNELS.act)!(h.event(h.preview), click)).toMatchObject({ ok: false });
+    expect(h.act).toHaveBeenCalledOnce();
+
+    h.status.target = { id: '22:2', name: 'Browser', title: '' };
+    h.status.targetRevision += 1;
+    h.status.frameId = null;
+    h.manager.statusChanged();
+    finish({ ok: true, message: 'Sent' });
+    await pending;
+    expect(h.manager.snapshot().pointer).toBeNull();
+    expect(h.manager.snapshot().inFlight).toBe(0);
+  });
+
+  it('does not mark a rejected native pointer action as sent', async () => {
+    const h = harness();
+    await h.manager.open();
+    await h.manager.capture(async () => image);
+    h.act.mockResolvedValueOnce({ ok: false, message: 'Native click rejected' });
+    const result = await h.manager.runAction({ action: 'left_click', frameId: image.frameId, coordinate: [480, 320] });
+    expect(result.ok).toBe(false);
+    const { pointer, activity } = h.manager.snapshot();
+    expect(pointer).toBeNull();
+    expect(activity[activity.length - 1]).toMatchObject({ ok: false });
+  });
+
+  it('keeps successful input distinct from a failed refresh so input is not retried', async () => {
+    const h = harness();
+    await h.manager.open();
+    await h.manager.capture(async () => image);
+    h.screenshot.mockImplementationOnce(async () => {
+      h.status.frameId = null;
+      return { error: 'Target moved' };
+    });
+    const result = await h.handlers.get(CHANNELS.act)!(h.event(h.preview), {
+      action: 'left_click', frameId: image.frameId, coordinate: [480, 320],
+    });
+    expect(result).toMatchObject({ ok: true, warning: 'Target moved' });
+    expect(h.act).toHaveBeenCalledOnce();
+    expect(h.manager.snapshot()).toMatchObject({ shot: null, pointer: null, inFlight: 0 });
   });
 });

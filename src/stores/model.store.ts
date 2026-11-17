@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { AIModel } from '../types';
+import { FREE_PROVIDER_ID } from '../core/providers/free.adapter';
 
 // Models that the user manually flagged as reasoning-capable (the 🧠 toggle).
 // Persisted to localStorage and re-applied after every fetch, because each
@@ -138,6 +139,7 @@ interface ModelStore {
   loading: boolean;
   fetchModels: (providerId: string) => Promise<boolean>;
   fetchAllModels: () => Promise<void>;
+  replaceProviderModels: (providerId: string, models: AIModel[]) => void;
   selectModel: (modelId: string, providerId?: string, recordRecent?: boolean) => void;
   getSelectedModel: () => AIModel | null;
   toggleFavorite: (modelId: string) => Promise<void>;
@@ -160,17 +162,19 @@ export const useModelStore = create<ModelStore>((set, get) => ({
   limitOverrides: loadLimitOverrides(),
   loading: false,
 
+  replaceProviderModels: (providerId, models) => set((s) => {
+    const next = new Map(s.models);
+    next.set(providerId, applyAllOverrides(models, s.reasoningOverrides, s.limitOverrides));
+    return { models: next };
+  }),
+
   fetchModels: async (providerId) => {
     // Read-only list refresh — NOT an install, so it never raises the
     // install pill or pauses the model (that gate is for real downloads).
     set({ loading: true });
     try {
       const models = await window.electronAPI.model.list(providerId);
-      set((s) => {
-        const newModels = new Map(s.models);
-        newModels.set(providerId, applyAllOverrides(models, s.reasoningOverrides, s.limitOverrides));
-        return { models: newModels, loading: false };
-      });
+      get().replaceProviderModels(providerId, models);
       return true;
     } catch (error) {
       console.error(`Failed to fetch models for provider ${providerId}:`, error);
@@ -191,14 +195,21 @@ export const useModelStore = create<ModelStore>((set, get) => ({
       const enabled = providers.filter((provider) => provider.enabled);
       const fetched = await Promise.all(enabled.map(async (provider) => {
         try {
-          return [provider.id, await window.electronAPI.model.list(provider.id)] as const;
+          const models = await window.electronAPI.model.list(provider.id);
+          if (provider.id === FREE_PROVIDER_ID) {
+            // Publish live Free models as soon as they arrive. The bulk load
+            // can take longer than a later status poll and must not overwrite it.
+            get().replaceProviderModels(provider.id, models);
+            return null;
+          }
+          return [provider.id, models] as const;
         } catch (error) {
           console.error(`Failed to fetch models for provider ${provider.name}:`, error);
-          return [provider.id, [] as AIModel[]] as const;
+          return null;
         }
       }));
-      for (const [providerId, models] of fetched) {
-        if (models.length > 0) grouped.set(providerId, models);
+      for (const entry of fetched) {
+        if (entry?.[1].length) grouped.set(...entry);
       }
 
       // Favorites and recents are persisted by the main process; previously
@@ -217,6 +228,8 @@ export const useModelStore = create<ModelStore>((set, get) => ({
       for (const [pid, list] of grouped) {
         grouped.set(pid, applyAllOverrides(list, overrides, limits));
       }
+      const freeModels = get().models.get(FREE_PROVIDER_ID);
+      if (freeModels?.length) grouped.set(FREE_PROVIDER_ID, freeModels);
 
       set({ models: grouped, favorites, recentModels, loading: false });
       // Back on the last model after a restart/refresh — but never steal a

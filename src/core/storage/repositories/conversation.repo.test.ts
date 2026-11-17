@@ -1,13 +1,39 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Message } from '../../../types';
+import type { Conversation, Message } from '../../../types';
 
-const disk = vi.hoisted(() => ({ messages: [] as Message[] }));
-vi.mock('../database', () => ({
-  readJSON: () => structuredClone(disk.messages),
-  writeJSON: vi.fn((_file: string, messages: Message[]) => { disk.messages = structuredClone(messages); }),
+const disk = vi.hoisted(() => ({
+  conversations: [] as Conversation[],
+  messages: [] as Message[],
 }));
-import { messageRepo } from './conversation.repo';
+vi.mock('../database', () => ({
+  readJSON: (file: string) => structuredClone(file === 'conversations.json' ? disk.conversations : disk.messages),
+  writeJSON: vi.fn((file: string, records: Conversation[] | Message[]) => {
+    if (file === 'conversations.json') disk.conversations = structuredClone(records as Conversation[]);
+    else disk.messages = structuredClone(records as Message[]);
+  }),
+}));
+import { conversationRepo, messageRepo } from './conversation.repo';
 import { writeJSON } from '../database';
+
+describe('persisted conversation archive', () => {
+  it('archives and restores a legacy conversation without changing its activity or transcript', () => {
+    const conversation = {
+      id: 'one', title: 'Old project', providerId: 'p1', modelId: 'm1',
+      rootPath: '/workspace/project', createdAt: 1, updatedAt: 2,
+    };
+    const message: Message = { id: 'first', conversationId: 'one', role: 'user', content: 'Keep me', createdAt: 1 };
+    disk.conversations = [conversation];
+    disk.messages = [message];
+
+    const archived = conversationRepo.setArchived(conversation.id, true);
+    expect(archived).toEqual({ ...conversation, archivedAt: expect.any(Number) });
+    expect(conversationRepo.findAll()).toEqual([archived]);
+    expect(conversationRepo.setArchived(conversation.id, true)).toEqual(archived);
+    expect(conversationRepo.setArchived(conversation.id, false)).toEqual({ ...conversation, archivedAt: null });
+    expect(conversationRepo.findById(conversation.id)?.archivedAt).toBeNull();
+    expect(messageRepo.findByConversation(conversation.id)).toEqual([message]);
+  });
+});
 
 describe('persisted message editing', () => {
   beforeEach(() => {

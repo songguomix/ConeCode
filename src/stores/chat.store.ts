@@ -31,7 +31,8 @@ import { useInstallGateStore, isHolding } from './installGate.store';
 import { usePluginStore } from './plugin.store';
 import { useProviderStore } from './provider.store';
 import { useImageGenStore } from './imageGen.store';
-import { pickReusableConversation } from '../core/workspace/conversations';
+import { useAutoScreenshotStore } from './autoScreenshot.store';
+import { isUnarchivedConversation, pickReusableConversation } from '../core/workspace/conversations';
 import { usePromptStore } from './prompt.store';
 import { resolveImageGenCredentials, requestImageGeneration } from '../core/image/imageGen';
 import { ASPECT_RATIOS, resolveArtStyleId } from '../core/image/prompts';
@@ -59,6 +60,14 @@ import {
 import { normalizeWebUrl, isLocalUrl, parseResultRef } from '../core/browser/policy';
 import { toSample, checkBreaches, describeBreach, formatBytes, DEFAULT_THRESHOLDS } from '../core/monitor/perf';
 import { useMonitorStore } from './monitor.store';
+import {
+  gptConstraintSessionState,
+  gptDetector,
+  hardConstraintInjector,
+  postGenerationGuard,
+  UserConfirmationGate,
+  type ConstraintSessionStatus,
+} from '../core/constraints';
 
 /** The headless built-in browser (main process), if this session has one. */
 const browserAPI = () => (window as any).electronAPI?.browser;
@@ -180,9 +189,11 @@ export interface StreamRunState {
    * reserved for older open-ended retry records; new runs are bounded.
    */
   retry: { attempt: number; max: number | null } | null;
+  /** Running O(1) token estimate of content + reasoningContent during streaming. */
+  streamedTokens?: number;
 }
 
-const EMPTY_RUN: StreamRunState = { content: '', reasoningContent: '', status: null, toolName: null, retry: null };
+const EMPTY_RUN: StreamRunState = { content: '', reasoningContent: '', status: null, toolName: null, retry: null, streamedTokens: 0 };
 
 // Token deltas arrive far faster than a frame. A setState per chunk re-renders
 // the whole transcript (markdown re-parse + every MessageBubble). Buffer
@@ -235,12 +246,14 @@ function flushRunDeltas() {
         status: d.status !== undefined ? d.status : current.status,
         toolName: d.toolName !== undefined ? d.toolName : current.toolName,
         retry: current.retry,
+        streamedTokens: (current.streamedTokens ?? 0) + (d.addedTokens || 0),
       };
       if (
         next.content === current.content &&
         next.reasoningContent === current.reasoningContent &&
         next.status === current.status &&
-        next.toolName === current.toolName
+        next.toolName === current.toolName &&
+        next.streamedTokens === current.streamedTokens
       ) {
         continue;
       }
@@ -274,8 +287,12 @@ function patchRun(convId: string, patch: Partial<StreamRunState>) {
   useChatStore.setState((s) => {
     const current = s.streamingRuns[convId];
     if (!current) return {} as any; // run already ended — drop late chunks
+    const next: StreamRunState = { ...current, ...patch };
+    if (patch.streamedTokens === undefined && (patch.content !== undefined || patch.reasoningContent !== undefined)) {
+      next.streamedTokens = estimateTokens(next.content) + estimateTokens(next.reasoningContent);
+    }
     return {
-      streamingRuns: { ...s.streamingRuns, [convId]: { ...current, ...patch } },
+      streamingRuns: { ...s.streamingRuns, [convId]: next },
     };
   });
 }
@@ -478,6 +495,7 @@ interface FileAction {
   action: 'read_file' | 'list_dir' | 'ask_user' | 'edit_file' | 'create_file' | 'create_dir' | 'delete' | 'rename' | 'copy' | 'exec' | 'open_app' | 'open_path' | 'system_info' | 'perf_snapshot' | 'perf_monitor' | 'perf_inspect' | 'cost_snapshot' | 'run_background' | 'background_status' | 'search' | 'glob' | 'update_todos' | 'git_status' | 'git_diff' | 'web_fetch' | 'web_search' | 'download' | 'mcp_call' | 'spawn_agent' | 'use_skill' | 'computer' | 'github_push'
     | 'page_navigate' | 'page_snapshot' | 'page_click' | 'page_fill' | 'page_eval' | 'page_console' | 'remember' | 'memory_search'
     | 'generate_image'
+    | 'auto_screenshot'
     | 'github_release';
   /** The `computer` tool's own request, nested so its `action` field survives. */
   computer?: ComputerRequest;
@@ -501,6 +519,9 @@ interface FileAction {
   aspect_ratio?: string;
   style?: string;
   negative_prompt?: string;
+  /** auto_screenshot arguments */
+  label?: string;
+  delay_ms?: number;
   /** github_release arguments (release title reuses the existing `name` field) */
   tag?: string;
   notes?: string;
@@ -542,7 +563,7 @@ interface FileAction {
 // either deferred for user confirmation or terminal.
 const INFO_ACTIONS = new Set([
   'read_file', 'list_dir', 'create_file', 'create_dir', 'open_app', 'open_path', 'system_info', 'perf_snapshot', 'perf_monitor', 'perf_inspect', 'cost_snapshot', 'background_status', 'search', 'glob', 'update_todos', 'git_status', 'git_diff', 'web_fetch', 'web_search', 'download', 'mcp_call', 'spawn_agent', 'use_skill', 'github_push', 'github_release',
-  'page_navigate', 'page_snapshot', 'page_click', 'page_fill', 'page_eval', 'page_console', 'remember', 'memory_search', 'generate_image',
+  'page_navigate', 'page_snapshot', 'page_click', 'page_fill', 'page_eval', 'page_console', 'remember', 'memory_search', 'generate_image', 'auto_screenshot',
 ]);
 
 // These tools are independent reads: when a model emits only this class in one
@@ -558,7 +579,7 @@ const INDEPENDENT_READ_ACTIONS = new Set([
 const KNOWN_ACTIONS = new Set([
   'read_file', 'list_dir', 'ask_user', 'edit_file', 'create_file', 'create_dir',
   'delete', 'rename', 'copy', 'exec', 'open_app', 'open_path', 'system_info', 'perf_snapshot', 'perf_monitor', 'perf_inspect', 'cost_snapshot', 'run_background', 'background_status', 'search', 'glob', 'update_todos', 'git_status', 'git_diff', 'web_fetch', 'web_search', 'download', 'mcp_call', 'spawn_agent', 'use_skill', 'computer', 'github_push',
-  'page_navigate', 'page_snapshot', 'page_click', 'page_fill', 'page_eval', 'page_console', 'remember', 'memory_search', 'generate_image', 'github_release',
+  'page_navigate', 'page_snapshot', 'page_click', 'page_fill', 'page_eval', 'page_console', 'remember', 'memory_search', 'generate_image', 'auto_screenshot', 'github_release',
 ]);
 
 // On-demand performance check backing the perf_snapshot tool (and the
@@ -837,6 +858,33 @@ const persistingSteers = new Map<string, string>();
  * flushQueue (background view) share it; live-array writes only touch the
  * conversation on screen.
  */
+const chatConfirmationGate = new UserConfirmationGate<{
+  providerId: string;
+  modelId: string;
+  options: SendMessageOptions;
+}>({
+  detector: gptDetector,
+  sessionState: gptConstraintSessionState,
+  isTTY: () => false,
+});
+
+function syncGptConstraintState(convId: string, conv?: Conversation): void {
+  if (conv?.gptConstraintState) {
+    gptConstraintSessionState.hydrateSession(convId, conv.gptConstraintState, {
+      detectedModel: conv.modelId,
+    });
+  }
+}
+
+async function persistGptConstraintState(convId: string, status: ConstraintSessionStatus): Promise<void> {
+  useChatStore.setState((s) => ({
+    conversations: s.conversations.map((c) => (c.id === convId ? { ...c, gptConstraintState: status } : c)),
+  }));
+  await window.electronAPI?.conversation?.update?.(convId, { gptConstraintState: status })?.catch(() => {});
+}
+
+export { chatConfirmationGate };
+
 async function deliverToConversation(convId: string, content: string, providerId: string, modelId: string, options: SendMessageOptions = {}): Promise<void> {
   const set = useChatStore.setState;
   if (providerId === FREE_PROVIDER_ID && useFreeStore.getState().weeklyUsed >= FREE_WEEKLY_TOKEN_LIMIT) {
@@ -844,6 +892,24 @@ async function deliverToConversation(convId: string, content: string, providerId
     return;
   }
   const get = useChatStore.getState;
+  if (chatConfirmationGate.hasPendingConfirmation(convId) && content.trim()) {
+    const resolved = chatConfirmationGate.resolveFromReply(convId, content);
+    if (resolved.handled && resolved.decision && resolved.pendingRequest) {
+      const replyMsg: Message = {
+        id: uuidv4(),
+        conversationId: convId,
+        role: 'user',
+        content,
+        createdAt: Date.now(),
+      };
+      await window.electronAPI.message.create(replyMsg);
+      set((s) => (s.activeConversationId === convId ? { messages: [...s.messages, replyMsg] } : {}));
+      await persistGptConstraintState(convId, resolved.decision);
+      const pendingPayload = resolved.pendingRequest.payload;
+      await runAgentLoop(convId, pendingPayload.providerId, pendingPayload.modelId, pendingPayload.options);
+      return;
+    }
+  }
   const transcript = get().activeConversationId === convId ? get().messages : [];
   const last = transcript[transcript.length - 1];
   if (options.rsiExecution === undefined && last?.isQuestion && resumeRsiExecution(convId)
@@ -932,7 +998,8 @@ async function recallTaskMemory(convId: string, content: string): Promise<TaskMe
 
 function isTransientStreamError(error: any): boolean {
   if (error?.name === 'AbortError') return false;
-  const text = String(error?.message || error || '').toLowerCase();
+  // Retry metadata is not an HTTP status (e.g. a 401 ms wait is still a 429).
+  const text = String(error?.message || error || '').toLowerCase().replace(/\[retry-after-ms:\s*\d+\]/g, '');
   if (/(?:^|\D)(?:400|401|403|404|413|422)(?:\D|$)|invalid api key|invalid_api_key|authentication failed|insufficient_quota/.test(text)) return false;
   return /incomplete model stream|missing completion marker|timed out|timeout|stream idle|network|fetch failed|econnreset|econnrefused|enotfound|socket|500|502|503|504|429|temporarily unavailable|overloaded/.test(text);
 }
@@ -946,6 +1013,22 @@ export const retryTiming = { baseMs: 500 };
 
 /** Upper bound on one retry's backoff. */
 const MAX_RETRY_BACKOFF_MS = 5000;
+const DEFAULT_RATE_LIMIT_BACKOFF_MS = 30000;
+const MAX_RATE_LIMIT_BACKOFF_MS = 5 * 60 * 1000;
+
+function streamRetryDelayMs(error: any, attempt: number): number | null {
+  const backoff = Math.min(retryTiming.baseMs * (attempt + 1), MAX_RETRY_BACKOFF_MS);
+  const message = String(error?.message || error || '');
+  if (!/(?:^|\D)429(?:\D|$)/.test(message.replace(/\[retry-after-ms:\s*\d+\]/gi, ''))) return backoff;
+  const marker = message.match(/\[retry-after-ms:\s*(\d+)\]/i);
+  const declared = marker ? Number(marker[1]) : NaN;
+  if (Number.isSafeInteger(declared) && declared >= 0) {
+    // A long server cooldown ends automatic retries; never shorten its wait
+    // and immediately hit the same limit again. The user can continue later.
+    return declared > MAX_RATE_LIMIT_BACKOFF_MS ? null : Math.max(declared, backoff);
+  }
+  return Math.min(DEFAULT_RATE_LIMIT_BACKOFF_MS * 2 ** attempt, MAX_RATE_LIMIT_BACKOFF_MS);
+}
 
 /** Resolve after `ms`, early when the run is aborted — no dangling timers. */
 function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -992,7 +1075,7 @@ async function executeIndependentRead(
     case 'system_info':
       return `System info:\n${JSON.stringify(await window.electronAPI.app.getSystemInfo(), null, 2)}`;
     case 'background_status':
-      return backgroundStatusText();
+      return backgroundStatusText(scope);
     case 'perf_snapshot':
     case 'perf_monitor':
     case 'perf_inspect':
@@ -1016,6 +1099,37 @@ async function executeIndependentRead(
       return body
         ? `Skill "${action.id}" — follow these instructions for this task:\n\n${body}`
         : `Error: no skill installed with id "${action.id}". Use one of the ids listed in the installed skills.`;
+    }
+    case 'memory_search': {
+      const query = action.query?.trim() || '';
+      if (!query) return 'Error: memory_search needs a query.';
+      const memScope = action.scope === 'project' || action.scope === 'global' ? action.scope : 'all';
+      const limit = Math.max(1, Math.min(20, action.limit ?? 8));
+      if (isMemoryV2Active()) {
+        const hits = await useMemoryV2Store.getState().search({
+          text: query,
+          scope: memScope,
+          layers: Array.isArray(action.layers) ? action.layers as any : undefined,
+          includeRelated: true,
+          relatedDepth: 1,
+          limit,
+        });
+        if (!hits.length) {
+          return 'No matching long-term memory. Continue without it; do not invent a memory.';
+        }
+        return hits.map((hit) => {
+          const r = hit.record;
+          const why = r.why ? `\n  reason: ${r.why}` : '';
+          const source = r.sourceSessionId ? ` · session ${r.sourceSessionId.slice(0, 8)}` : '';
+          return `- [${r.layer}/${r.type} | ${r.status} | v${r.version} | ${hit.source}${source}] ${r.title}\n  ${r.content}${why}`;
+        }).join('\n\n');
+      }
+      const legacy = useMemoryStore.getState().relevant(ws.rootPath)
+        .filter((entry) => entry.text.toLowerCase().includes(query.toLowerCase()) || query.toLowerCase().includes(entry.text.toLowerCase()))
+        .slice(0, limit);
+      return legacy.length
+        ? legacy.map((entry) => `- [${entry.kind}] ${entry.text}${entry.why ? `\n  reason: ${entry.why}` : ''}`).join('\n\n')
+        : 'No matching long-term memory.';
     }
     default:
       throw new Error(`Tool ${action.action} is not an independent read.`);
@@ -1346,6 +1460,7 @@ export function buildApiMessages(messages: Message[]): ChatMessage[] {
   // reasoner) rejects. Tool-call turns keep theirs — MiMo's protocol needs it.
   let lastAssistantIdx = -1;
   for (let i = live.length - 1; i >= 0; i--) {
+    if (live[i].role === 'user' && !live[i].isToolResult) break;
     if (live[i].role === 'assistant') { lastAssistantIdx = i; break; }
   }
 
@@ -1779,7 +1894,9 @@ async function maybeResumeAfterInstall() {
   // Prefer the held thread on screen first: autoCompactIfNeeded reads the
   // store's message array (the active thread), so a background resume must
   // either make it active or skip compacting.
-  await useChatStore.getState().setActiveConversation(convId);
+  const chat = useChatStore.getState();
+  const conversation = chat.conversations.find((c) => c.id === convId);
+  if (conversation?.archivedAt == null) await chat.setActiveConversation(convId);
   if (useChatStore.getState().streamingRuns[convId]) return;
 
   await window.electronAPI.message.create(userMsg);
@@ -1910,7 +2027,19 @@ ${parallelRule}
     });
   }
 
-  // A separate breakpoint lets project instructions survive mode and goal changes.
+  // Enabled user-defined custom prompts (static across turns — place before BP3
+  // so they are included in the cached system prefix).
+  const customUserPrompts = usePromptStore.getState().getEnabledCustomPrompts();
+  for (const cp of customUserPrompts) {
+    if (cp.content?.trim()) {
+      systemMessages.push({
+        role: 'system',
+        content: `# Custom Instructions: ${cp.title}${cp.description ? ` (${cp.description})` : ''}\n${cp.content.trim()}`,
+      });
+    }
+  }
+
+  // A separate breakpoint lets project instructions & custom prompts survive mode and goal changes.
   for (let i = systemMessages.length - 1; i >= 0; i--) {
     if (systemMessages[i].role === 'system' && typeof systemMessages[i].content === 'string') {
       systemMessages[i] = {
@@ -1954,17 +2083,6 @@ ${parallelRule}
     if (overlay) systemMessages.push({ role: 'system', content: overlay });
     if (agentMode === 'rsi' && settings.costLock === true) {
       systemMessages.push({ role: 'system', content: RSI_COST_LOCK_PROMPT });
-    }
-  }
-
-  // Enabled user-defined custom prompts
-  const customUserPrompts = usePromptStore.getState().getEnabledCustomPrompts();
-  for (const cp of customUserPrompts) {
-    if (cp.content?.trim()) {
-      systemMessages.push({
-        role: 'system',
-        content: `# Custom Instructions: ${cp.title}${cp.description ? ` (${cp.description})` : ''}\n${cp.content.trim()}`,
-      });
     }
   }
 
@@ -2061,7 +2179,7 @@ ${howToCall} You may NOT edit files, create files, or run commands.
 
 Workspace root: ${describeRoots(ws)}`;
   const messages: ChatMessage[] = [
-    { role: 'system', content: sys },
+    { role: 'system', content: sys, cacheControl: { type: 'ephemeral' } },
     { role: 'user', content: task },
   ];
 
@@ -2070,7 +2188,7 @@ Workspace root: ${describeRoots(ws)}`;
     let res: any;
     try {
       res = await window.electronAPI.chat.stream({
-        providerId, modelId, messages, maxTokens: 4096, silent: true,
+        providerId, modelId, messages: markHistoryBoundary(messages), maxTokens: 4096, silent: true, conversationId: scope,
         ...(native ? { tools, toolChoice: 'auto' as const } : {}),
       });
     } catch (e: any) {
@@ -2606,7 +2724,43 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
           if (abortController.signal.aborted || !ownsRun()) break;
           observedFrame = computerFrame;
           observedAppList = appList;
-          const request = requestMessages(observedFrame);
+          syncGptConstraintState(convId, convRecord);
+          const activeProvider = useProviderStore.getState().providers.find((p) => p.id === providerId);
+          const providerBaseUrl = activeProvider?.baseUrl;
+          if (iteration === 0 && streamAttempt === 0) {
+            const gateOutcome = await chatConfirmationGate.evaluate({
+              sessionId: convId,
+              modelName: modelId,
+              baseUrl: providerBaseUrl,
+              payload: { providerId, modelId, options },
+            });
+            if (gateOutcome.action === 'awaiting_confirmation') {
+              const confirmMsg: Message = {
+                id: uuidv4(),
+                conversationId: convId,
+                role: 'assistant',
+                content: gateOutcome.event.promptText,
+                modelId,
+                providerId,
+                createdAt: Date.now(),
+                isQuestion: true,
+                questionOptions: gateOutcome.event.options,
+              };
+              await window.electronAPI.message.create(confirmMsg);
+              set((s) => (s.activeConversationId === convId ? { messages: [...s.messages, confirmMsg] } : {}));
+              waitingForUser = true;
+              return;
+            }
+          }
+          const rawRequest = requestMessages(observedFrame);
+          const sessionConstraintState = gptConstraintSessionState.getStatus(convId);
+          const request = sessionConstraintState === 'ENABLED'
+            ? hardConstraintInjector.inject({
+                messages: rawRequest,
+                sessionState: sessionConstraintState,
+                modelName: modelId,
+              })
+            : rawRequest;
           // A previous attempt's retry pill must not linger into live streaming.
           // A retry attempt also starts with a clean thinking slate: the
           // interrupted attempt's reasoning must never flash back into view.
@@ -2646,6 +2800,8 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
           // A user abort is never retried — the stop button wins everywhere.
           if (e?.name === 'AbortError') throw e;
           if (!isTransientStreamError(e)) throw e;
+          const retryDelayMs = streamRetryDelayMs(e, streamAttempt);
+          if (retryDelayMs === null) throw e;
           if (streamAttempt >= maxStreamAttempts) {
             if (turnRetries >= MAX_TURN_RETRIES) throw e;
             turnRetries++;
@@ -2702,7 +2858,7 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
           // Abort-aware, capped backoff: a stop during the wait ends the run
           // instead of firing one more doomed request.
           await abortableSleep(
-            Math.min(retryTiming.baseMs * (streamAttempt + 1), MAX_RETRY_BACKOFF_MS),
+            retryDelayMs,
             abortController.signal,
           );
           if (abortController.signal.aborted || !ownsRun()) throw e;
@@ -2766,6 +2922,11 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
       let finalReasoningContent = [stitch.rawReasoning, split.reasoning]
         .filter((s) => s && s.trim())
         .join('\n');
+
+      const activeConstraintStatus = gptConstraintSessionState.getStatus(convId);
+      if (activeConstraintStatus === 'ENABLED' && finalContent.trim()) {
+        postGenerationGuard.enforce(finalContent, activeConstraintStatus);
+      }
 
       // Some models (e.g. Xiaomi mimo-v2.5-pro) put their ENTIRE reply — including
       // the ```json action — into reasoning_content and leave content empty. If
@@ -2983,9 +3144,46 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
         shouldContinue = true;
       }
 
-      if (!parallelReadBatch) for (const entry of pending) {
+      if (!parallelReadBatch) for (let entryIdx = 0; entryIdx < pending.length; entryIdx++) {
+        const entry = pending[entryIdx];
         const call = entry.call;
         const stopped = abortController.signal.aborted || !ownsRun();
+        if (
+          !stopped && !costBlocked && !askedUser && !awaitingUserAction &&
+          !isChatMode && entry.action && INDEPENDENT_READ_ACTIONS.has(entry.action.action)
+        ) {
+          let endIdx = entryIdx + 1;
+          while (
+            endIdx < pending.length &&
+            pending[endIdx].action &&
+            INDEPENDENT_READ_ACTIONS.has(pending[endIdx].action!.action)
+          ) {
+            endIdx++;
+          }
+          if (endIdx - entryIdx > 1) {
+            const readSlice = pending.slice(entryIdx, endIdx);
+            const sliceResults = await Promise.all(readSlice.map(async (item) => {
+              const act = item.action!;
+              const lbl = toolActionLabel(act);
+              try {
+                return { call: item.call, label: lbl, result: await executeIndependentRead(act, ws, convId) };
+              } catch (error) {
+                return { call: item.call, label: lbl, result: toolFailure(lbl, error) };
+              }
+            }));
+            outcomes.push(...sliceResults);
+            if (rsiExecuting) {
+              sliceResults.forEach((outcome, i) => rsiMonitor.observe({
+                ...readSlice[i].action!,
+                succeeded: !/^Error:/i.test(outcome.result),
+                detail: outcome.result,
+              }));
+            }
+            shouldContinue = true;
+            entryIdx = endIdx - 1;
+            continue;
+          }
+        }
         if (stopped || costBlocked || askedUser || awaitingUserAction) {
           const label = entry.action ? toolActionLabel(entry.action) : (entry.label || call?.name || 'tool');
           outcomes.push({
@@ -3331,6 +3529,23 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
             imageStore.addToGallery(generated);
             image = generated.url;
             result = `Image generated successfully for prompt: "${generated.prompt}" (${generated.size}, model: ${generated.model}${creds.providerName ? ` via ${creds.providerName}` : ''}).\n![${generated.prompt}](${generated.url})`;
+            break;
+          }
+          case 'auto_screenshot': {
+            if (usePluginStore.getState().disabled.includes('auto-screenshot')) {
+              result = 'Error: the Official Auto-Screenshot plugin is disabled. Enable it in Settings → Plugins first.';
+              break;
+            }
+            const target = (['auto', 'window', 'preview', 'screen'].includes(String(action.target)) ? action.target : undefined) as 'auto' | 'window' | 'preview' | 'screen' | undefined;
+            const delayMs = typeof action.delay_ms === 'number' && Number.isFinite(action.delay_ms) ? action.delay_ms : undefined;
+            const label = typeof action.label === 'string' && action.label.trim() ? action.label.trim() : undefined;
+            const shot = await useAutoScreenshotStore.getState().captureNow({ target, delayMs, label });
+            if (!shot.ok || !shot.item) {
+              result = `Error: auto_screenshot failed: ${shot.error || 'Unknown error'}${shot.needsPermission ? ` (missing permission: ${shot.needsPermission})` : ''}`;
+              break;
+            }
+            image = shot.item.dataUrl;
+            result = `Captured screenshot [${shot.item.label}] (target: ${shot.item.target}, ${shot.item.width}×${shot.item.height}${shot.item.savedPath ? `, saved to ${shot.item.savedPath}` : ''}). Visually inspect the attached image to verify every modified location.`;
             break;
           }
           case 'edit_file': {
@@ -3695,6 +3910,7 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
           }
         }
         const resultLimit = toolResultLimitForBatch(outcomes.length);
+        const toolMsgs: Message[] = [];
         for (const o of outcomes) {
           const toolMsg: Message = {
             id: uuidv4(),
@@ -3708,7 +3924,10 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
             images: o.image ? [o.image] : undefined,
           };
           await persistMessage(toolMsg);
-          set((s) => s.activeConversationId === convId ? { messages: [...s.messages, toolMsg] } : {});
+          toolMsgs.push(toolMsg);
+        }
+        if (toolMsgs.length > 0) {
+          set((s) => s.activeConversationId === convId ? { messages: [...s.messages, ...toolMsgs] } : {});
         }
       } else if (outcomes.length > 0) {
         // Prompt mode: feed the results back as a user turn so the conversation
@@ -3914,6 +4133,7 @@ interface ChatStore {
    * start folder-less by inheriting the blank workspace.
    */
   closeFolderGroup: (folderKey: string) => Promise<void>;
+  setConversationArchived: (id: string, archived: boolean) => Promise<void>;
   deleteConversation: (id: string) => Promise<void>;
   renameConversation: (id: string, title: string) => Promise<void>;
   /** Create an independent RSI conversation with its own direction state. */
@@ -4014,7 +4234,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         // blank one every time the mode is entered. Only when the user has no
         // RSI conversation at all do we create the first one.
         const existing = get().conversations
-          .filter(isRsiConversation)
+          .filter((c) => isUnarchivedConversation(c) && isRsiConversation(c))
           .sort((a, b) => b.updatedAt - a.updatedAt)[0];
         if (existing) {
           if (get().agentMode !== 'rsi') return;
@@ -4034,9 +4254,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     if (conv && isRsiConversation(conv) && mode !== 'rsi') {
       const vm = useUIStore.getState().viewMode;
       const targetConv = get().conversations.find((c) =>
-        vm === 'chat'
+        isUnarchivedConversation(c) && (vm === 'chat'
           ? (!isRsiConversation(c) && (Boolean(c.isChatMode) || !c.rootPath))
-          : (!isRsiConversation(c) && !c.isChatMode && Boolean(c.rootPath)),
+          : (!isRsiConversation(c) && !c.isChatMode && Boolean(c.rootPath))),
       );
       if (targetConv) {
         void get().setActiveConversation(targetConv.id);
@@ -4193,7 +4413,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   setActiveConversation: async (id) => {
     const state = get();
     if (id === state.activeConversationId) return;
-    if (!state.conversations.some((conversation) => conversation.id === id)) return;
+    const opening = state.conversations.find((conversation) => conversation.id === id);
+    if (!opening) return;
     // Session end: give Memory 2.0 one last chance to sediment a decision or
     // lesson before the transcript leaves the active context.
     if (isMemoryV2Active()
@@ -4217,6 +4438,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
     const messages = await window.electronAPI.message.list(id);
     if (request !== conversationLoadRequest) return;
+    const conversation = get().conversations.find((item) => item.id === id);
+    if (!conversation || isUnarchivedConversation(opening) && !isUnarchivedConversation(conversation)) return;
     useTodosStore.getState().clearTodos();
     set({ activeConversationId: id, messages });
     // Continuity survives restarts: a tail that ends in an interrupted partial
@@ -4228,7 +4451,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
     // A conversation remembers the provider/model it last used. Restore it
     // without adding a synthetic "recent" entry just because the chat opened.
-    const conversation = get().conversations.find((item) => item.id === id);
     // The execution protocol belongs to the conversation: a dedicated RSI
     // session reopens in the RSI view with its own direction state, and
     // switching to any other conversation cannot inherit it.
@@ -4245,7 +4467,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
     if (conversation?.providerId && conversation.modelId) {
       const { useModelStore } = await import('./model.store');
-      if (request !== conversationLoadRequest) return;
+      if (request !== conversationLoadRequest || get().activeConversationId !== id) return;
       const available = useModelStore.getState().models
         .get(conversation.providerId)
         ?.some((model) => model.id === conversation.modelId);
@@ -4342,6 +4564,37 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     // chat inherits the (now blank) workspace, so it starts folder-less too.
     useTodosStore.getState().clearTodos();
     set({ activeConversationId: null, messages: [] });
+  },
+
+  setConversationArchived: async (id, archived) => {
+    const updated = await window.electronAPI.conversation.setArchived(id, archived);
+    if (!updated) return;
+    const state = get();
+    const conversations = state.conversations.map((c) =>
+      c.id === id ? { ...c, archivedAt: updated.archivedAt } : c,
+    );
+    if (!archived || state.activeConversationId !== id) {
+      set({ conversations });
+      return;
+    }
+
+    if (isMemoryV2Active() && !state.streamingRuns[id]) {
+      const transcript = state.messages
+        .filter((m) => !m.isLocalNotice && !m.isToolResult && m.role !== 'tool')
+        .map((m) => ({ role: m.role, content: m.content }));
+      if (transcript.length) void useMemoryV2Store.getState().endSession(id, transcript);
+    }
+    const workspaceSnapshots = new Map(state.workspaceSnapshots);
+    workspaceSnapshots.set(id, useWorkspaceStore.getState().saveSnapshot());
+    useTodosStore.getState().clearTodos();
+    set({
+      conversations,
+      workspaceSnapshots,
+      activeConversationId: null,
+      messages: [],
+      error: null,
+      continuableConvId: state.continuableConvId === id ? null : state.continuableConvId,
+    });
   },
 
   deleteConversation: async (id) => {    const deletingActive = get().activeConversationId === id;
@@ -4911,10 +5164,10 @@ if (typeof window !== 'undefined' && (window as any).electronAPI?.chat?.onChunk)
       queueRunDelta(convId, { status: 'thinking' });
     } else if (chunk?.type === 'reasoning') {
       const piece = typeof chunk.content === 'string' ? chunk.content : '';
-      queueRunDelta(convId, { reasoning: piece, status: 'thinking' });
+      queueRunDelta(convId, { reasoning: piece, status: 'thinking', addedTokens: estimateTokens(piece) });
     } else if (chunk?.type === 'text') {
       const piece = typeof chunk.content === 'string' ? chunk.content : '';
-      queueRunDelta(convId, { text: piece, status: 'writing' });
+      queueRunDelta(convId, { text: piece, status: 'writing', addedTokens: estimateTokens(piece) });
     } else if (chunk?.type === 'tool_call') {
       // The model started a native tool call — its arguments stream in next, so
       // show which tool rather than an anonymous spinner.
@@ -4922,7 +5175,7 @@ if (typeof window !== 'undefined' && (window as any).electronAPI?.chat?.onChunk)
     } else if (chunk?.type === 'done') {
       runFinishReasons.set(convId, chunk.finishReason ?? runFinishReasons.get(convId) ?? null);
       if (chunk.reasoning_content) {
-        queueRunDelta(convId, { reasoning: chunk.reasoning_content });
+        queueRunDelta(convId, { reasoning: chunk.reasoning_content, addedTokens: estimateTokens(chunk.reasoning_content) });
       }
       // Apply anything still buffered before the run is torn down by endRun.
       flushRunDeltas();

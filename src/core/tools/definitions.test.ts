@@ -99,6 +99,12 @@ describe('buildToolset', () => {
     expect(names).toContain('ask_user');
     expect(names).toContain('web_search');
   });
+
+  it('includes auto_screenshot by default and in Plan Mode, and respects disabledPlugins', () => {
+    expect(buildToolset({}).map((tl) => tl.name)).toContain('auto_screenshot');
+    expect(buildToolset({ planMode: true }).map((tl) => tl.name)).toContain('auto_screenshot');
+    expect(buildToolset({ disabledPlugins: ['auto-screenshot'] }).map((tl) => tl.name)).not.toContain('auto_screenshot');
+  });
 });
 
 describe('MCP tool names', () => {

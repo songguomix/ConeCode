@@ -63,7 +63,7 @@ The prompt must preserve the user's intent and explicitly cover:
 5. Recommended architecture and technology choices with concise rationale; respect any technology the user specified.
 6. Unspecified requirements: distinguish assumptions from confirmed requirements, choose conservative reversible defaults, and list genuinely blocking questions. Do not invent credentials, integrations, paid subscriptions, or user approvals.
 7. Ordered implementation steps from an empty folder, including setup and dependency configuration.
-8. Observable acceptance criteria and meaningful tests for core flows and edge cases; require actually running the build/tests and reporting failures honestly.
+8. Observable acceptance criteria and meaningful tests for core flows and edge cases; require strong verification — actually running typecheck/build/tests, reporting failures honestly, and for UI changes calling \`auto_screenshot\` to visually inspect all modified locations.
 9. Deliverables: README.md is mandatory — complete installation/run/test commands, project purpose, and remaining limitations. Never leave placeholder sections.
 Instruct the implementation agent to work in the new project directory provided at execution time, preserve existing user files, honor the user's approval settings, and ask only about genuinely blocking decisions. Do not authorize external publishing, spending, or disabling safety controls. Return a complete prompt, not a summary or placeholder.`;
 

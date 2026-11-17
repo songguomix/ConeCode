@@ -321,4 +321,10 @@ describe('workspace context', () => {
     expect(context).toContain('Workspace: No folder opened');
     expect(context).toContain('Open file: None');
   });
+
+  it('requires screenshot verification and scrap-and-redo for poor UI results', async () => {
+    const p = await prompt();
+    expect(p).toContain('inspect a screenshot');
+    expect(p).toContain('scrap and redo it cleanly');
+  });
 });

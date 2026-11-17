@@ -8,26 +8,208 @@ html.computer-preview-document #root {
   background: transparent !important;
 }
 .computer-preview-surface {
+  position: relative;
   width: 100%;
   height: 100dvh;
   overflow: hidden;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   background: transparent;
   user-select: none;
   -webkit-app-region: drag;
+  font: 12px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
-.computer-preview-surface img {
+.computer-preview-stage {
+  width: 100%;
+  height: 100%;
+  container-type: size;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.computer-preview-surface[data-manual='true'] {
+  display: flex;
+  flex-direction: column;
+  background: #171717;
+}
+.computer-preview-surface[data-manual='true'] .computer-preview-stage {
+  flex: 1 1 0;
+  min-height: 0;
+}
+.computer-preview-image {
+  position: relative;
+  width: min(100cqw, calc(100cqh * var(--computer-preview-ratio)));
+  aspect-ratio: var(--computer-preview-ratio);
+  background: #171717;
+}
+.computer-preview-image[data-interactive='true'] {
+  cursor: crosshair;
+  -webkit-app-region: no-drag;
+}
+.computer-preview-image[aria-busy='true'][data-interactive='true'] {
+  cursor: progress;
+}
+.computer-preview-image img {
+  position: absolute;
+  inset: 0;
   display: block;
   width: 100%;
   height: 100%;
-  object-fit: contain;
-  background: #171717;
   pointer-events: none;
 }
 .computer-preview-placeholder {
-  color: #aaa69f;
-  font: 12px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #201e1cf0;
+  color: #f8f2eb;
   pointer-events: none;
 }
+.computer-preview-pointer {
+  position: absolute;
+  z-index: 1;
+  width: 0;
+  height: 0;
+  color: #ff9d6c;
+  pointer-events: none;
+  transition: left 180ms cubic-bezier(.2,.7,.2,1), top 180ms cubic-bezier(.2,.7,.2,1);
+}
+.computer-preview-pointer[data-source='manual'] { color: #69e5d0; }
+.computer-preview-arrow {
+  position: absolute;
+  top: -3px;
+  left: -3px;
+  fill: currentColor;
+  stroke: #1b1513;
+  filter: drop-shadow(0 0 1px #fff) drop-shadow(0 1px 2px #000b);
+}
+.computer-preview-pointer[data-phase='pending']::before,
+.computer-preview-pulse {
+  position: absolute;
+  top: -8px;
+  left: -8px;
+  width: 16px;
+  height: 16px;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px #30221dc0;
+}
+.computer-preview-pointer[data-phase='pending']::before {
+  content: '';
+  border-style: dashed;
+}
+.computer-preview-pulse {
+  animation: computer-preview-click 560ms ease-out both;
+}
+@keyframes computer-preview-click {
+  from { opacity: 1; transform: scale(.74); }
+  to { opacity: 0; transform: scale(2.35); }
+}
+.computer-preview-toolbar,
+.computer-preview-text,
+.computer-preview-error {
+  position: absolute;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid #ffffff34;
+  border-radius: 8px;
+  background: #221e1bf5;
+  color: #f8f2eb;
+  box-shadow: 0 2px 8px #0005;
+}
+.computer-preview-toolbar {
+  top: 6px;
+  right: 6px;
+  -webkit-app-region: drag;
+}
+.computer-preview-surface[data-manual='true'] .computer-preview-toolbar {
+  position: relative;
+  inset: auto;
+  order: -1;
+  border-width: 0 0 1px;
+  border-radius: 0;
+  box-shadow: none;
+}
+.computer-preview-surface[data-manual='true'] .computer-preview-drag {
+  margin-inline-end: auto;
+}
+.computer-preview-drag,
+.computer-preview-toolbar button,
+.computer-preview-text button {
+  min-width: 25px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 5px;
+  border: 0;
+  border-radius: 5px;
+  color: inherit;
+  font: inherit;
+}
+.computer-preview-drag {
+  color: #c5b9af;
+  -webkit-app-region: drag;
+}
+.computer-preview-drag svg { pointer-events: none; }
+.computer-preview-toolbar button,
+.computer-preview-text button {
+  background: transparent;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+.computer-preview-toolbar button:not(:disabled):hover,
+.computer-preview-text button:not(:disabled):hover {
+  background: #ffffff20;
+}
+.computer-preview-toolbar button[aria-pressed='true'],
+.computer-preview-toolbar button[aria-pressed='true']:hover {
+  background: #395f56;
+  color: #e4fff6;
+}
+.computer-preview-toolbar button:disabled,
+.computer-preview-text button:disabled {
+  opacity: .46;
+  cursor: default;
+}
+.computer-preview-toolbar button:focus-visible,
+.computer-preview-text :is(input, button):focus-visible {
+  outline: 1px solid #9fe8d8;
+  outline-offset: -1px;
+}
+.computer-preview-text {
+  position: relative;
+  padding: 4px 7px;
+  border-width: 1px 0 0;
+  border-radius: 0;
+  box-shadow: none;
+  -webkit-app-region: no-drag;
+}
+.computer-preview-text input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  border-radius: 5px;
+  border: 1px solid #ffffff34;
+  background: #fff1;
+  color: inherit;
+  font: inherit;
+  user-select: text;
+}
+.computer-preview-text input::placeholder { color: #bdb3a9; }
+.computer-preview-error {
+  bottom: 6px;
+  left: 6px;
+  right: 6px;
+  display: block;
+  padding: 6px 8px;
+  color: #ffceaa;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .computer-preview-pointer { transition: none; }
+  .computer-preview-pulse { animation: computer-preview-click-reduced 560ms step-end both; }
+}
+@keyframes computer-preview-click-reduced { from { opacity: 1; } to { opacity: 0; } }

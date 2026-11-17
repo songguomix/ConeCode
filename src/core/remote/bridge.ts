@@ -20,7 +20,7 @@ import { remoteQuestion } from './questionScope';
 import { requestRsiAction } from './rsiControl';
 import { useUIStore } from '../../stores/ui.store';
 import { activateWorkspaceView } from '../workspace/activateView';
-import { isChatConversation, isRsiConversation } from '../workspace/conversations';
+import { isChatConversation, isRsiConversation, isUnarchivedConversation } from '../workspace/conversations';
 import { rsiCanStart } from '../agents/rsiStart';
 import { useComputerStore } from '../../stores/computer.store';
 
@@ -77,7 +77,7 @@ function buildSnapshot() {
     models,
     runningConversationId: runningIds[0] ?? null,
     runningConversationIds: runningIds,
-    conversations: chat.conversations.map((c) => ({
+    conversations: chat.conversations.filter(isUnarchivedConversation).map((c) => ({
       id: c.id,
       title: c.title,
       viewMode: isRsiConversation(c) ? 'rsi' : isChatConversation(c) ? 'chat' : 'work',
@@ -169,8 +169,7 @@ function structuralSig(): string {
   return [
     chat.activeConversationId,
     Object.keys(chat.streamingRuns).join(','),
-    chat.conversations.length,
-    chat.conversations.map((c) => `${c.id}:${c.title}:${c.updatedAt}`).join(','),
+    chat.conversations.filter(isUnarchivedConversation).map((c) => `${c.id}:${c.title}:${c.updatedAt}`).join(','),
     chat.messages.length,
     lastMsg ? `${lastMsg.id}:${lastMsg.content.length}:${lastMsg.reasoning_content?.length || 0}:${lastMsg.toolCalls?.length || 0}:${lastMsg.isToolResult ? 1 : 0}:${lastMsg.toolName || ''}` : '',
     (chat.activeConversationId ? chat.streamingRuns[chat.activeConversationId]?.toolName : '') || '',

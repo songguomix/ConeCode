@@ -34,8 +34,17 @@ export function normalizeTokenUsage(result: unknown): TokenUsage {
   const completionTokens = count(usage.completion_tokens) ?? count(usage.output_tokens)
     ?? count(usage.candidatesTokenCount) ?? 0;
   const tokens = count(usage.total_tokens) ?? count(usage.totalTokenCount) ?? promptTokens + completionTokens;
-  const reportedHit = directHit ?? count(record(usage.prompt_tokens_details).cached_tokens)
-    ?? anthropicRead ?? count(usage.cachedContentTokenCount);
+  const promptDetails = record(usage.prompt_tokens_details);
+  const inputDetails = record(usage.input_tokens_details);
+  const reportedHit = directHit
+    ?? count(promptDetails.cached_tokens)
+    ?? count(promptDetails.cache_read_input_tokens)
+    ?? count(inputDetails.cached_tokens)
+    ?? anthropicRead
+    ?? count(usage.cachedContentTokenCount)
+    ?? count(usage.cached_tokens)
+    ?? count(usage.cache_hit_tokens)
+    ?? count(usage.cache_read_tokens);
   // Missing or inconsistent counters do not mean a 0% hit rate.
   const cacheHitTokens = reportedHit !== undefined && promptTokens > 0 && reportedHit <= promptTokens
     ? reportedHit

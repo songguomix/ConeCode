@@ -4,7 +4,7 @@ import { DshMarketService } from './dsh-market/market-service';
 import { registerDshMarketIpc } from './dsh-market/ipc';
 import { registerUpdateIpc } from './updates/ipc';
 import { isDshChatServer } from '../src/core/dsh-market/naming';
-import { app, BrowserWindow, ipcMain, dialog, Menu, clipboard, shell, Notification, powerSaveBlocker, desktopCapturer, screen, systemPreferences, globalShortcut, nativeImage, safeStorage } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, Menu, clipboard, shell, Notification, powerSaveBlocker, desktopCapturer, screen, systemPreferences, globalShortcut, nativeImage, safeStorage, net } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import { exec, spawn, execSync } from 'child_process';
@@ -12,8 +12,8 @@ import os from 'os';
 import { providerRepo } from '../src/core/storage/repositories/provider.repo';
 import { modelRepo } from '../src/core/storage/repositories/model.repo';
 import { conversationRepo, messageRepo } from '../src/core/storage/repositories/conversation.repo';
-import { providerRegistry } from '../src/core/providers/registry';
-import { FREE_PROVIDER, FREE_PROVIDER_ID, freeStatus } from '../src/core/providers/free.adapter';
+import { ProviderRegistry } from '../src/core/providers/registry';
+import { FreeAdapter, FREE_PROVIDER, FREE_PROVIDER_ID } from '../src/core/providers/free.adapter';
 import { applyRecordedUsage, applyServerResetTo, hydrateRecords } from '../src/core/providers/freeUsage';
 import { terminalShell, TerminalTextStream } from './terminal';
 import { readJSON, writeJSON } from '../src/core/storage/database';
@@ -43,11 +43,18 @@ import { computerController } from './computer/controller';
 import { ComputerPreviewWindow } from './computer/preview-window';
 import type { ProviderConfig } from '../src/types';
 
+// The official relay follows the desktop system proxy and PAC settings.
+const providerRegistry = new ProviderRegistry((url, init) =>
+  net.fetch(url, { ...init, bypassCustomProtocolHandlers: true }),
+);
+
 let mainWindow: BrowserWindow | null = null;
 const computerPreview = new ComputerPreviewWindow({
   createWindow: (options) => new BrowserWindow(options),
   getMainWindow: () => mainWindow,
   getStatus: () => computerController.status(),
+  act: (req) => computerController.act(req),
+  screenshot: (revision) => computerController.screenshot(revision),
   getWorkArea: () => screen.getDisplayMatching(mainWindow?.getBounds() ?? screen.getPrimaryDisplay().bounds).workArea,
   preloadPath: path.join(__dirname, 'computer-preview-preload.js'),
   indexFile: path.join(__dirname, '../dist/index.html'),
@@ -1000,7 +1007,10 @@ function registerIPC() {
   });
 
   ipcMain.handle('provider:list', () => [FREE_PROVIDER, ...providerRepo.findAll().filter((p) => p.id !== FREE_PROVIDER_ID && p.type !== 'conecode-free')]);
-  ipcMain.handle('free:status', () => freeStatus());
+  ipcMain.handle('free:status', () => {
+    const adapter = providerRegistry.getAdapter(FREE_PROVIDER_ID) as FreeAdapter;
+    return adapter.loadCatalog();
+  });
 
   // Durable free-usage store (userData/data/freeUsage.json). The weekly gifted
   // quota must survive restarts — renderer localStorage (leveldb) loses
@@ -1133,6 +1143,7 @@ function registerIPC() {
   ipcMain.handle('conversation:list', () => conversationRepo.findAll());
   ipcMain.handle('conversation:create', (_, data) => conversationRepo.create(data));
   ipcMain.handle('conversation:update', (_, id, data) => conversationRepo.update(id, data));
+  ipcMain.handle('conversation:setArchived', (_, id, archived) => conversationRepo.setArchived(id, archived));
   ipcMain.handle('conversation:delete', (_, id) => conversationRepo.delete(id));
 
   ipcMain.handle('message:list', (_, convId) => messageRepo.findByConversation(convId));
@@ -1196,7 +1207,7 @@ function registerIPC() {
     try {
       const result = await adapter.streamMessage(
         { model: modelId, messages, signal: controller.signal, reasoningEffort, maxTokens, tools, toolChoice,
-          conversationId: !silent && emitChunks !== false && typeof conversationId === 'string' ? conversationId : undefined },
+          conversationId: typeof conversationId === 'string' && conversationId ? conversationId : undefined },
         onChunk,
         controller.signal
       );
@@ -2138,17 +2149,9 @@ function registerIPC() {
     computerPreview.assertMain(event);
     return computerPreview.capture(() => computerController.screenshot(expectedRevision));
   });
-  ipcMain.handle('computer:act', async (event, req: any) => {
+  ipcMain.handle('computer:act', (event, req) => {
     computerPreview.assertMain(event);
-    computerPreview.beginOperation();
-    try {
-      const result = await computerController.act(req);
-      computerPreview.endAction(req, result);
-      return result;
-    } catch (error) {
-      computerPreview.endAction(req, { ok: false, message: String(error) });
-      throw error;
-    }
+    return computerPreview.runAction(req);
   });
   ipcMain.handle('computer:panic', async (event) => {
     computerPreview.assertMain(event);
@@ -2293,5 +2296,92 @@ function registerIPC() {
     } catch {
       return { ok: false };
     }
+  });
+
+  // ---- Official Auto-Screenshot Plugin ------------------------------------
+  // Captures the ConeCode app window, active preview webview, or full display
+  // so the agent can visually inspect all modified UI locations right after edits.
+  ipcMain.handle('auto-screenshot:capture', async (_event, opts?: {
+    target?: 'auto' | 'window' | 'preview' | 'screen';
+    delayMs?: number;
+    saveToDisk?: boolean;
+    label?: string;
+  }) => {
+    const requestedTarget = opts?.target || 'auto';
+    const delayMs = Math.max(0, Math.min(3000, Number(opts?.delayMs ?? 0)));
+    if (delayMs > 0) await delay(delayMs);
+
+    let capture: ScreenCapture | null = null;
+    let resolvedTarget: 'window' | 'preview' | 'screen' = 'window';
+
+    const captureWebContents = async (wc: Electron.WebContents): Promise<ScreenCapture | null> => {
+      try {
+        const image = await wc.capturePage();
+        if (image.isEmpty()) return null;
+        const size = image.getSize();
+        if (!size.width || !size.height) return null;
+        return { dataUrl: image.toDataURL(), width: size.width, height: size.height };
+      } catch {
+        return null;
+      }
+    };
+
+    if (requestedTarget === 'preview') {
+      const { webContents } = await import('electron');
+      const webview = webContents.getAllWebContents().find((wc) => wc.getType() === 'webview' && !wc.isDestroyed());
+      if (webview) {
+        capture = await captureWebContents(webview);
+        resolvedTarget = 'preview';
+      }
+    }
+
+    if (!capture && (requestedTarget === 'window' || requestedTarget === 'auto' || requestedTarget === 'preview')) {
+      if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
+        capture = await captureWebContents(mainWindow.webContents);
+        resolvedTarget = 'window';
+      }
+    }
+
+    if (!capture && (requestedTarget === 'screen' || requestedTarget === 'auto')) {
+      const screenCap = await captureScreenOnce();
+      if ('error' in screenCap) {
+        return { ok: false, error: screenCap.error, needsPermission: screenCap.needsPermission };
+      }
+      capture = screenCap;
+      resolvedTarget = 'screen';
+    }
+
+    if (!capture) {
+      return { ok: false, error: 'Unable to capture screenshot for target: ' + requestedTarget };
+    }
+
+    const timestamp = Date.now();
+    let savedPath: string | undefined;
+    if (opts?.saveToDisk) {
+      try {
+        const dir = path.join(app.getPath('userData'), 'auto-screenshots');
+        fs.mkdirSync(dir, { recursive: true });
+        const safeLabel = (opts.label || resolvedTarget)
+          .toLowerCase()
+          .replace(/[^a-z0-9_-]+/g, '-')
+          .replace(/^-+|-+$/g, '')
+          .slice(0, 40) || 'shot';
+        savedPath = path.join(dir, `${timestamp}-${safeLabel}.png`);
+        const base64 = capture.dataUrl.split(',')[1] || '';
+        fs.writeFileSync(savedPath, Buffer.from(base64, 'base64'));
+      } catch {
+        savedPath = undefined;
+      }
+    }
+
+    return {
+      ok: true,
+      dataUrl: capture.dataUrl,
+      width: capture.width,
+      height: capture.height,
+      target: resolvedTarget,
+      timestamp,
+      ...(savedPath ? { savedPath } : {}),
+    };
   });
 }

@@ -147,6 +147,13 @@ describe('isBlankConversation', () => {
 });
 
 describe('pickReusableConversation', () => {
+  it('excludes archived blank conversations from reuse', () => {
+    const archived = blank('archived', null, 99, { archivedAt: 100 });
+    const available = blank('available', null, 1);
+    expect(pickReusableConversation([archived, available], 'chat', null, null, 0, {})?.id).toBe(available.id);
+    expect(pickReusableConversation([archived], 'chat', null, null, 0, {})).toBeNull();
+  });
+
   it('prefers the active blank conversation', () => {
     const active = blank('active', null, 1);
     const older = blank('older', null, 99);

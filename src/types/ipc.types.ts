@@ -192,7 +192,7 @@ export interface ChatStreamParams {
  */
 export interface ElectronAPI {
   free: {
-    status: () => Promise<import('../core/providers/free.adapter').FreeStatus>;
+    status: () => Promise<import('../core/providers/free.adapter').FreeCatalog>;
     // Durable weekly-usage store (main-process file). Optional so older test
     // stubs that only mock `status` still satisfy the shape.
     usageGet?: () => Promise<import('../core/providers/freeUsage').FreeWeeklyUsageRecord | null>;
@@ -230,6 +230,7 @@ export interface ElectronAPI {
     list: () => Promise<Conversation[]>;
     create: (data: any) => Promise<Conversation>;
     update: (id: string, data: any) => Promise<void>;
+    setArchived: (id: string, archived: boolean) => Promise<Conversation | null>;
     delete: (id: string) => Promise<boolean>;
   };
   message: {
@@ -482,6 +483,17 @@ export interface ElectronAPI {
     openSettings: () => Promise<{ ok: boolean }>;
     relaunch: () => Promise<{ ok: boolean }>;
     onTrigger: (callback: () => void) => () => void;
+  };
+  autoScreenshot?: {
+    capture: (opts?: {
+      target?: 'auto' | 'window' | 'preview' | 'screen';
+      delayMs?: number;
+      saveToDisk?: boolean;
+      label?: string;
+    }) => Promise<
+      | { ok: true; dataUrl: string; width: number; height: number; target: 'window' | 'preview' | 'screen'; timestamp: number; savedPath?: string }
+      | { ok: false; error: string; needsPermission?: string }
+    >;
   };
   terminal: {
     spawn: (id: string, cwd?: string) => Promise<boolean>;

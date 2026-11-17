@@ -48,6 +48,16 @@ describe('searchFiles', () => {
     expect(res.matches.map((m) => m.line)).toEqual([1, 2]);
   });
 
+  it('matches regex anchors against interior lines', async () => {
+    const root = makeTree('regex-anchors');
+    const file = path.join(root, 'a.txt');
+    fs.writeFileSync(file, 'header\nneedle\nfooter');
+
+    const res = await searchFiles({ root, query: '^needle$', isRegex: true });
+
+    expect(res.matches).toEqual([{ file, line: 2, text: 'needle' }]);
+  });
+
   it('rejects a broken regex instead of reporting "no matches"', async () => {
     const root = makeTree('badregex');
     fs.writeFileSync(path.join(root, 'a.txt'), 'foo[\n');

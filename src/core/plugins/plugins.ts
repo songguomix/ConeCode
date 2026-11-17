@@ -13,7 +13,7 @@
 export type PluginKind = 'builtin' | 'market' | 'custom';
 
 /** Which dedicated view a plugin opens. `skill` = generic run/recent-runs. */
-export type PluginView = 'sync' | 'perf' | 'security' | 'skill' | 'image-gen';
+export type PluginView = 'sync' | 'perf' | 'security' | 'skill' | 'image-gen' | 'auto-screenshot';
 
 export interface PluginDef {
   id: string;
@@ -22,7 +22,7 @@ export interface PluginDef {
   description: string;
   kind: PluginKind;
   /** Icon key rendered by the library (react-icons live in the view layer). */
-  icon: 'github' | 'activity' | 'shield' | 'list' | 'commit' | 'map' | 'box' | 'image';
+  icon: 'github' | 'activity' | 'shield' | 'list' | 'commit' | 'map' | 'box' | 'image' | 'camera';
   skillId?: string;
   view?: PluginView;
 }
@@ -89,6 +89,14 @@ export const BUILTIN_PLUGINS: PluginDef[] = [
     kind: 'builtin',
     icon: 'image',
     view: 'image-gen',
+  },
+  {
+    id: 'auto-screenshot',
+    name: '自动截图',
+    description: '修改界面或页面后自动调用截图工具，抓取应用窗口、预览页或屏幕供模型观察验证。',
+    kind: 'builtin',
+    icon: 'camera',
+    view: 'auto-screenshot',
   },
 ];
 

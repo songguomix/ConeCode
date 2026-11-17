@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { ReactNode } from 'react';
-import { FiPlus, FiSettings, FiTrash2, FiGlobe, FiEdit3, FiMenu, FiTerminal, FiFileText, FiSmartphone, FiMonitor, FiCpu, FiGrid, FiShield, FiGitBranch, FiLoader, FiMessageSquare, FiBriefcase, FiChevronDown, FiChevronRight, FiClock, FiShare2, FiX, FiZap, FiPackage, FiFolder } from 'react-icons/fi';
+import { FiPlus, FiSettings, FiTrash2, FiGlobe, FiEdit3, FiMenu, FiTerminal, FiFileText, FiSmartphone, FiMonitor, FiCpu, FiGrid, FiShield, FiGitBranch, FiLoader, FiMessageSquare, FiBriefcase, FiChevronDown, FiChevronRight, FiClock, FiShare2, FiX, FiZap, FiPackage, FiFolder, FiArchive, FiCornerUpLeft } from 'react-icons/fi';
 import { useChatStore, useUIStore, useLanguageStore, usePreviewStore, useComputerStore, useModelStore, useCodeChangesStore, useWorkspaceStore, useAiHighlightsStore, useSettingsStore, LOCALES, type Locale } from '../../stores';
 import { useBackgroundStore } from '../../stores/background.store';
 import { useDshMarketStore } from '../../stores/dshMarket.store';
-import { groupConversationsByFolder, groupOpenProjectConversations, isChatConversation, isWorkConversation, isRsiConversation } from '../../core/workspace/conversations';
+import { folderDisplayName, groupConversationsByFolder, groupOpenProjectConversations, isChatConversation, isWorkConversation, isRsiConversation, isUnarchivedConversation } from '../../core/workspace/conversations';
 import { rootLabel } from '../../core/workspace/roots';
 import { activateWorkspaceView } from '../../core/workspace/activateView';
 import HandoffPanel from '../handoff/HandoffPanel';
@@ -73,6 +73,8 @@ export default function Sidebar() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState('');
   const [handoffOpen, setHandoffOpen] = useState(false);
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const [archiveError, setArchiveError] = useState(false);
   // Collapsed group keys. Default expanded — Codex shows the chats under each
   // mother folder without requiring a click first.
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => new Set());
@@ -88,6 +90,7 @@ export default function Sidebar() {
   );
   const setActiveConversation = useChatStore((s) => s.setActiveConversation);
   const closeFolderGroup = useChatStore((s) => s.closeFolderGroup);
+  const setConversationArchived = useChatStore((s) => s.setConversationArchived);
   const deleteConversation = useChatStore((s) => s.deleteConversation);
   const renameConversation = useChatStore((s) => s.renameConversation);
   const newConversation = useChatStore((s) => s.newConversation);
@@ -131,24 +134,33 @@ export default function Sidebar() {
     () => [rootPath, ...extraRoots.map((r) => r.path)].filter((p): p is string => !!p),
     [rootPath, extraRoots],
   );
+  const unarchivedConversations = useMemo(
+    () => conversations.filter(isUnarchivedConversation),
+    [conversations],
+  );
+  const archivedConversations = useMemo(
+    () => conversations.filter((c) => !isUnarchivedConversation(c))
+      .sort((a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0)),
+    [conversations],
+  );
 
   // Conversations are strictly isolated by mode:
   // - Chat mode only shows chat-mode/unbound conversations.
   // - Work mode only shows workspace-bound normal work conversations grouped by folder.
   // - RSI mode shows workspace-bound RSI recursive improvement conversations grouped by folder.
   const chatConversations = useMemo(
-    () => conversations.filter(isChatConversation),
-    [conversations],
+    () => unarchivedConversations.filter(isChatConversation),
+    [unarchivedConversations],
   );
 
   const workConversations = useMemo(
-    () => conversations.filter(isWorkConversation),
-    [conversations],
+    () => unarchivedConversations.filter(isWorkConversation),
+    [unarchivedConversations],
   );
 
   const rsiConversations = useMemo(
-    () => conversations.filter(isRsiConversation),
-    [conversations],
+    () => unarchivedConversations.filter(isRsiConversation),
+    [unarchivedConversations],
   );
 
   const workGroups = useMemo(
@@ -304,10 +316,30 @@ export default function Sidebar() {
     closeRoot(path);
   };
 
+  const handleSetArchived = async (id: string, archived: boolean) => {
+    setArchiveError(false);
+    try {
+      await setConversationArchived(id, archived);
+    } catch {
+      setArchiveError(true);
+    }
+  };
+
   const renderConvRow = (conv: typeof conversations[number], isWork = false, isRsi = false) => {
+    const isArchived = !isUnarchivedConversation(conv);
+    const archiveAction = t(isArchived ? 'restoreConversation' : 'archiveConversation');
     const isRunning = runningConversationIds.includes(conv.id) || (isRsi && conv.rsi?.status === 'running');
     const isCompleted = isRsi && conv.rsi?.status === 'completed';
     const isFailed = isRsi && conv.rsi?.status === 'failed';
+    const openConversation = () => {
+      if (editingId === conv.id) return;
+      if (isWork && !isRsi && !isArchived) {
+        if (projectBusy) return;
+        void handleProjectChat(async () => { await setActiveConversation(conv.id); return conv.id; });
+      } else {
+        void setActiveConversation(conv.id);
+      }
+    };
 
     const dotClass = isRunning
       ? 'bg-[var(--accent)] animate-pulse'
@@ -326,23 +358,9 @@ export default function Sidebar() {
         onKeyDown={(e) => {
           if (e.target !== e.currentTarget || editingId === conv.id || (e.key !== 'Enter' && e.key !== ' ')) return;
           e.preventDefault();
-          if (isWork && !isRsi && projectBusy) return;
-          if (isWork && !isRsi) {
-            void handleProjectChat(async () => { await setActiveConversation(conv.id); return conv.id; });
-          } else {
-            void setActiveConversation(conv.id);
-          }
+          openConversation();
         }}
-        onClick={() => {
-          if (isWork && !isRsi && projectBusy) return;
-          if (editingId !== conv.id) {
-            if (isWork && !isRsi) {
-              void handleProjectChat(async () => { await setActiveConversation(conv.id); return conv.id; });
-            } else {
-              void setActiveConversation(conv.id);
-            }
-          }
-        }}
+        onClick={openConversation}
         className={`group flex items-center gap-2 px-2.5 py-1.5 rounded-lg cursor-pointer text-[13px] transition-all min-w-0 ${
           activeConversationId === conv.id
             ? 'bg-[var(--accent-soft)] text-[var(--text-primary)] font-medium border border-[var(--accent-border)]'
@@ -383,7 +401,11 @@ export default function Sidebar() {
                 </span>
               )}
             </div>
-            {isWork && !isRsi && changedFileNames(conv.id).length > 0 && (
+            {isArchived && conv.rootPath ? (
+              <div className="mt-0.5 truncate text-[10px] font-normal text-[var(--text-muted)]" title={conv.rootPath}>
+                {folderDisplayName(conv.rootPath)}
+              </div>
+            ) : isWork && !isRsi && changedFileNames(conv.id).length > 0 && (
               <div className="mt-0.5 truncate text-[10px] font-normal text-[var(--text-muted)]">
                 {changedFileNames(conv.id).join(', ')}
               </div>
@@ -395,6 +417,14 @@ export default function Sidebar() {
             className="p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-4)] cursor-pointer transition-colors"
             title={t('rename')}>
             <FiEdit3 size={12} />
+          </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); void handleSetArchived(conv.id, !isArchived); }}
+            className="p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-4)] cursor-pointer transition-colors"
+            aria-label={`${archiveAction} · ${conv.title}`}
+            title={archiveAction}
+          >
+            {isArchived ? <FiCornerUpLeft size={12} /> : <FiArchive size={12} />}
           </button>
           <button onClick={(e) => { e.stopPropagation(); void deleteConversation(conv.id); }}
             className="p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--error)] hover:bg-[var(--bg-4)] cursor-pointer transition-colors"
@@ -528,6 +558,30 @@ export default function Sidebar() {
               </button>
             )}
           </div>
+
+          {archiveError && (
+            <div role="alert" className="px-2 py-1.5 text-xs text-[var(--error)]">{t('conversationArchiveFailed')}</div>
+          )}
+          {archivedConversations.length > 0 && (
+            <div className="mb-1">
+              <button
+                className="w-full flex items-center gap-1.5 px-2 py-1.5 text-left text-[11px] font-medium text-[var(--text-muted)] rounded-lg hover:text-[var(--text-primary)] hover:bg-[var(--glass-card)]"
+                aria-expanded={archiveOpen}
+                aria-controls="sidebar-conversation-archive"
+                onClick={() => setArchiveOpen(!archiveOpen)}
+              >
+                {archiveOpen ? <FiChevronDown size={11} /> : <FiChevronRight size={11} />}
+                <FiArchive size={12} />
+                <span className="truncate">{t('archivedConversations')}</span>
+                <span className="ml-auto">{archivedConversations.length}</span>
+              </button>
+              {archiveOpen && (
+                <div id="sidebar-conversation-archive" className="space-y-0.5 ml-3 pl-2 border-l border-[var(--border)]">
+                  {archivedConversations.map((conv) => renderConvRow(conv, isWorkConversation(conv), isRsiConversation(conv)))}
+                </div>
+              )}
+            </div>
+          )}
 
           {agentMode === 'rsi' ? (
             <div className="space-y-2.5 mt-1">

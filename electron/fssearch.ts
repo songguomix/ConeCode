@@ -31,16 +31,6 @@ const IGNORED_DIR_NAMES = new Set([
   'target', '.pytest_cache', '.turbo', '.parcel-cache',
 ]);
 
-/** True when the child directory is a repository/checkout of its own. */
-async function isNestedCheckout(dir: string): Promise<boolean> {
-  try {
-    await fs.promises.access(path.join(dir, '.git'));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /** Reject values the walk cannot honour, with a model-correctable message. */
 async function assertSearchRoot(root: string): Promise<void> {
   if (!root || !root.trim()) {
@@ -74,12 +64,14 @@ async function walkFiles(
     } catch {
       return; // Unreadable directory (permissions, race) — skip it.
     }
+    // Check for nested checkouts using the already-read directory entries
+    // instead of issuing an extra fs.promises.access(dir/.git) syscall per subdirectory.
+    if (dir !== root && entries.some((e) => e.name === '.git')) return;
     for (const entry of entries) {
       if (stopped) return;
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         if (IGNORED_DIR_NAMES.has(entry.name)) continue;
-        if (await isNestedCheckout(full)) continue;
         await walk(full);
       } else if (entry.isFile()) {
         if ((await visit(full, entry.name)) === true) {
@@ -137,6 +129,9 @@ export async function searchFiles(opts: SearchFilesOptions): Promise<SearchScanR
       return;
     }
     if (content.includes('\u0000')) return; // Binary — not searchable text.
+    // Literal searches can skip unmatched files before splitting into lines.
+    // Regex anchors and lookarounds must keep their per-line semantics.
+    if (!re && !content.toLowerCase().includes(needle)) return;
     const lines = content.split('\n');
     for (let i = 0; i < lines.length; i++) {
       const hit = re ? re.test(lines[i]) : lines[i].toLowerCase().includes(needle);

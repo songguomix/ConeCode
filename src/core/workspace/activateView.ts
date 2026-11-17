@@ -2,7 +2,7 @@ import { useChatStore } from '../../stores/chat.store';
 import { useUIStore } from '../../stores/ui.store';
 import { useModelStore } from '../../stores/model.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
-import { isChatConversation, isWorkConversation } from './conversations';
+import { isChatConversation, isUnarchivedConversation, isWorkConversation } from './conversations';
 
 export type WorkspaceView = 'chat' | 'work' | 'rsi';
 let navigation: Promise<void> = Promise.resolve();
@@ -17,7 +17,7 @@ export function activateWorkspaceView(view: WorkspaceView): Promise<void> {
     const matches = view === 'chat' ? isChatConversation : isWorkConversation;
     const current = chat.conversations.find((c) => c.id === chat.activeConversationId);
     if (current && matches(current)) return;
-    const existing = chat.conversations.find(matches);
+    const existing = chat.conversations.find((c) => isUnarchivedConversation(c) && matches(c));
     if (existing) { await chat.setActiveConversation(existing.id); return; }
     const model = useModelStore.getState().getSelectedModel();
     const root = useWorkspaceStore.getState().rootPath;

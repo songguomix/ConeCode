@@ -3,7 +3,7 @@ import { memo, useMemo, useState, type ReactNode } from 'react';
 import {
   FiFileText, FiFolder, FiEdit3, FiFilePlus, FiFolderPlus, FiTrash2,
   FiMove, FiCopy, FiTerminal, FiExternalLink, FiInfo, FiHelpCircle, FiCheck,
-  FiSearch, FiList, FiCheckSquare, FiGitBranch, FiGlobe, FiUsers, FiZap, FiDownload, FiPackage, FiImage, FiUploadCloud,
+  FiSearch, FiList, FiCheckSquare, FiGitBranch, FiGlobe, FiUsers, FiZap, FiDownload, FiPackage, FiImage, FiUploadCloud, FiCamera,
 } from 'react-icons/fi';
 import { useLanguageStore } from '../../stores';
 import { highlightCode } from '../editor/highlight';
@@ -116,6 +116,7 @@ function actionMeta(a: AnyAction): { icon: ReactNode; verbKey: string; detail: s
     case 'use_skill': return { icon: <FiPackage size={13} />, verbKey: 'useSkill', detail: a.id || '', mono: true };
     case 'spawn_agent': return { icon: <FiUsers size={13} />, verbKey: 'subAgent', detail: (a.task || '').slice(0, 60) };
     case 'generate_image': return { icon: <FiImage size={13} />, verbKey: 'generateImage', detail: a.prompt || '', tone: 'text-[var(--accent)]' };
+    case 'auto_screenshot': return { icon: <FiCamera size={13} />, verbKey: 'autoScreenshotAction', detail: a.label || a.target || '', tone: 'text-[var(--accent)]' };
     case 'github_release': return { icon: <FiUploadCloud size={13} />, verbKey: 'githubRelease', detail: [a.tag, a.repo].filter(Boolean).join(' · ') };
     default: return { icon: <FiInfo size={13} />, verbKey: a.action, detail: '' };
   }

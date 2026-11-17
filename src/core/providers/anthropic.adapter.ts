@@ -137,11 +137,10 @@ export class AnthropicAdapter extends BaseAdapter {
     if (params.reasoningEffort === 'high') budget = 10000;
     else if (params.reasoningEffort === 'medium') budget = 5000;
 
-    // Older Claude models strip cached thinking blocks if ordinary user text
-    // accompanies tool results. Omit repeated environment metadata on a
-    // pure tool follow-up, while still sending attachments and task context.
+    // Pure tool follow-ups omit repeated environment metadata so the request
+    // ends on the cached tool_result breakpoint and preserves cached thinking.
     const historyEnd = params.messages.findIndex((message) => message.role !== 'system' && message.cacheControl);
-    const toolContinuation = budget > 0 && params.messages[historyEnd]?.role === 'tool'
+    const toolContinuation = params.messages[historyEnd]?.role === 'tool'
       && !params.messages.slice(historyEnd + 1).some((message) => !message.runtimeContext);
     const input = toolContinuation ? params.messages.filter((message) => !message.runtimeContext) : params.messages;
     const messages = this.buildMessages(input, budget > 0);

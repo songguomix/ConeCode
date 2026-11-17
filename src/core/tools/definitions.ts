@@ -593,6 +593,24 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
     },
     promptExample: '{"action": "generate_image", "prompt": "A serene mountain lake at dawn with reflection of snow peaks, cinematic lighting", "aspect_ratio": "16:9"}',
   },
+  {
+    name: 'auto_screenshot',
+    description:
+      'Official auto-screenshot plugin tool. Captures a screenshot of the ConeCode app window, active preview page, or display and attaches it to the conversation so you can visually inspect ALL modified UI/page locations after edits.',
+    parameters: {
+      type: 'object',
+      properties: {
+        target: {
+          type: 'string',
+          description: 'Capture target: "auto" (app window or screen), "window" (ConeCode app window), "preview" (embedded preview webview), or "screen" (full display)',
+          enum: ['auto', 'window', 'preview', 'screen'],
+        },
+        label: str('Short label identifying the modified UI location or view being inspected (e.g. "settings-plugins", "header-bar")'),
+        delay_ms: { type: 'integer', description: 'Optional wait in milliseconds before capturing (0–3000)' },
+      },
+    },
+    promptExample: '{"action": "auto_screenshot", "target": "auto", "label": "settings-plugins"}',
+  },
 ];
 
 /** Tools withheld in Plan Mode (read-only investigation). */
@@ -601,7 +619,7 @@ export const MUTATING_TOOLS = new Set(BUILTIN_TOOLS.filter((tl) => tl.mutating).
 /** Exact Plan Mode allowlist, shared by schema filtering and the executor gate. */
 export const PLAN_MODE_TOOLS = new Set([
   'read_file', 'list_dir', 'search', 'glob', 'system_info', 'perf_snapshot', 'perf_monitor', 'perf_inspect', 'cost_snapshot', 'background_status', 'git_status', 'git_diff',
-  'web_fetch', 'web_search', 'use_skill', 'spawn_agent', 'ask_user', 'generate_image', 'memory_search',
+  'web_fetch', 'web_search', 'use_skill', 'spawn_agent', 'ask_user', 'generate_image', 'auto_screenshot', 'memory_search',
 ]);
 
 // ---------------------------------------------------------------------------
@@ -706,6 +724,7 @@ export function buildToolset(
   } = {},
 ): ToolDefinition[] {
   const isImageGenDisabled = opts.disabledPlugins?.includes('image-gen');
+  const isAutoScreenshotDisabled = opts.disabledPlugins?.includes('auto-screenshot');
 
   if (opts.isChatMode) {
     // In Chat Mode, chat is strictly for conversation and technical Q&A.
@@ -724,7 +743,8 @@ export function buildToolset(
     // Same reasoning for the page tools: with no folder open there is nothing to
     // preview, so they'd be six tools of pure overhead on every request.
     .filter((tl) => !PAGE_TOOLS.has(tl.name) || opts.projectOpen === true)
-    .filter((tl) => tl.name !== 'generate_image' || !isImageGenDisabled);
+    .filter((tl) => tl.name !== 'generate_image' || !isImageGenDisabled)
+    .filter((tl) => tl.name !== 'auto_screenshot' || !isAutoScreenshotDisabled);
   const mcp = new Map<string, ToolDefinition>();
   if (!opts.planMode) {
     for (const tool of opts.mcpTools || []) {

@@ -94,6 +94,10 @@ export default function ChatView() {
   // A folded message whose approval card is still unresolved must stay visible:
   // hiding it left the agent waiting on an approval the user could not reach.
   const changes = useCodeChangesStore((s) => s.changes);
+  const messagesWithChanges = useMemo(
+    () => new Set(changes.map((c) => c.messageId).filter(Boolean) as string[]),
+    [changes],
+  );
   const awaitingApproval = useMemo(
     () => new Set(changes.filter((c) => c.status === 'pending').map((c) => c.messageId).filter(Boolean) as string[]),
     [changes],
@@ -367,7 +371,9 @@ export default function ChatView() {
                 onEdit={onEditMessage}
                 onCancelEdit={onCancelEditMessage}
               />
-              <MessageChanges messageId={msg.id} onReviewCommand={setReviewCommandId} />
+              {messagesWithChanges.has(msg.id) && (
+                <MessageChanges messageId={msg.id} onReviewCommand={setReviewCommandId} />
+              )}
               </>}
             </Fragment>
           );

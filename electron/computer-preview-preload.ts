@@ -10,5 +10,7 @@ const api: ComputerPreviewAPI = {
     ipcRenderer.on('computer-preview:state', listener);
     return () => ipcRenderer.removeListener('computer-preview:state', listener);
   },
+  act: (input) => ipcRenderer.invoke('computer-preview:act', input),
+  refresh: (targetRevision) => ipcRenderer.invoke('computer-preview:refresh', targetRevision),
 };
 contextBridge.exposeInMainWorld('computerPreviewAPI', api);

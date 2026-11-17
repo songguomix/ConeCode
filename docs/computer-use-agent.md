@@ -8,6 +8,14 @@ current approval setting. Switching clears the preview; the next screenshot and
 all pointer coordinates belong to the newly selected window. A moved or resized
 window requires a fresh screenshot.
 
+Open **Floating preview** to follow the agent’s pointer on the captured image.
+The click ring shows where a click was sent. Turn on **Manual control** in the
+preview toolbar to click the image or send text to the selected app. Windows
+also supports right-clicking and scrolling from the preview. After a manual
+action, ConeCode refreshes the image. Use **Refresh screenshot** if the target
+changes size or the image is out of date. On Windows, move the preview if it
+covers the point you want to click in the target app.
+
 On macOS and Windows, the desktop controller captures the target window directly.
 If capture or focus fails, it reports the error instead of using the desktop.
 macOS supports clicking accessible controls and sending keys or text to the

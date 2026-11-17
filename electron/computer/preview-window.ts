@@ -2,14 +2,21 @@ import type { BrowserWindow, BrowserWindowConstructorOptions, IpcMain, IpcMainIn
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { describeAction, validateComputerRequest, type ComputerFrame, type ComputerRequest } from '../../src/core/computer/computer';
-import { COMPUTER_PREVIEW_CHANNELS as CHANNELS, COMPUTER_PREVIEW_HASH, type ComputerPreviewSnapshot, type ComputerPreviewStatus, type ComputerPreviewAppearance } from '../../src/core/computer/preview';
+import { describeAction, toCapturePoint, toLogicalPoint, validateComputerRequest, type ComputerFrame, type ComputerRequest } from '../../src/core/computer/computer';
+import {
+  COMPUTER_PREVIEW_CHANNELS as CHANNELS, COMPUTER_PREVIEW_HASH,
+  type ComputerPreviewAppearance, type ComputerPreviewCommandResult, type ComputerPreviewPointer,
+  type ComputerPreviewSnapshot, type ComputerPreviewStatus,
+} from '../../src/core/computer/preview';
+import type { ComputerActionResult } from './controller';
 
 interface Options {
   createWindow(options: BrowserWindowConstructorOptions): BrowserWindow;
   getMainWindow(): BrowserWindow | null;
   getStatus(): ComputerPreviewStatus;
   getWorkArea(): Rectangle;
+  act(req: ComputerRequest): Promise<ComputerActionResult>;
+  screenshot(targetRevision?: number): Promise<CaptureResult>;
   preloadPath: string;
   indexFile: string;
   devServerUrl?: string;
@@ -18,17 +25,50 @@ interface Options {
 interface CaptureToken { generation: number; requestSeq: number }
 type CaptureResult = ComputerFrame | { error: string; needsPermission?: 'screenRecording' };
 
-/** Actual computer IPC outcomes, shared in memory with a least-privilege viewer. */
+const windowsPointerActions = new Set<ComputerRequest['action']>([
+  'mouse_move', 'left_click', 'right_click', 'middle_click', 'double_click', 'scroll',
+]);
+
+function previewInput(input: unknown, platform: string): ComputerRequest | null {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
+  const req = input as ComputerRequest;
+  const fields = ['action', 'frameId'];
+  switch (req.action) {
+    case 'type':
+      fields.push('text');
+      break;
+    case 'scroll':
+      if (platform !== 'win32' || typeof req.scroll_amount !== 'number') return null;
+      fields.push('coordinate', 'scroll_direction', 'scroll_amount');
+      break;
+    case 'right_click':
+      if (platform !== 'win32') return null;
+      fields.push('coordinate');
+      break;
+    case 'left_click':
+      fields.push('coordinate');
+      break;
+    default:
+      return null;
+  }
+  if (typeof req.frameId !== 'string' || Object.keys(req).some((field) => !fields.includes(field))) return null;
+  if (fields.includes('coordinate') && !req.coordinate) return null;
+  return validateComputerRequest(req) ? null : req;
+}
+
+/** Scoped input and observed computer state for the isolated preview. */
 export class ComputerPreviewWindow {
   private window: BrowserWindow | null = null;
   private loading?: Promise<void>;
   private generation = 0;
   private captureSeq = 0;
   private activitySeq = 0;
+  private pointerSeq = 0;
+  private aspectRatio = 1.6;
   private state: ComputerPreviewSnapshot = {
     revision: 0, updatedAt: Date.now(),
     status: { platform: process.platform, enabled: false, supported: false, accessibility: false, screenRecording: false, geometry: null, target: null, targetRevision: 0, frameId: null },
-    shot: null, activity: [], inFlight: 0,
+    shot: null, pointer: null, activity: [], inFlight: 0,
   };
 
   constructor(private readonly options: Options) {}
@@ -53,6 +93,8 @@ export class ComputerPreviewWindow {
       catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; }
     });
     ipc.handle(CHANNELS.getState, (event) => { this.assertPreview(event); this.statusChanged(); return this.snapshot(); });
+    ipc.handle(CHANNELS.act, (event, input: unknown) => { this.assertPreview(event); return this.manualAction(input); });
+    ipc.handle(CHANNELS.refresh, (event, revision: unknown) => { this.assertPreview(event); return this.refresh(revision); });
     ipc.handle(CHANNELS.close, (event) => { this.assertMain(event); this.close(); });
     ipc.handle(CHANNELS.getVisibility, (event) => { this.assertMain(event); return this.visibility(); });
   }
@@ -85,6 +127,7 @@ export class ComputerPreviewWindow {
     const geometry = this.state.shot?.geometry ?? this.state.status.geometry;
     const candidateRatio = geometry ? geometry.captureWidth / geometry.captureHeight : 1.6;
     const ratio = Number.isFinite(candidateRatio) && candidateRatio > 0 ? candidateRatio : 1.6;
+    this.aspectRatio = ratio;
     const width = Math.max(1, Math.round(Math.min(390, area.width, area.height * ratio)));
     const height = Math.max(1, Math.round(width / ratio));
     const win = this.options.createWindow({
@@ -157,8 +200,10 @@ export class ComputerPreviewWindow {
     if (forceClear || status.targetRevision !== this.state.status.targetRevision || status.enabled !== this.state.status.enabled) {
       this.generation += 1;
       this.state.shot = null;
+      this.state.pointer = null;
     } else if (this.state.shot && status.frameId !== this.state.shot.frameId) {
       this.state.shot = null;
+      this.state.pointer = null;
     }
     this.state.status = status;
     const main = this.options.getMainWindow();
@@ -169,6 +214,7 @@ export class ComputerPreviewWindow {
   clearShot(): void {
     this.generation += 1;
     this.state.shot = null;
+    this.state.pointer = null;
     this.publish();
   }
 
@@ -206,18 +252,87 @@ export class ComputerPreviewWindow {
       && status.enabled && 'dataUrl' in result && status.frameId === result.frameId
       && status.target?.id === result.target.id && /^data:image\/(?:png|jpe?g|webp);base64,/.test(result.dataUrl);
     if (accepted && 'dataUrl' in result) {
+      const pointer = this.state.pointer;
+      const previous = this.state.shot;
+      const geometry = result.geometry;
+      this.state.pointer = pointer && pointer.frameId === previous?.frameId &&
+        previous.geometry.captureWidth === geometry.captureWidth && previous.geometry.captureHeight === geometry.captureHeight &&
+        previous.geometry.logicalWidth === geometry.logicalWidth && previous.geometry.logicalHeight === geometry.logicalHeight
+        ? { ...pointer, frameId: result.frameId } : null;
       this.state.shot = { ...result, capturedAt: Date.now() };
-      const area = this.options.getWorkArea();
-      const ratio = result.geometry.captureWidth / result.geometry.captureHeight;
-      const width = Math.max(1, Math.round(Math.min(390, area.width, area.height * ratio)));
       const win = this.window;
-      if (win && !win.isDestroyed()) {
+      const ratio = geometry.captureWidth / geometry.captureHeight;
+      if (win && !win.isDestroyed() && ratio !== this.aspectRatio) {
+        const area = this.options.getWorkArea();
+        const width = Math.max(1, Math.round(Math.min(win.getSize()[0], area.width, area.height * ratio)));
+        this.aspectRatio = ratio;
         win.setAspectRatio(ratio);
         win.setSize(width, Math.max(1, Math.round(width / ratio)));
       }
     }
     this.statusChanged();
     return accepted;
+  }
+
+  async runAction(req: ComputerRequest, source: ComputerPreviewPointer['source'] = 'agent'): Promise<ComputerActionResult> {
+    const shot = this.state.shot;
+    const status = this.options.getStatus();
+    const hasPointer = status.platform === 'darwin' ? req?.action === 'left_click' :
+      status.platform === 'win32' && windowsPointerActions.has(req?.action);
+    let pointer: ComputerPreviewPointer | undefined;
+    if (hasPointer && !this.state.inFlight && status.enabled && status.accessibility && shot && status.frameId === shot.frameId &&
+        req.frameId === shot.frameId && req.coordinate && !validateComputerRequest(req)) {
+      pointer = {
+        id: ++this.pointerSeq, frameId: shot.frameId, action: req.action, phase: 'pending', source,
+        coordinate: toCapturePoint(toLogicalPoint(req.coordinate, shot.geometry), shot.geometry),
+      };
+      this.state.pointer = pointer;
+    }
+    this.beginOperation();
+    let result: ComputerActionResult;
+    try {
+      result = await this.options.act(req);
+    } catch (error) {
+      result = { ok: false, message: error instanceof Error ? error.message : String(error) };
+    }
+    if (pointer && this.state.pointer?.id === pointer.id) {
+      this.state.pointer = result.ok ? { ...pointer, phase: 'sent' } : null;
+    }
+    this.endAction(req, result);
+    return result;
+  }
+
+  private async manualAction(input: unknown): Promise<ComputerPreviewCommandResult> {
+    const status = this.options.getStatus();
+    const shot = this.state.shot;
+    if (!status.enabled || !status.target) return { ok: false, message: 'Enable Computer Use and select an app window first.' };
+    if (this.state.inFlight) return { ok: false, message: 'Another computer action is in progress.' };
+    const req = previewInput(input, status.platform);
+    if (!req) return { ok: false, message: 'This input is unavailable in the preview.' };
+    if (!shot || req.frameId !== shot.frameId || status.frameId !== shot.frameId || status.target.id !== shot.target.id) {
+      return { ok: false, message: 'The preview frame changed. Refresh it before acting.' };
+    }
+    if (req.coordinate && (req.coordinate[0] >= shot.geometry.captureWidth || req.coordinate[1] >= shot.geometry.captureHeight)) {
+      return { ok: false, message: 'Choose a point inside the preview image.' };
+    }
+    const { ok, message } = await this.runAction(req, 'manual');
+    if (!ok) return { ok, message };
+    const refreshed = await this.refresh(status.targetRevision);
+    return refreshed.ok ? { ok, message } : { ok, message, warning: refreshed.message };
+  }
+
+  private async refresh(revision: unknown): Promise<ComputerPreviewCommandResult> {
+    const status = this.options.getStatus();
+    if (!status.enabled || !status.target || status.targetRevision !== revision) {
+      return { ok: false, message: 'The selected app changed. Wait for the current target before refreshing.' };
+    }
+    if (this.state.inFlight) return { ok: false, message: 'Another computer action is in progress.' };
+    try {
+      const result = await this.capture(() => this.options.screenshot(status.targetRevision));
+      return 'error' in result ? { ok: false, message: result.error } : { ok: true, message: `Captured ${result.target.name}.` };
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) };
+    }
   }
 
   endAction(req: ComputerRequest, result: { ok: boolean; message: string }): void {

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { useChatStore, resetNativeToolFallback, retryTiming } from './chat.store';
 import { useModelStore } from './model.store';
 import { useSettingsStore } from './settings.store';
@@ -89,6 +89,11 @@ beforeEach(() => {
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
   resetStores();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 const assistantReplies = () =>
@@ -226,7 +231,7 @@ describe('auto-retry on transient stream failures', () => {
     expect(useChatStore.getState().error).toBeTruthy();
   });
 
-  it.each([429, 500, 502, 503, 504])('retries a sanitized free-relay HTTP %s error across the IPC message boundary', async (status) => {
+  it.each([500, 502, 503, 504])('retries a sanitized free-relay HTTP %s error across the IPC message boundary', async (status) => {
     retryTiming.baseMs = 1;
     window.electronAPI.chat.stream = vi.fn(async (params: any) => {
       streamCalls.push(params);
@@ -236,6 +241,82 @@ describe('auto-retry on transient stream failures', () => {
     await useChatStore.getState().sendMessage('hi', 'p1', 'gpt-test');
     expect(streamCalls).toHaveLength(2);
     expect(assistantReplies()[0]?.content).toBe('recovered');
+  });
+
+  it.each([
+    [' [Retry-After-Ms: 45000]', 45000],
+    ['', 30000],
+    [' [Retry-After-Ms: 401]', 401],
+    [' [Retry-After-Ms: invalid]', 30000],
+  ] as const)('waits for the free-relay cooldown across IPC (%s)', async (marker, delay) => {
+    vi.useFakeTimers();
+    retryTiming.baseMs = 1;
+    const callTimes: number[] = [];
+    window.electronAPI.chat.stream = vi.fn(async (params: any) => {
+      streamCalls.push(params);
+      callTimes.push(Date.now());
+      if (streamCalls.length === 1) throw new Error(`Error invoking remote method 'chat:stream': ConeCode Free 请求过于频繁，请稍后重试。 (HTTP 429)${marker}`);
+      return textResponse('recovered after cooldown');
+    });
+
+    const send = useChatStore.getState().sendMessage('hi', 'p1', 'gpt-test');
+    await vi.waitFor(() => expect(useChatStore.getState().streamingRuns.conv1?.retry).toBeTruthy(), { interval: 1 });
+    await vi.advanceTimersByTimeAsync(Math.max(0, delay - 1 - (Date.now() - callTimes[0])));
+    expect(streamCalls).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await send;
+    expect(streamCalls).toHaveLength(2);
+    expect(callTimes[1] - callTimes[0]).toBeGreaterThanOrEqual(delay);
+    expect(assistantReplies()[0]?.content).toBe('recovered after cooldown');
+  });
+
+  it('increases repeated 429 backoff when the relay has no Retry-After', async () => {
+    vi.useFakeTimers();
+    retryTiming.baseMs = 1;
+    const callTimes: number[] = [];
+    window.electronAPI.chat.stream = vi.fn(async (params: any) => {
+      streamCalls.push(params);
+      callTimes.push(Date.now());
+      if (streamCalls.length <= 2) throw new Error('ConeCode Free 请求过于频繁，请稍后重试。 (HTTP 429)');
+      return textResponse('recovered');
+    });
+    const send = useChatStore.getState().sendMessage('hi', 'p1', 'gpt-test');
+    await vi.waitFor(() => expect(useChatStore.getState().streamingRuns.conv1?.retry).toBeTruthy(), { interval: 1 });
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(streamCalls).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(60000);
+    await send;
+    expect(streamCalls).toHaveLength(3);
+    expect(callTimes[1] - callTimes[0]).toBeGreaterThanOrEqual(30000);
+    expect(callTimes[2] - callTimes[1]).toBeGreaterThanOrEqual(60000);
+  });
+
+  it('lets the user stop a long rate-limit wait without another request', async () => {
+    vi.useFakeTimers();
+    window.electronAPI.chat.stream = vi.fn(async (params: any) => {
+      streamCalls.push(params);
+      throw new Error('ConeCode Free 当前并发已满，请稍后重试。 (HTTP 429) [Retry-After-Ms: 120000]');
+    });
+    const send = useChatStore.getState().sendMessage('hi', 'p1', 'gpt-test');
+    await vi.waitFor(() => expect(useChatStore.getState().streamingRuns.conv1?.retry).toBeTruthy(), { interval: 1 });
+    useChatStore.getState().stopGeneration('conv1');
+    await send;
+    await vi.advanceTimersByTimeAsync(120000);
+    expect(streamCalls).toHaveLength(1);
+    expect(useChatStore.getState().isStreaming).toBe(false);
+  });
+
+  it('ends automatic retries for a server cooldown over five minutes instead of retrying early', async () => {
+    vi.useFakeTimers();
+    window.electronAPI.chat.stream = vi.fn(async (params: any) => {
+      streamCalls.push(params);
+      throw new Error('ConeCode Free 上游模型服务限流，请稍后重试。 (HTTP 429) [Retry-After-Ms: 3600000]');
+    });
+    await useChatStore.getState().sendMessage('hi', 'p1', 'gpt-test');
+    expect(streamCalls).toHaveLength(1);
+    expect(useChatStore.getState().error).toContain('Retry-After-Ms: 3600000');
+    expect(useChatStore.getState().continuableConvId).toBe('conv1');
+    expect(useChatStore.getState().isStreaming).toBe(false);
   });
 
   it('falls back to prompt tools when the free relay reports its safe unsupported-tools error', async () => {

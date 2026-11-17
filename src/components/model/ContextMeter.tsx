@@ -26,10 +26,12 @@ export default function ContextMeter() {
 
   const messages = useChatStore((s) => s.messages);
   const activeConversationId = useChatStore((s) => s.activeConversationId);
+  const streamedTokens = useChatStore((s) =>
+    activeConversationId ? s.streamingRuns[activeConversationId]?.streamedTokens : undefined);
   const streamingContent = useChatStore((s) =>
-    activeConversationId ? s.streamingRuns[activeConversationId]?.content ?? '' : '');
+    activeConversationId && streamedTokens === undefined ? s.streamingRuns[activeConversationId]?.content ?? '' : '');
   const streamingReasoningContent = useChatStore((s) =>
-    activeConversationId ? s.streamingRuns[activeConversationId]?.reasoningContent ?? '' : '');
+    activeConversationId && streamedTokens === undefined ? s.streamingRuns[activeConversationId]?.reasoningContent ?? '' : '');
   const selectedModel = useModelStore((s) => s.getSelectedModel());
 
   const { selectedFile, fileContent, selectedFileIsImage, contextFiles } = useWorkspaceStore();
@@ -67,10 +69,8 @@ export default function ContextMeter() {
   }, [autoIncludeFileContext, selectedFile, fileContent, selectedFileIsImage, contextFiles, maxContextFileSize]);
 
   const liveTokens = useMemo(
-    () => estimateTokens(streamingContent) + estimateTokens(streamingReasoningContent),
-    // estimateTokens is O(n) over the accumulated stream — memo so sibling
-    // re-renders (open flag, theme) don't re-scan multi-KB text.
-    [streamingContent, streamingReasoningContent],
+    () => streamedTokens ?? (estimateTokens(streamingContent) + estimateTokens(streamingReasoningContent)),
+    [streamedTokens, streamingContent, streamingReasoningContent],
   );
 
   const convoTokens = messageTokens + liveTokens;

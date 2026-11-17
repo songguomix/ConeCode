@@ -1,5 +1,7 @@
 import { OpenAIAdapter } from './openai.adapter';
-import type { ProviderConfig, SendMessageParams, StreamChunk } from '../../types';
+import type { AIModel, ProviderConfig, SendMessageParams, StreamChunk } from '../../types';
+
+export type FreeFetch = (url: string, options: RequestInit) => Promise<Response>;
 
 export const FREE_PROVIDER_ID = 'conecode-free';
 export const FREE_PROVIDER: ProviderConfig = {
@@ -44,19 +46,53 @@ export {
 const UNAVAILABLE = 'ConeCode Free 暂时不可用，请稍后重试。';
 const DEFAULT_MAX_REQUEST_BYTES = 32 * 1024 * 1024;
 
+interface FreeRateLimitDetails {
+  source?: 'relay' | 'upstream';
+  reason?: 'relay_concurrency' | 'relay_rate_limit' | 'upstream';
+  retryAfterMs?: number;
+}
+
+function retryAfterHeaderMs(value: string | null): number | undefined {
+  if (!value || value.length > 128) return undefined;
+  const trimmed = value.trim();
+  if (/^\d+(?:\.\d+)?$/.test(trimmed)) {
+    return Math.min(Number.MAX_SAFE_INTEGER, Math.ceil(Number(trimmed) * 1000));
+  }
+  if (!/[a-z]/i.test(trimmed)) return undefined;
+  const time = Date.parse(trimmed);
+  return Number.isFinite(time) ? Math.max(0, time - Date.now()) : undefined;
+}
+
+function rateLimitDetails(error: any, headerRetryAfterMs?: number): FreeRateLimitDetails {
+  const source = error?.source === 'relay' || error?.source === 'upstream' ? error.source : undefined;
+  const reason = ['relay_concurrency', 'relay_rate_limit', 'upstream'].includes(error?.reason) ? error.reason : undefined;
+  const bodyRetryAfterMs = Number.isSafeInteger(error?.retryAfterMs) && error.retryAfterMs >= 0 ? error.retryAfterMs : undefined;
+  const delays = [bodyRetryAfterMs, headerRetryAfterMs].filter((delay): delay is number => delay !== undefined);
+  return { source, reason, ...(delays.length ? { retryAfterMs: Math.max(...delays) } : {}) };
+}
+
 // IPC preserves Error.message, but not custom properties. Keep a safe status
 // in the message so the renderer can retry transient errors and downgrade tools.
 // Never display upstream error text, URLs or credentials.
 class FreeRelayError extends Error {
-  constructor(readonly status = 503, readonly code = 'free_unavailable') {
+  constructor(readonly status = 503, readonly code = 'free_unavailable', details: FreeRateLimitDetails = {}) {
+    const rateLimitMessage = details.reason === 'relay_concurrency'
+      ? 'ConeCode Free 当前并发已满，请稍后重试。'
+      : details.reason === 'relay_rate_limit'
+        ? 'ConeCode Free 当前请求频率已达限制，请稍后重试。'
+        : details.source === 'upstream' || details.reason === 'upstream'
+          ? 'ConeCode Free 上游模型服务限流，请稍后重试。'
+          : 'ConeCode Free 请求过于频繁，请稍后重试。';
     const message = code === 'free_tools_unsupported'
       ? 'ConeCode Free: tools are not supported by this model.'
       : status === 413
         ? 'ConeCode Free 请求过大，请缩小图片、减少附件或压缩对话后重试。'
         : status === 429
-          ? 'ConeCode Free 请求过于频繁，请稍后重试。'
+          ? rateLimitMessage
           : UNAVAILABLE;
-    super(`${message} (HTTP ${status})`);
+    const retryMarker = status === 429 && details.retryAfterMs !== undefined
+      ? ` [Retry-After-Ms: ${details.retryAfterMs}]` : '';
+    super(`${message} (HTTP ${status})${retryMarker}`);
     this.name = 'FreeRelayError';
   }
 }
@@ -66,7 +102,7 @@ function safeRelayError(error: unknown, status = 503): FreeRelayError {
   return new FreeRelayError(status);
 }
 
-function responseError(data: any, status = 502): FreeRelayError {
+function responseError(data: any, status = 502, headerRetryAfterMs?: number): FreeRelayError {
   const code = data?.error?.code;
   // SSE already has HTTP 200 headers; the relay carries the original status
   // in this controlled numeric field instead of exposing upstream messages.
@@ -74,13 +110,15 @@ function responseError(data: any, status = 502): FreeRelayError {
   if ([400, 401, 403, 404, 413, 422, 429, 500, 502, 503, 504].includes(streamStatus)) status = streamStatus;
   if (code === 'free_tools_unsupported') return new FreeRelayError(400, code);
   if (code === 'free_request_too_large') return new FreeRelayError(413, code);
-  if (code === 'free_rate_limited') return new FreeRelayError(429, code);
-  return new FreeRelayError(status);
+  if (code === 'free_rate_limited') return new FreeRelayError(429, code, rateLimitDetails(data?.error, headerRetryAfterMs));
+  return new FreeRelayError(status, undefined, rateLimitDetails(data?.error, headerRetryAfterMs));
 }
 
 async function readResponseError(response: Response): Promise<FreeRelayError> {
+  const retryAfterMs = retryAfterHeaderMs(response.headers.get('retry-after'));
+  const fallback = () => responseError(null, response.status, retryAfterMs);
   const reader = response.body?.getReader();
-  if (!reader) return new FreeRelayError(response.status);
+  if (!reader) return fallback();
   let text = '';
   let bytes = 0;
   const decoder = new TextDecoder();
@@ -96,11 +134,11 @@ async function readResponseError(response: Response): Promise<FreeRelayError> {
     }
     if (bytes <= 65536) {
       text += decoder.decode();
-      try { return responseError(JSON.parse(text), response.status); } catch {}
+      try { return responseError(JSON.parse(text), response.status, retryAfterMs); } catch {}
     }
-    return new FreeRelayError(response.status);
+    return fallback();
   } catch {
-    return new FreeRelayError(response.status);
+    return fallback();
   } finally {
     clearTimeout(timer);
     await reader.cancel().catch(() => {});
@@ -141,9 +179,19 @@ export interface FreeStatus {
   usageResetAt?: string | null;
 }
 
-export async function freeStatus(): Promise<FreeStatus> {
+export interface FreeCatalog {
+  status: FreeStatus;
+  models: AIModel[];
+}
+
+export async function freeStatus(fetcher: FreeFetch = fetch): Promise<FreeStatus> {
   try {
-    const response = await fetch(`${FREE_PROVIDER.baseUrl}/status`, { signal: AbortSignal.timeout(10000), redirect: 'error', cache: 'no-store' });
+    const response = await fetcher(`${FREE_PROVIDER.baseUrl}/status`, {
+      signal: AbortSignal.timeout(10000),
+      redirect: 'error',
+      cache: 'no-store',
+      credentials: 'omit',
+    });
     if (!response.ok) throw new Error(UNAVAILABLE);
     const data = await response.json();
     const date = (value: unknown) => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : null;
@@ -189,7 +237,7 @@ export async function freeStatus(): Promise<FreeStatus> {
       available: data.available === true,
       mode: data.mode === 'scheduled' ? 'scheduled' : data.mode === 'on' ? 'on' : 'off',
       startsAt: date(data.startsAt), endsAt: date(data.endsAt),
-      models: data.available === true && Array.isArray(data.models) ? data.models.slice(0, 100).filter((m: any) => typeof m.id === 'string' && typeof m.name === 'string').map((m: any) => ({
+      models: data.available === true && Array.isArray(data.models) ? data.models.slice(0, 100).filter((m: any) => m && typeof m.id === 'string' && typeof m.name === 'string').map((m: any) => ({
         id: m.id, name: m.name,
         supportsVision: m.supportsVision === true,
         ...(Number.isSafeInteger(m.context_window) && m.context_window > 0 ? { context_window: m.context_window } : {}),
@@ -215,16 +263,24 @@ export async function freeStatus(): Promise<FreeStatus> {
 export class FreeAdapter extends OpenAIAdapter {
   private maxRequestBytes = DEFAULT_MAX_REQUEST_BYTES;
   private streamIdleTimeoutMs = 120000;
-  constructor(_config: ProviderConfig) { super({ ...FREE_PROVIDER }); }
+  private catalogRequest: Promise<FreeCatalog> | null = null;
+
+  constructor(_config: ProviderConfig, private readonly fetcher?: FreeFetch) {
+    super({ ...FREE_PROVIDER });
+  }
 
   protected buildHeaders(): Record<string, string> { return { 'Content-Type': 'application/json' }; }
+
+  protected request(url: string, options: RequestInit): Promise<Response> {
+    return this.fetcher ? this.fetcher(url, options) : super.request(url, options);
+  }
 
   protected async fetchWithTimeout(url: string, options: RequestInit): Promise<Response> {
     try {
       if (typeof options.body === 'string' && new TextEncoder().encode(options.body).byteLength > this.maxRequestBytes) {
         throw new FreeRelayError(413, 'free_request_too_large');
       }
-      const response = await super.fetchWithTimeout(url, { ...options, redirect: 'error' });
+      const response = await super.fetchWithTimeout(url, { ...options, redirect: 'error', credentials: 'omit' });
       if (!response.ok) throw await readResponseError(response);
       return response;
     } catch (error) {
@@ -233,11 +289,20 @@ export class FreeAdapter extends OpenAIAdapter {
     }
   }
 
+  loadCatalog(): Promise<FreeCatalog> {
+    // Startup can ask for both service status and models. Share only the
+    // in-flight request so future refreshes always reflect the live catalog.
+    this.catalogRequest ??= freeStatus(this.fetcher).then((status) => {
+      this.maxRequestBytes = status.limits?.maxRequestBytes ?? DEFAULT_MAX_REQUEST_BYTES;
+      this.streamIdleTimeoutMs = status.limits?.streamIdleTimeoutMs ?? 120000;
+      const models = status.models.map((model) => this.mapModel(model, { supportsVision: model.supportsVision === true }));
+      return { status, models };
+    }).finally(() => { this.catalogRequest = null; });
+    return this.catalogRequest;
+  }
+
   async listModels() {
-    const status = await freeStatus();
-    this.maxRequestBytes = status.limits?.maxRequestBytes ?? DEFAULT_MAX_REQUEST_BYTES;
-    this.streamIdleTimeoutMs = status.limits?.streamIdleTimeoutMs ?? 120000;
-    return status.models.map((model) => this.mapModel(model, { supportsVision: model.supportsVision === true }));
+    return (await this.loadCatalog()).models;
   }
 
   async sendMessage(params: SendMessageParams) {
@@ -316,5 +381,5 @@ export class FreeAdapter extends OpenAIAdapter {
     }
   }
 
-  async validateApiKey(): Promise<boolean> { return freeStatus().then((status) => status.available, () => false); }
+  async validateApiKey(): Promise<boolean> { return this.loadCatalog().then(({ status }) => status.available, () => false); }
 }

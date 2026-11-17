@@ -6,7 +6,7 @@
 // keeps working with zero network dependency.
 
 import type { Memory2State, MemoryQuery, SearchHit, StorageHealth } from '../types';
-import { searchRecords } from '../retrieval';
+import { buildIndex, searchRecords, type FtIndex } from '../retrieval';
 import {
   emptyState, notSupported, type Memory2Bridge, type MemoryStorageProvider,
   type PushResult, type RemoteChanges,
@@ -17,6 +17,7 @@ export class LocalStorageProvider implements MemoryStorageProvider {
   readonly label = 'Local (Electron userData / atomic JSON + Markdown)';
   readonly supportsSync = false;
   private cache: Memory2State = emptyState();
+  private index: FtIndex | null = null;
   private bridge: Memory2Bridge | null;
   private ready = false;
   private loadOk = false;
@@ -27,6 +28,7 @@ export class LocalStorageProvider implements MemoryStorageProvider {
   get durable(): boolean { return !!this.bridge && this.loadOk; }
 
   async init(): Promise<void> {
+    this.index = null;
     if (this.bridge) {
       try {
         const loaded = await this.bridge.load();
@@ -64,10 +66,14 @@ export class LocalStorageProvider implements MemoryStorageProvider {
       if (!ok) throw new Error('local memory commit failed');
     }
     this.cache = state;
+    this.index = null;
   }
 
   async search(query: MemoryQuery): Promise<SearchHit[]> {
-    return searchRecords(this.cache.records, query, { source: 'local' });
+    if (!this.index) {
+      this.index = buildIndex(this.cache.records);
+    }
+    return searchRecords(this.cache.records, query, { index: this.index, source: 'local' });
   }
 
   async remoteChanges(): Promise<RemoteChanges> { return notSupported('remoteChanges on local storage'); }
@@ -89,7 +95,10 @@ export class LocalStorageProvider implements MemoryStorageProvider {
   async restore(): Promise<boolean> {
     if (!this.bridge) return false;
     const result = await this.bridge.restore();
-    if (result.ok && result.state) this.cache = result.state;
+    if (result.ok && result.state) {
+      this.cache = result.state;
+      this.index = null;
+    }
     return result.ok;
   }
 

@@ -11,6 +11,7 @@ import {
   type SuggestedTask,
   type WorkspaceScan,
 } from '../core/agenda/agenda';
+import { isUnarchivedConversation } from '../core/workspace/conversations';
 import { useWorkspaceStore } from './workspace.store';
 import { useChatStore } from './chat.store';
 import { useCodeChangesStore } from './codeChanges.store';
@@ -236,7 +237,7 @@ export const useAgendaStore = create<AgendaStore>((set, get) => ({
     const conversations = useChatStore.getState().conversations;
     const changes = useCodeChangesStore.getState().changes;
     const recent = conversations
-      .filter((c) => c.title && c.title !== 'New Chat')
+      .filter((c) => isUnarchivedConversation(c) && c.title && c.title !== 'New Chat')
       .slice(0, 4);
 
     const out: ResumeCandidate[] = [];

@@ -118,6 +118,10 @@ export abstract class BaseAdapter implements ProviderAdapter {
     };
   }
 
+  protected request(url: string, options: RequestInit): Promise<Response> {
+    return fetch(url, options);
+  }
+
   /**
    * Fetch with a connection timeout. For streaming callers the timeout only
    * covers the wait for response HEADERS — the timer is cleared as soon as
@@ -142,7 +146,7 @@ export abstract class BaseAdapter implements ProviderAdapter {
     }
 
     try {
-      const response = await fetch(url, {
+      const response = await this.request(url, {
         ...options,
         signal: controller.signal,
       });

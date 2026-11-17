@@ -67,7 +67,7 @@ export type ContentPart =
   | { type: 'image_url'; image_url: { url: string; detail?: 'low' | 'high' | 'auto' } };
 
 export interface ChatMessage {
-  role: 'system' | 'user' | 'assistant' | 'tool';
+  role: 'system' | 'developer' | 'user' | 'assistant' | 'tool';
   content: string | ContentPart[];
   // Provider-agnostic cache breakpoint. Adapters that support explicit prompt
   // caching translate this to their wire format; the others safely ignore it.

@@ -30,6 +30,7 @@ export const conversationRepo = {
       ...(data.isChatMode === true ? { isChatMode: true } : data.isChatMode === false ? { isChatMode: false } : {}),
       ...(data.agentMode ? { agentMode: data.agentMode } : {}),
       ...(data.rsi ? { rsi: structuredClone(data.rsi) } : {}),
+      ...(data.gptConstraintState ? { gptConstraintState: data.gptConstraintState } : {}),
       createdAt: now,
       updatedAt: now,
     };
@@ -45,6 +46,19 @@ export const conversationRepo = {
       conversations[idx] = { ...conversations[idx], ...data, updatedAt: Date.now() };
       writeJSON(CONV_FILE, conversations);
     }
+  },
+
+  setArchived(id: string, archived: boolean): Conversation | null {
+    const conversations = readJSON<Conversation[]>(CONV_FILE, []);
+    const index = conversations.findIndex((conversation) => conversation.id === id);
+    const current = conversations[index];
+    if (!current) return null;
+    if (archived === (current.archivedAt != null)) return current;
+
+    const updated = { ...current, archivedAt: archived ? Date.now() : null };
+    conversations[index] = updated;
+    writeJSON(CONV_FILE, conversations);
+    return updated;
   },
 
   delete(id: string): boolean {

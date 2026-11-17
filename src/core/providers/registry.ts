@@ -1,4 +1,4 @@
-import { FreeAdapter } from './free.adapter';
+import { FreeAdapter, type FreeFetch } from './free.adapter';
 import { BaseAdapter } from './base.adapter';
 import { OpenAIAdapter } from './openai.adapter';
 import { AnthropicAdapter } from './anthropic.adapter';
@@ -10,8 +10,7 @@ import type { ProviderConfig, ProviderType, AIModel } from '../../types';
 
 type AdapterConstructor = new (config: ProviderConfig) => BaseAdapter;
 
-const adapterMap: Record<ProviderType, AdapterConstructor> = {
-  'conecode-free': FreeAdapter,
+const adapterMap: Record<Exclude<ProviderType, 'conecode-free'>, AdapterConstructor> = {
   openai: OpenAIAdapter,
   anthropic: AnthropicAdapter,
   gemini: GeminiAdapter,
@@ -23,9 +22,16 @@ const adapterMap: Record<ProviderType, AdapterConstructor> = {
 export class ProviderRegistry {
   private adapters = new Map<string, BaseAdapter>();
 
-  register(config: ProviderConfig): void {
+  constructor(private readonly freeFetch?: FreeFetch) {}
+
+  private createAdapter(config: ProviderConfig): BaseAdapter {
+    if (config.type === 'conecode-free') return new FreeAdapter(config, this.freeFetch);
     const AdapterClass = adapterMap[config.type] || CustomAdapter;
-    this.adapters.set(config.id, new AdapterClass(config));
+    return new AdapterClass(config);
+  }
+
+  register(config: ProviderConfig): void {
+    this.adapters.set(config.id, this.createAdapter(config));
   }
 
   unregister(providerId: string): void {
@@ -56,9 +62,7 @@ export class ProviderRegistry {
   // so we can probe the provider's /models endpoint (and its API-reported context
   // windows) before the user commits.
   async probeModels(config: ProviderConfig): Promise<AIModel[]> {
-    const AdapterClass = adapterMap[config.type] || CustomAdapter;
-    const adapter = new AdapterClass(config);
-    return adapter.listModels();
+    return this.createAdapter(config).listModels();
   }
 
   async getAllModels(): Promise<AIModel[]> {
@@ -70,5 +74,3 @@ export class ProviderRegistry {
       .flatMap((r) => r.value);
   }
 }
-
-export const providerRegistry = new ProviderRegistry();

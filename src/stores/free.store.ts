@@ -82,7 +82,7 @@ export const useFreeStore = create<FreeStore>((set, get) => ({
     if (get().loading || !window.electronAPI?.free) return;
     set({ loading: true });
     try {
-      const status = await window.electronAPI.free.status();
+      const { status, models } = await window.electronAPI.free.status();
       // Durable usage: hydrate the legacy localStorage counter once (migration
       // from pre-file-store installs), then sync — a server-driven reset with
       // a newer marker is applied to the file store before this read, so the
@@ -99,24 +99,16 @@ export const useFreeStore = create<FreeStore>((set, get) => ({
         status.usedTokens = 0;
         status.weeklyUsed = 0;
       }
-      const previous = get().status;
       const modelState = useModelStore.getState();
-      if (!status.available) modelState.removeProvider(FREE_PROVIDER_ID);
-      else if (!previous?.available || JSON.stringify(previous.models) !== JSON.stringify(status.models) || !modelState.models.has(FREE_PROVIDER_ID)
-        || (status.models.length > 0 && !modelState.models.get(FREE_PROVIDER_ID)?.length)) {
-        const fetched = await modelState.fetchModels(FREE_PROVIDER_ID);
+      if (!status.available || models.length === 0) {
+        modelState.removeProvider(FREE_PROVIDER_ID);
+      } else {
+        modelState.replaceProviderModels(FREE_PROVIDER_ID, models);
         const updated = useModelStore.getState();
-        const models = updated.models.get(FREE_PROVIDER_ID);
-        // The main process can return [] when its second status request fails.
-        // Keep that failure retryable instead of caching a successful status
-        // alongside an empty (or stale) model list indefinitely.
-        if (!fetched || (status.models.length > 0 && !models?.length)) {
-          throw new Error('Free model list unavailable');
-        }
         if (updated.selectedProviderId === FREE_PROVIDER_ID && !updated.getSelectedModel()) {
           useModelStore.setState({ selectedModelId: null, selectedProviderId: null });
         }
-        if (!useModelStore.getState().selectedModelId && models?.[0]) {
+        if (!useModelStore.getState().selectedModelId) {
           updated.selectModel(models[0].id, FREE_PROVIDER_ID, false);
         }
       }

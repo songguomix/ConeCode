@@ -1,12 +1,15 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { useFreeStore } from './free.store';
 import { useModelStore } from './model.store';
-import { FREE_PROVIDER_ID } from '../core/providers/free.adapter';
+import { FREE_PROVIDER_ID, type FreeCatalog } from '../core/providers/free.adapter';
 import { applyRecordedUsage, applyServerResetTo, FREE_WEEKLY_TOKEN_LIMIT } from '../core/providers/freeUsage';
 import type { AIModel } from '../types';
 
 const model = (id: string): AIModel => ({ id, name: id, providerId: FREE_PROVIDER_ID, supportsText: true, supportsVision: false, supportsFunctionCalling: true, supportsReasoning: false, contextWindow: 128000, maxOutputTokens: 8192, enabled: true } as AIModel);
-const openStatus = (models: AIModel[]) => ({ available: true, mode: 'on' as const, startsAt: null, endsAt: null, models });
+const catalog = (models: AIModel[], available = true): FreeCatalog => ({
+  status: { available, mode: available ? 'on' : 'off', startsAt: null, endsAt: null, models: available ? models : [] },
+  models: available ? models : [],
+});
 beforeEach(() => {
   useFreeStore.setState({ status: null, loading: false, error: null });
   useModelStore.setState({ models: new Map(), selectedModelId: null, selectedProviderId: null });
@@ -20,8 +23,7 @@ it('syncs gifted models, replaces removed models and clears selection on close',
   let available = true;
   let models = [model('first')];
   vi.stubGlobal('window', { electronAPI: {
-    free: { status: async () => ({ available, mode: available ? 'on' : 'off', startsAt: null, endsAt: null, models: available ? models : [] }) },
-    model: { list: async () => models },
+    free: { status: async () => catalog(models, available) },
   } });
   await useFreeStore.getState().refresh();
   expect(useModelStore.getState().getSelectedModel()?.id).toBe('first');
@@ -43,18 +45,14 @@ it('drops offline free models and only exposes a fixed error when status fails',
   expect(useFreeStore.getState().loading).toBe(false);
 });
 
-it.each(['empty', 'rejected'] as const)('retries a failed model refresh (%s) after a successful status response', async (failure) => {
-  const old = model('old');
-  const replacement = model('replacement');
-  useFreeStore.setState({ status: openStatus([old]) });
-  useModelStore.setState({ models: new Map([[FREE_PROVIDER_ID, [old]]]), selectedModelId: old.id, selectedProviderId: FREE_PROVIDER_ID });
-  const list = vi.fn<() => Promise<AIModel[]>>();
-  if (failure === 'empty') list.mockResolvedValueOnce([]);
-  else list.mockRejectedValueOnce(new Error('temporary model request failure'));
-  list.mockResolvedValue([replacement]);
-  vi.spyOn(console, 'error').mockImplementation(() => {});
+it('loads models from the same live status response and retries the status after a failure', async () => {
+  const first = model('first');
+  const status = vi.fn<() => Promise<FreeCatalog>>()
+    .mockRejectedValueOnce(new Error('temporary status failure'))
+    .mockResolvedValue(catalog([first]));
+  const list = vi.fn(async () => []);
   vi.stubGlobal('window', { electronAPI: {
-    free: { status: async () => openStatus([replacement]) },
+    free: { status },
     model: { list },
   } });
 
@@ -64,38 +62,44 @@ it.each(['empty', 'rejected'] as const)('retries a failed model refresh (%s) aft
   expect(useModelStore.getState().models.has(FREE_PROVIDER_ID)).toBe(false);
 
   await useFreeStore.getState().refresh();
-  expect(list).toHaveBeenCalledTimes(2);
+  expect(status).toHaveBeenCalledTimes(2);
+  expect(list).not.toHaveBeenCalled();
   expect(useFreeStore.getState().error).toBeNull();
-  expect(useModelStore.getState().getSelectedModel()?.id).toBe(replacement.id);
-});
-
-it('repairs an existing empty model cache when status still advertises models', async () => {
-  const first = model('first');
-  const status = openStatus([first]);
-  useFreeStore.setState({ status });
-  useModelStore.setState({ models: new Map([[FREE_PROVIDER_ID, []]]) });
-  const list = vi.fn(async () => [first]);
-  vi.stubGlobal('window', { electronAPI: {
-    free: { status: async () => status },
-    model: { list },
-  } });
-
-  await useFreeStore.getState().refresh();
-  expect(list).toHaveBeenCalledTimes(1);
   expect(useModelStore.getState().getSelectedModel()?.id).toBe(first.id);
 });
 
-it('accepts a legitimately empty status without repeatedly fetching models', async () => {
+it('accepts an open but empty status without a second model request', async () => {
   const list = vi.fn(async () => []);
   vi.stubGlobal('window', { electronAPI: {
-    free: { status: async () => openStatus([]) },
+    free: { status: async () => catalog([]) },
     model: { list },
   } });
 
   await useFreeStore.getState().refresh();
   await useFreeStore.getState().refresh();
-  expect(list).toHaveBeenCalledTimes(1);
+  expect(list).not.toHaveBeenCalled();
   expect(useFreeStore.getState().error).toBeNull();
+});
+
+it('does not restore closed Free models when a slower provider finishes loading', async () => {
+  const first = model('first');
+  let finishOtherProvider!: (models: AIModel[]) => void;
+  const otherModels = new Promise<AIModel[]>((resolve) => { finishOtherProvider = resolve; });
+  vi.stubGlobal('window', { electronAPI: {
+    provider: { list: async () => [
+      { id: FREE_PROVIDER_ID, enabled: true },
+      { id: 'slow-provider', enabled: true },
+    ] },
+    model: { list: (id: string) => id === FREE_PROVIDER_ID ? Promise.resolve([first]) : otherModels },
+    free: { status: async () => catalog([], false) },
+  } });
+
+  const load = useModelStore.getState().fetchAllModels();
+  await vi.waitFor(() => expect(useModelStore.getState().models.get(FREE_PROVIDER_ID)?.[0].id).toBe(first.id));
+  await useFreeStore.getState().refresh();
+  finishOtherProvider([]);
+  await load;
+  expect(useModelStore.getState().models.has(FREE_PROVIDER_ID)).toBe(false);
 });
 
 it('keeps the durable weekly count across refresh — a restart must not reset it', async () => {
@@ -103,11 +107,11 @@ it('keeps the durable weekly count across refresh — a restart must not reset i
   // count, sync returns it unchanged, record accumulates in the file.
   let fileUsed = 555;
   vi.stubGlobal('window', { electronAPI: { free: {
-    status: async () => ({ available: true, mode: 'on', startsAt: null, endsAt: null, models: [model('first')] }),
+    status: async () => catalog([model('first')]),
     usageHydrate: async () => ({ weekStart: 1, used: fileUsed, resetAt: null }),
     usageSync: async () => ({ record: { weekStart: 1, used: fileUsed, resetAt: null }, changed: false }),
     usageRecord: async (tokens: number) => ({ weekStart: 1, used: (fileUsed += tokens), resetAt: null }),
-  }, model: { list: async () => [model('first')] } } });
+  } } });
 
   await useFreeStore.getState().refresh();
   expect(useFreeStore.getState().weeklyUsed).toBe(555);
@@ -123,15 +127,19 @@ it('keeps the durable weekly count across refresh — a restart must not reset i
 it('applies a newer server reset marker and zeroes stale server mirrors', async () => {
   useFreeStore.setState({ weeklyUsed: 999, weeklyUsage: { used: 999, limit: 1 }, usage: { used: 999, limit: 1 } });
   vi.stubGlobal('window', { electronAPI: { free: {
-    status: async () => ({
-      available: true, mode: 'on', startsAt: null, endsAt: null, models: [],
-      usage: { used: 999, limit: 2000000000 },
+    status: async () => ({ ...catalog([]), status: {
+      ...catalog([]).status,
+      usage: {
+        used: 999, usedTokens: 999, tokensUsed: 999, weeklyUsed: 999,
+        limit: FREE_WEEKLY_TOKEN_LIMIT, weeklyLimit: FREE_WEEKLY_TOKEN_LIMIT, tokenLimit: FREE_WEEKLY_TOKEN_LIMIT,
+        resetsAt: null, resetAt: null,
+      },
       usedTokens: 999, weeklyUsed: 999,
       usageResetAt: '2026-10-26T00:00:00Z',
-    }),
+    } }),
     usageHydrate: async () => ({ weekStart: 1, used: 999, resetAt: null }),
     usageSync: async () => ({ record: { weekStart: 1, used: 0, resetAt: '2026-10-26T00:00:00.000Z' }, changed: true }),
-  }, model: { list: async () => [] } } });
+  } } });
 
   await useFreeStore.getState().refresh();
   expect(useFreeStore.getState().weeklyUsed).toBe(0);
@@ -148,7 +156,7 @@ it('clears an exhausted weekly allowance on refresh across Monday without restar
   const first = model('first');
   vi.stubGlobal('window', { electronAPI: {
     free: {
-      status: async () => ({ ...openStatus([first]), usageResetAt: resetAt }),
+      status: async () => ({ models: [first], status: { ...catalog([first]).status, usageResetAt: resetAt } }),
       usageHydrate: async () => fileRecord,
       usageGet: async () => fileRecord,
       usageSync: async (marker: string | null) => {
@@ -157,7 +165,6 @@ it('clears an exhausted weekly allowance on refresh across Monday without restar
         return result;
       },
     },
-    model: { list: async () => [first] },
   } });
 
   await useFreeStore.getState().refresh();

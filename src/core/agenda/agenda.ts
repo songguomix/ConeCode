@@ -70,7 +70,7 @@ Requirements for every task:
 - title: under 60 characters, an imperative outcome ("Fix the stale cache in FileTree"), never vague ("improve code").
 - rationale: one sentence, and it MUST cite something from the scan — a TODO comment, an uncommitted change, a missing test, a script that exists. No speculation about code you were not shown.
 - files: the relative paths you actually expect to touch (empty array if genuinely unknown).
-- prompt: a complete, self-contained instruction for the coding agent, written as the user would write it. Say what to do and how to verify it (run the project's real test/build script when there is one). 2-4 sentences.
+- prompt: a complete, self-contained instruction for the coding agent, written as the user would write it. Say what to do and require strong verification (run the project's real typecheck/build/test script, and for UI changes call \`auto_screenshot\` to visually inspect all modified locations). 2-4 sentences.
 - effort: quick = under ~15 minutes, medium = under an hour, large = more than that.
 - risk: how likely the change is to break something in use.
 

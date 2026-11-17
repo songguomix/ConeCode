@@ -1,5 +1,6 @@
 import { BaseAdapter } from './base.adapter';
 import { toOpenAITools } from '../tools/definitions';
+import { gptDetector } from '../constraints/gptDetector';
 import type { AIModel, SendMessageParams, StreamChunk, ToolCall } from '../../types';
 
 export class OpenAIAdapter extends BaseAdapter {
@@ -96,7 +97,17 @@ export class OpenAIAdapter extends BaseAdapter {
         signal: params.signal,
       }
     );
-    return response.json();
+    const data = await response.json();
+    const probe = gptDetector.probeResponse({
+      baseUrl: this.config.baseUrl,
+      modelAlias: params.model,
+      headers: response.headers,
+      body: data,
+    });
+    if (probe.isGpt && data && typeof data === 'object') {
+      return { ...data, _gptProbe: probe };
+    }
+    return data;
   }
 
   async streamMessage(params: SendMessageParams, onChunk: (chunk: StreamChunk) => void, signal?: AbortSignal) {
@@ -129,6 +140,8 @@ export class OpenAIAdapter extends BaseAdapter {
     let sseBuffer = '';
     let sawDone = false;
     let usage: any = null;
+    let systemFingerprint = '';
+    let responseModel = '';
     // Tool calls stream in fragments: the id and name usually arrive in the first
     // delta for a slot, then the arguments JSON accumulates across many deltas.
     // Keyed by the delta's `index` so parallel calls don't interleave. Some
@@ -144,6 +157,12 @@ export class OpenAIAdapter extends BaseAdapter {
       try {
         const parsed = JSON.parse(data);
         if (parsed.usage) usage = parsed.usage; // final usage chunk (include_usage)
+        if (typeof parsed.system_fingerprint === 'string' && !systemFingerprint) {
+          systemFingerprint = parsed.system_fingerprint;
+        }
+        if (typeof parsed.model === 'string' && !responseModel) {
+          responseModel = parsed.model;
+        }
         const choice = parsed.choices?.[0];
         if (choice?.finish_reason) finishReason = choice.finish_reason;
         const delta = choice?.delta;
@@ -197,6 +216,15 @@ export class OpenAIAdapter extends BaseAdapter {
     }
 
     const toolCalls = this.finalizeToolCalls(toolAcc);
+    const probe = gptDetector.probeResponse({
+      baseUrl: this.config.baseUrl,
+      modelAlias: params.model,
+      headers: response.headers,
+      body: {
+        ...(systemFingerprint ? { system_fingerprint: systemFingerprint } : {}),
+        ...(responseModel ? { model: responseModel } : {}),
+      },
+    });
 
     onChunk({ type: 'done', content: '', reasoning_content: fullReasoningContent || undefined, finishReason: finishReason || undefined });
 
@@ -211,6 +239,7 @@ export class OpenAIAdapter extends BaseAdapter {
         finish_reason: finishReason || undefined,
       }],
       usage: usage || undefined,
+      ...(probe.isGpt ? { _gptProbe: probe } : {}),
     };
   }
 

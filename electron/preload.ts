@@ -36,6 +36,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     list: () => ipcRenderer.invoke('conversation:list'),
     create: (data: any) => ipcRenderer.invoke('conversation:create', data),
     update: (id: string, data: any) => ipcRenderer.invoke('conversation:update', id, data),
+    setArchived: (id: string, archived: boolean) => ipcRenderer.invoke('conversation:setArchived', id, archived),
     delete: (id: string) => ipcRenderer.invoke('conversation:delete', id),
   },
   message: {
@@ -336,6 +337,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.on('screenshot:trigger', listener);
       return () => ipcRenderer.removeListener('screenshot:trigger', listener);
     },
+  },
+  autoScreenshot: {
+    capture: (opts?: {
+      target?: 'auto' | 'window' | 'preview' | 'screen';
+      delayMs?: number;
+      saveToDisk?: boolean;
+      label?: string;
+    }) => ipcRenderer.invoke('auto-screenshot:capture', opts),
   },
   terminal: {
     spawn: (id: string, cwd?: string) => ipcRenderer.invoke('terminal:spawn', id, cwd),

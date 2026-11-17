@@ -18,7 +18,7 @@ interface IndexedDoc {
   terms: string[];
   length: number;
 }
-interface FtIndex {
+export interface FtIndex {
   docs: IndexedDoc[];
   df: Map<string, number>;
   avgLength: number;

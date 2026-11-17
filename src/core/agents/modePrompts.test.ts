@@ -280,4 +280,19 @@ describe('RSI useful-improvement contract', () => {
     expect(RSI_MODE_PROMPT).toMatch(/one panel can evaluate all three roles/);
     expect(RSI_MODE_PROMPT).toMatch(/Empty\/insufficient history means skip it/);
   });
+
+  it('requires screenshot inspection and scrapping/redoing poor UI results across modes', () => {
+    expect(RSI_INVARIANTS).toContain('截图检查');
+    expect(RSI_INVARIANTS).toContain('推翻重做');
+    expect(RSI_INVARIANTS).toContain('auto_screenshot');
+    expect(RSI_INVARIANTS).toContain('本次修改的所有位置');
+    expect(GOAL_MODE_PROMPT).toContain('screenshot inspection');
+    expect(GOAL_MODE_PROMPT).toContain('scrap the flawed approach and redo it');
+    expect(GOAL_MODE_PROMPT).toContain('auto_screenshot');
+    expect(ORCHESTRATION_MODE_PROMPT).toContain('screenshot inspection');
+    expect(ORCHESTRATION_MODE_PROMPT).toContain('discard the flawed implementation and redo it');
+    expect(ORCHESTRATION_MODE_PROMPT).toContain('auto_screenshot');
+    expect(RSI_MODE_PROMPT).toContain('scrap/revert the flawed approach and redo it properly');
+    expect(RSI_MODE_PROMPT).toContain('auto_screenshot');
+  });
 });

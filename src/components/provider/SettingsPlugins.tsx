@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   FiX, FiChevronLeft, FiChevronDown, FiPlus, FiSearch, FiRefreshCw,
-  FiGithub, FiActivity, FiShield, FiList, FiGitCommit, FiMap, FiBox, FiImage, FiPackage,
+  FiGithub, FiActivity, FiShield, FiList, FiGitCommit, FiMap, FiBox, FiImage, FiPackage, FiCamera,
 } from 'react-icons/fi';
 import { usePluginStore, selectPlugins, type PluginEntry } from '../../stores/plugin.store';
 import { useMarketStore } from '../../stores/market.store';
@@ -13,6 +13,7 @@ import PerfView from '../plugins/PerfView';
 import SecurityView from '../plugins/SecurityView';
 import SkillRunView from '../plugins/SkillRunView';
 import ImageGenPluginView from '../plugins/ImageGenPluginView';
+import AutoScreenshotPluginView from '../plugins/AutoScreenshotPluginView';
 import InstalledView from '../dsh-market/InstalledView';
 import { marketText } from '../dsh-market/marketI18n';
 
@@ -25,6 +26,7 @@ const ICONS: Record<string, JSX.Element> = {
   map: <FiMap size={18} />,
   box: <FiBox size={18} />,
   image: <FiImage size={18} />,
+  camera: <FiCamera size={18} />,
 };
 
 const TILE_BG: Record<string, string> = {
@@ -36,6 +38,7 @@ const TILE_BG: Record<string, string> = {
   map: 'bg-amber-500/15 text-amber-500',
   box: 'bg-[var(--bg-3)] text-[var(--text-secondary)]',
   image: 'bg-pink-500/15 text-pink-500',
+  camera: 'bg-cyan-500/15 text-cyan-500',
 };
 
 type View = { kind: 'list' } | { kind: 'detail'; id: string } | { kind: 'sync' } | { kind: 'create' };
@@ -320,6 +323,7 @@ function DetailView({ id, t }: { id: string; t: (k: string) => string }) {
       {p.view === 'perf' && <PerfView />}
       {p.view === 'security' && <SecurityView />}
       {p.view === 'image-gen' && <ImageGenPluginView />}
+      {p.view === 'auto-screenshot' && <AutoScreenshotPluginView />}
       {p.view === 'skill' && p.skillId && <SkillRunView skillId={p.skillId} />}
       {p.view === 'skill' && !p.skillId && (
         <p className="text-[13px] text-[var(--text-muted)]">{t('pluginNeedInstall')}</p>

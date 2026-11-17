@@ -3,6 +3,10 @@ import { isRsiConversation } from '../agents/rsiConversation';
 
 export { isRsiConversation };
 
+export function isUnarchivedConversation(conv: Conversation): boolean {
+  return conv.archivedAt == null;
+}
+
 /**
  * Chat conversation: dialogue-only, unbound from any project workspace,
  * and never an RSI session.
@@ -120,6 +124,7 @@ export function pickReusableConversation(
   messageCounts: Record<string, number> | null,
 ): Conversation | null {
   const candidates = conversations.filter((conv) => {
+    if (!isUnarchivedConversation(conv)) return false;
     if (mode === 'rsi') {
       if (!isRsiConversation(conv)) return false;
     } else {

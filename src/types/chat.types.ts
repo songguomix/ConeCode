@@ -13,11 +13,15 @@ export interface Conversation {
   extraRoots?: string[];
   createdAt: number;
   updatedAt: number;
+  /** Absent or null for a conversation in the main history. */
+  archivedAt?: number | null;
   /** Explicitly marks a conversation created in Chat mode (dialogue only). */
   isChatMode?: boolean;
   /** Execution protocol and RSI data belong to this stable conversation ID. */
   agentMode?: AgentMode;
   rsi?: RsiConversationState;
+  /** Per-session GPT zero-tolerance hard constraint state. */
+  gptConstraintState?: import('../core/constraints/gptSessionState').ConstraintSessionStatus;
 }
 
 export interface Message {

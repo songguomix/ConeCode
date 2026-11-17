@@ -14,6 +14,19 @@ function getDataDir(): string {
   return dataDir;
 }
 
+interface CachedJsonEntry {
+  mtimeMs: number;
+  size: number;
+  data: unknown;
+}
+
+const jsonCache = new Map<string, CachedJsonEntry>();
+
+function cloneJson<T>(value: T): T {
+  if (value === null || typeof value !== 'object') return value;
+  return structuredClone(value);
+}
+
 export function readJSON<T>(filename: string, defaultValue: T): T {
   const filePath = path.join(getDataDir(), filename);
   // The primary can be damaged by an interrupted write from an older build, or by any writer
@@ -21,8 +34,18 @@ export function readJSON<T>(filename: string, defaultValue: T): T {
   // back the default (which for conversations.json means "all chat history is gone").
   for (const candidate of [filePath, `${filePath}.bak`]) {
     try {
-      if (fs.existsSync(candidate)) return JSON.parse(fs.readFileSync(candidate, 'utf-8'));
+      if (fs.existsSync(candidate)) {
+        const stat = fs.statSync(candidate);
+        const cached = jsonCache.get(candidate);
+        if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+          return cloneJson(cached.data as T);
+        }
+        const parsed = JSON.parse(fs.readFileSync(candidate, 'utf-8'));
+        jsonCache.set(candidate, { mtimeMs: stat.mtimeMs, size: stat.size, data: parsed });
+        return cloneJson(parsed as T);
+      }
     } catch (error) {
+      jsonCache.delete(candidate);
       if (candidate === filePath && fs.existsSync(`${filePath}.bak`)) {
         console.warn(`[storage] ${filename} is unreadable, falling back to its backup`, error);
       }
@@ -56,10 +79,19 @@ export function writeJSON(filename: string, data: any): void {
     // A failed rotation must not block the actual write; worst case we lose the fallback copy.
   }
   fs.renameSync(tmpPath, filePath);
+  jsonCache.delete(`${filePath}.bak`);
+  try {
+    const stat = fs.statSync(filePath);
+    jsonCache.set(filePath, { mtimeMs: stat.mtimeMs, size: stat.size, data: cloneJson(data) });
+  } catch {
+    jsonCache.delete(filePath);
+  }
 }
 
 export function deleteJSON(filename: string): boolean {
   const filePath = path.join(getDataDir(), filename);
+  jsonCache.delete(filePath);
+  jsonCache.delete(`${filePath}.bak`);
   // Drop the backup too, otherwise a missing primary would resurrect deleted data via readJSON.
   try { fs.unlinkSync(`${filePath}.bak`); } catch { /* no backup */ }
   if (fs.existsSync(filePath)) {

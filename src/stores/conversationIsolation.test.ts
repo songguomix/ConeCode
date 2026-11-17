@@ -5,7 +5,7 @@ import { useWorkspaceStore } from './workspace.store';
 import { useModelStore } from './model.store';
 import { isChatConversation, isWorkConversation, groupConversationsByFolder } from '../core/workspace/conversations';
 import { isRsiConversation, defaultRsiState } from '../core/agents/rsiConversation';
-import type { Conversation } from '../types';
+import type { Conversation, Message } from '../types';
 
 let createdConvs: any[];
 let updatedConvs: any[];
@@ -23,6 +23,10 @@ function installStubs() {
         }),
         update: vi.fn(async (id: string, data: any) => {
           updatedConvs.push({ id, data });
+        }),
+        setArchived: vi.fn(async (id: string, archived: boolean) => {
+          const conversation = useChatStore.getState().conversations.find((c) => c.id === id);
+          return conversation ? { ...conversation, archivedAt: archived ? Date.now() : null } : null;
         }),
         delete: vi.fn(async () => true),
         list: vi.fn(async () => []),
@@ -53,6 +57,60 @@ beforeEach(() => {
   useUIStore.setState({ viewMode: 'chat' });
   useWorkspaceStore.setState({ rootPath: '/workspace/project', files: [], extraRoots: [] });
   useModelStore.setState({ models: new Map(), selectedModelId: 'test-model' });
+});
+
+describe('Conversation archiving', () => {
+  const conversation: Conversation = {
+    id: 'chat-1', title: 'Chat', providerId: 'p1', modelId: 'm1',
+    rootPath: null, isChatMode: true, createdAt: 1, updatedAt: 1,
+  };
+  const message: Message = { id: 'first', conversationId: conversation.id, role: 'user', content: 'Keep me', createdAt: 1 };
+
+  it('clears the active view while keeping the archived transcript available to open and restore', async () => {
+    useChatStore.setState({ conversations: [conversation], activeConversationId: conversation.id, messages: [message] });
+    vi.mocked(window.electronAPI.message.list).mockResolvedValue([message]);
+
+    await useChatStore.getState().setConversationArchived(conversation.id, true);
+    expect(useChatStore.getState()).toMatchObject({
+      activeConversationId: null,
+      messages: [],
+      conversations: [{ ...conversation, archivedAt: expect.any(Number) }],
+    });
+    expect(useChatStore.getState().workspaceSnapshots.has(conversation.id)).toBe(true);
+    expect(window.electronAPI.conversation.delete).not.toHaveBeenCalled();
+
+    await useChatStore.getState().setActiveConversation(conversation.id);
+    expect(useChatStore.getState().messages).toEqual([message]);
+    await useChatStore.getState().setConversationArchived(conversation.id, false);
+    expect(useChatStore.getState().conversations).toEqual([{ ...conversation, archivedAt: null }]);
+    expect(useChatStore.getState().activeConversationId).toBe(conversation.id);
+  });
+
+  it('leaves the active view intact when archiving fails', async () => {
+    useChatStore.setState({ conversations: [conversation], activeConversationId: conversation.id, messages: [message] });
+    vi.mocked(window.electronAPI.conversation.setArchived).mockRejectedValueOnce(new Error('write failed'));
+
+    await expect(useChatStore.getState().setConversationArchived(conversation.id, true)).rejects.toThrow('write failed');
+    expect(useChatStore.getState()).toMatchObject({
+      activeConversationId: conversation.id,
+      messages: [message],
+      conversations: [conversation],
+    });
+  });
+
+  it('does not activate a conversation archived while its transcript is loading', async () => {
+    useChatStore.setState({ conversations: [conversation] });
+    let finishLoading!: (messages: Message[]) => void;
+    vi.mocked(window.electronAPI.message.list).mockReturnValueOnce(new Promise((resolve) => { finishLoading = resolve; }));
+
+    const opening = useChatStore.getState().setActiveConversation(conversation.id);
+    await useChatStore.getState().setConversationArchived(conversation.id, true);
+    finishLoading([message]);
+    await opening;
+
+    expect(useChatStore.getState().activeConversationId).toBeNull();
+    expect(useChatStore.getState().messages).toEqual([]);
+  });
 });
 
 describe('Conversation Area Mode Isolation', () => {
