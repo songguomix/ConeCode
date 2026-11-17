@@ -10,6 +10,7 @@ import type {
 } from './types';
 import { assertMutable, createRecord, deriveProjectId, looksLikeSecret, PROTECTED_IMPORTANCE } from './model';
 import type { NewMemoryInput } from './model';
+import { isVolatileMemory } from '../durability';
 import {
   buildExtractionRequest, detectValueSignals, isLowValueExchange, isSubstantiveTask,
   parseExtractionV2, shouldExtract, type ExchangeMessage, type MemoryExtractionRequest, type ValueEventKind,
@@ -34,6 +35,19 @@ import {
 } from './storage/interface';
 import type { CompositeStorageProvider, HybridHealth } from './storage/composite';
 import { CloudStorageProvider, type CloudUsage } from './storage/cloud';
+
+// A provider outage or a single timeout says little about the task itself.
+const TRANSIENT_FAILURE = /\b(?:timed out|timeout|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|socket hang up|network (?:error|unreachable)|failed to fetch|fetch failed|incomplete model stream|missing completion marker|too many requests|rate[ -]limited|temporarily unavailable|service unavailable|bad gateway|overloaded)\b|\bHTTP\s*(?:429|502|503|504)\b|^(?:429|502|503|504)\b|网络(?:超时|中断|异常)|请求超时|稍后重试/i;
+
+function failureDetail(reason: string): string | undefined {
+  if (TRANSIENT_FAILURE.test(reason)) {
+    // Keep an actual diagnosis when the report also names a runtime symptom.
+    const cause = reason.match(/(?:\b(?:because|caused by|root cause)\b|根因|原因是)\s*[:：]?\s*(.+)/i)?.[1];
+    if (!cause || TRANSIENT_FAILURE.test(cause) || isVolatileMemory(cause)) return;
+    return cause;
+  }
+  return reason && !isVolatileMemory(reason) ? reason : undefined;
+}
 
 export interface MemoryServiceOptions {
   storage: CompositeStorageProvider;
@@ -766,8 +780,17 @@ export class MemoryService {
   }
 
   /** Deterministic failure capture: never lose a lesson because the LLM failed. */
-  async recordFailure(opts: { task: string; reason: string; resolution?: string; sessionId?: string }): Promise<MemoryRecord> {
-    const content = `Task: ${opts.task}\nFailure: ${opts.reason}${opts.resolution ? `\nResolution: ${opts.resolution}` : ''}`;
+  async recordFailure(opts: { task: string; reason: string; resolution?: string; sessionId?: string }): Promise<MemoryRecord | null> {
+    const reason = failureDetail(opts.reason.trim());
+    const resolution = opts.resolution && !isVolatileMemory(opts.resolution) ? opts.resolution : undefined;
+    const lesson = reason || resolution;
+    if (!lesson) return null;
+    const task = isVolatileMemory(opts.task) ? undefined : opts.task;
+    const content = [
+      task && `Task: ${task}`,
+      reason && `Failure: ${reason}`,
+      resolution && `Resolution: ${resolution}`,
+    ].filter(Boolean).join('\n');
     const existing = this.state.records.find((r) =>
       r.type === 'failure_experience'
       && r.deletedAt === null
@@ -783,7 +806,7 @@ export class MemoryService {
       return updated;
     }
     return this.saveMemory({
-      title: `Failed: ${opts.task.slice(0, 80)}`,
+      title: `Failed: ${(task || lesson).slice(0, 80)}`,
       content,
       type: 'failure_experience',
       layer: this.currentProjectId ? 'episodic' : 'global',
@@ -792,7 +815,7 @@ export class MemoryService {
       importance: 0.75,
       status: 'confirmed',
       origin: 'tool',
-      why: opts.reason.slice(0, 300),
+      why: reason?.slice(0, 300),
       sourceSessionId: opts.sessionId ?? this.currentSessionId,
     });
   }

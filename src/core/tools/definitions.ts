@@ -210,7 +210,8 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
     description:
       'Record something worth carrying into future sessions. Use it the moment the user says to remember something, ' +
       'corrects how you work, or tells you a durable fact about this project — do not wait to be asked twice. ' +
-      'Only durable rules and facts: never a detail that is only true for this task, and never secrets.',
+      'Save lasting rules and facts. Omit changing values such as the active branch, current build status, ' +
+      'or a temporary setting. Look up their latest values when needed. Never store secrets.',
     parameters: {
       type: 'object',
       properties: {

@@ -58,6 +58,22 @@ beforeEach(() => {
 });
 
 describe('memory learning', () => {
+  it('keeps changing values out of the remember tool, including its evidence', async () => {
+    const remember = (text: string, why?: string) => textResponse(
+      '```json\n' + JSON.stringify({ action: 'remember', kind: 'workflow', text, why }) + '\n```',
+    );
+    queued = [
+      remember('The current branch is release/test'),
+      remember('Check the current branch before a release.', 'The current branch is release/test'),
+      textResponse('Done.'), textResponse('{"memories":[]}'),
+    ];
+
+    await useChatStore.getState().sendMessage('Review release conventions', 'p1', 'm1');
+    expect(useMemoryStore.getState().entries.map(({ text }) => text)).toEqual(['Check the current branch before a release.']);
+    expect(JSON.stringify(saved)).not.toContain('release/test');
+    expect(useChatStore.getState().messages.some((m) => m.isToolResult && m.content.includes('Skipped long-term memory'))).toBe(true);
+  });
+
   it('learns a durable fact from a finished turn and persists it', async () => {
     queued = [
       textResponse('Understood.'),

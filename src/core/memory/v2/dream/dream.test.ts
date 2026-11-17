@@ -98,6 +98,46 @@ describe('dream orchestration', () => {
     expect(second.indexEntries).toBe(1);
   });
 
+  it('keeps a durable wiki topic when the analyzer proposes a temporary replacement', async () => {
+    const store = storage();
+    const durableBody = 'Every feature branch must pass CI before merge.';
+    const original = JSON.parse(analyzerFile('branch-policy', durableBody)).files[0];
+    const snapshot = 'The current branch is feature/checkout.';
+    const llm = llmReturning((req) => {
+      if (req.system.includes('organizer of a durable memory wiki')) return '{"merges":[],"retire":[]}';
+      if (req.user.includes('First conversation')) return JSON.stringify({ files: [original] });
+      return JSON.stringify({
+        files: [
+          { ...original, body: snapshot },
+          { ...original, slug: 'worktree', description: snapshot },
+          { ...original, slug: 'review-policy', body: 'Every merge requires a second reviewer.' },
+        ],
+      });
+    });
+
+    await runDream(store, llm, {
+      scope: 'acme', sessions: [session('s1', 'Setup', 'First conversation', durableBody)], now: NOW,
+    });
+    const report = await runDream(store, llm, {
+      scope: 'acme', sessions: [session('s2', 'Checkout', 'Which branch?', snapshot)], now: NOW + 1000,
+    });
+
+    expect(report.changedFiles).toEqual(['review-policy']);
+    expect(parseWikiFile(store.map.get(wikiKey('acme', 'branch-policy')) ?? '')?.body).toBe(durableBody);
+    expect(store.map.has(wikiKey('acme', 'worktree'))).toBe(false);
+  });
+
+  it('treats a session containing only a live value as a normal skip', async () => {
+    const store = storage();
+    const snapshot = 'The current branch is feature/checkout.';
+    const report = await runDream(store, llmReturning(() => analyzerFile('branch', snapshot)), {
+      scope: 'acme', sessions: [session('s1', 'Checkout', 'Which branch?', snapshot)], now: NOW,
+    });
+    expect(report.sessions[0].status).toBe('skipped');
+    expect(report.warnings).toEqual([]);
+    expect(report.indexEntries).toBe(0);
+  });
+
   it('ignores invalid analyzer output and never writes partial files', async () => {
     const store = storage();
     const llm = llmReturning(() => 'this is not json');

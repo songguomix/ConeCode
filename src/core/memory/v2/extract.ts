@@ -6,6 +6,7 @@
 // long-term value*, and the model is asked for structured facts rather than a
 // chat summary.
 
+import { isVolatileMemory } from '../durability';
 import { looksLikeSecret } from './model';
 import type { MemoryLayer, MemoryStatus, MemoryType } from './types';
 import { MEMORY_LAYERS, MEMORY_TYPES } from './types';
@@ -147,11 +148,12 @@ Extract ONLY these value nodes:
 - A technical decision AND its reason (emit the decision; put the rationale in why).
 - A project architecture/stack/constraint change.
 - A problem was solved, or a task failed: emit the reusable lesson, the symptom, the root cause and the resolution. Use type failure_experience / success_experience / known_bug, and outcome.
-- Current progress and unfinished TODOs that a later session would need.
 - A reusable pattern observed across tasks.
 
 Hard rules:
 - Return {"memories":[]} unless something is genuinely durable. Most exchanges produce nothing. Never invent.
+- Omit progress, TODOs, one-off preferences, and facts a future session should look up again (active branches, installed versions, live prices, availability, test counts, running ports). Repetition or user confirmation does not make a changing value durable.
+- When a snapshot explains a lasting rule, extract the rule alone. Keep deliberate pins, compatibility requirements and recurring workflows.
 - NEVER store secrets, API keys, tokens, passwords, file contents, or raw transcripts.
 - Do not restate small talk, greetings, or step-by-step process narration.
 - Distinguish what the USER stated (confirmed) from what YOU inferred (inferred). Never promote an inference.
@@ -182,10 +184,14 @@ export function parseExtractionV2(raw: string): ParsedMemoryV2[] {
   for (const m of parsed.memories) {
     const content = typeof m?.content === 'string' ? m.content.trim() : '';
     if (!content || content.length > 1200 || looksLikeSecret(content)) continue;
-    if (isNoiseMemory(content)) continue;
+    if (isNoiseMemory(content) || isVolatileMemory(content)) continue;
     const why = typeof m?.why === 'string' ? m.why.trim() : '';
     if (looksLikeSecret(why)) continue;
     const type: MemoryType = MEMORY_TYPES.includes(m?.type) ? m.type : 'project_fact';
+    // Task progress already has a TTL-bound working-memory path. A mislabeled
+    // scope or a missing project must never promote these rows to global facts.
+    if (type === 'progress' || type === 'todo') continue;
+    const title = typeof m?.title === 'string' ? m.title.trim().slice(0, 160) : '';
     const scope: 'global' | 'project' = m?.scope === 'global' || type === 'user_fact' ? 'global' : 'project';
     const status: MemoryStatus = ['confirmed', 'inferred', 'pending'].includes(m?.status) ? m.status : 'inferred';
     const layer: MemoryLayer = scope === 'global'
@@ -193,16 +199,16 @@ export function parseExtractionV2(raw: string): ParsedMemoryV2[] {
       : (['task_result', 'success_experience', 'failure_experience'].includes(type) ? 'episodic'
         : type === 'reusable_knowledge' || type === 'decision_reason' ? 'semantic' : 'project');
     out.push({
-      title: (typeof m?.title === 'string' ? m.title.trim() : '').slice(0, 160) || content.slice(0, 60),
+      title: title && !isVolatileMemory(title) ? title : content.slice(0, 60),
       content,
       type,
       layer,
       scope,
-      tags: Array.isArray(m?.tags) ? m.tags.filter((t: any) => typeof t === 'string').slice(0, 8).map((t: string) => t.trim()) : [],
+      tags: Array.isArray(m?.tags) ? m.tags.filter((t: unknown) => typeof t === 'string' && !isVolatileMemory(t)).slice(0, 8).map((t: string) => t.trim()) : [],
       importance: clamp(m?.importance, 0.5),
       confidence: clamp(m?.confidence, status === 'confirmed' ? 0.95 : 0.65),
       status,
-      why: why && why.length < 600 ? why : undefined,
+      why: why && why.length < 600 && !isVolatileMemory(why) ? why : undefined,
       outcome: m?.outcome === 'failure' || m?.outcome === 'success' ? m.outcome : undefined,
     });
   }

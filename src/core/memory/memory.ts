@@ -1,3 +1,5 @@
+import { isVolatileMemory } from './durability';
+
 // Long-term memory: what ConeCode has learned about this user across sessions.
 //
 // The goal is a conversation that fits the person in front of it — so the agent
@@ -106,6 +108,7 @@ scope: "project" if it only holds inside this codebase, "global" if it holds for
 
 Rules:
 - Return [] unless something is genuinely durable. Most exchanges produce nothing. Never invent.
+- Skip values future sessions should look up again, including the active branch, current versions, task progress, and session-only settings. If the user also gave a lasting rule, extract that rule on its own.
 - One specific fact per entry, under 200 characters, written as guidance to the assistant ("Prefers...", "Always...", "Uses...").
 - Prefer what the user SHOWED — a correction, a repeated request, a complaint — over anything said once in passing. A correction is the strongest signal there is; when you see one, record the general rule behind it, not the specific incident.
 - NEVER record secrets, API keys, tokens, passwords, or file contents.
@@ -171,7 +174,7 @@ export function parseExtraction(raw: string): ParsedMemory[] {
   for (const m of parsed.memories) {
     const value = typeof m?.text === 'string' ? m.text.trim() : '';
     if (!value || value.length > MAX_MEMORY_LENGTH) continue;
-    if (looksLikeSecret(value)) continue;
+    if (looksLikeSecret(value) || isVolatileMemory(value)) continue;
 
     const kind: MemoryKind = LEGACY_KINDS[m?.kind] ?? (MEMORY_KINDS.includes(m?.kind) ? m.kind : 'fact');
     const why = typeof m?.why === 'string' ? m.why.trim() : '';
@@ -181,7 +184,7 @@ export function parseExtraction(raw: string): ParsedMemory[] {
       // scope is what makes it a project memory at all.
       scope: kind === 'project' || m?.scope === 'project' ? 'project' : 'global',
       text: value,
-      why: why && why.length <= MAX_MEMORY_LENGTH && !looksLikeSecret(why) ? why : undefined,
+      why: why && why.length <= MAX_MEMORY_LENGTH && !looksLikeSecret(why) && !isVolatileMemory(why) ? why : undefined,
     });
   }
   return out;

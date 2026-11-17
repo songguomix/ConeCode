@@ -55,6 +55,18 @@ describe('parseExtraction', () => {
     }));
     expect(out.map((m) => m.text)).toEqual(['Deploys to Vercel']);
   });
+
+  it('keeps a lasting rule without the current branch in its supporting evidence', () => {
+    const branch = 'The current branch is feature/search.';
+    const text = 'Create a branch for every new feature.';
+    const out = parseExtraction(JSON.stringify({
+      memories: [
+        { kind: 'project', text: branch },
+        { kind: 'workflow', text, why: branch },
+      ],
+    }));
+    expect(out).toEqual([{ kind: 'workflow', scope: 'global', text }]);
+  });
 });
 
 describe('looksLikeSecret', () => {

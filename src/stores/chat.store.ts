@@ -12,6 +12,7 @@ import { useMemoryStore } from './memory.store';
 import { useMemoryV2Store, isMemoryV2Active, type TaskMemoryContext } from './memoryV2.store';
 import { useFreeStore } from './free.store';
 import type { MemoryEntry } from '../core/memory/memory';
+import { isVolatileMemory } from '../core/memory/durability';
 import { formatMemoryFiles } from '../core/memory/memoryFiles';
 import { agentModePrompt, RSI_COST_LOCK_PROMPT, type AgentMode } from '../core/agents/modePrompts';
 import {
@@ -3627,6 +3628,11 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
             break;
           }
           case 'remember': {
+            if (isVolatileMemory(action.text!)) {
+              result = 'Skipped long-term memory because this value can change. Look it up again when needed.';
+              break;
+            }
+            const why = action.why && !isVolatileMemory(action.why) ? action.why : undefined;
             const kind = (action.kind ?? 'workflow') as MemoryEntry['kind'];
             // Project memory needs a project to belong to; without a folder open
             // it is recorded globally rather than pinned to nothing.
@@ -3646,14 +3652,14 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
                 importance: kind === 'workflow' || kind === 'project' ? 0.8 : 0.65,
                 status: 'confirmed',
                 origin: 'user',
-                why: action.why,
+                why,
               });
               result = saved
                 ? `Remembered (${kind}${scopePath ? ', this project' : ''}): ${action.text}`
                 : 'Memory 2.0 could not save that memory.';
               break;
             }
-            await useMemoryStore.getState().add(action.text!, kind, scopePath, action.why);
+            await useMemoryStore.getState().add(action.text!, kind, scopePath, why);
             result = `Remembered (${kind}${scopePath ? ', this project' : ''}): ${action.text}`;
             break;
           }

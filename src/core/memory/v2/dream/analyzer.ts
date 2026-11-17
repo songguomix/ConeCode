@@ -1,3 +1,4 @@
+import { isVolatileMemory } from '../../durability';
 import type { DreamLlm, DreamSession, WikiFile, WikiIndexEntry } from './types';
 import { buildAnalyzerMessages } from './prompts';
 import { extractJsonObject, redactSecrets, sanitizeSlug } from './wiki';
@@ -92,14 +93,20 @@ export async function analyzeSession(
 
   const limit = Math.min(Math.max(input.maxFiles ?? MAX_FILES, 1), MAX_FILES);
   const bySlug = new Map<string, WikiFile>();
+  let hasValidCandidate = false;
   for (const item of list.slice(0, limit)) {
     const file = normalizeFile(item, input.session, input.now);
-    if (file) bySlug.set(file.slug, file);
+    if (!file) continue;
+    hasValidCandidate = true;
+    // Each topic replaces a whole revision. Discard a transient update before
+    // it can displace a previously useful topic.
+    if ([file.name, file.description, file.body].some(isVolatileMemory)) continue;
+    bySlug.set(file.slug, file);
   }
   const files = [...bySlug.values()];
   return {
     files,
-    warning: files.length === 0 ? 'analyzer produced no valid files' : undefined,
+    warning: list.length > 0 && !hasValidCandidate ? 'analyzer produced no valid files' : undefined,
     valid: true,
   };
 }

@@ -302,10 +302,30 @@ describe('MemoryService', () => {
     const { service } = await makeService();
     const first = await service.recordFailure({ task: 'build release', reason: 'signing key missing' });
     const second = await service.recordFailure({ task: 'build release', reason: 'signing key missing' });
-    expect(second.id).toBe(first.id);
+    expect(first).not.toBeNull();
+    expect(second?.id).toBe(first?.id);
     expect(service.getState().records.filter((r) => r.type === 'failure_experience')).toHaveLength(1);
     const hits = await service.searchMemory({ text: 'signing key missing', scope: 'all' });
     expect(hits[0].record.type).toBe('failure_experience');
+  });
+
+  it('skips transient failures, retaining a diagnosed cause or reusable resolution on its own', async () => {
+    const { service } = await makeService();
+    const task = 'Current branch: hotfix/temp';
+    for (const reason of ['HTTP 429', 'fetch failed: ECONNRESET', '请求超时', 'Current status: restarting']) {
+      expect(await service.recordFailure({ task, reason })).toBeNull();
+    }
+    expect(service.getState().records).toHaveLength(0);
+
+    const diagnosed = await service.recordFailure({
+      task, reason: 'Request timed out because the worker never releases its lock',
+    });
+    expect(diagnosed?.content).toBe('Failure: the worker never releases its lock');
+    const fixed = await service.recordFailure({
+      task, reason: 'HTTP 429', resolution: 'Use exponential backoff for relay requests.',
+    });
+    expect(fixed?.content).toBe('Resolution: Use exponential backoff for relay requests.');
+    expect(JSON.stringify(service.getState().records)).not.toContain('hotfix/temp');
   });
 
   it('protects important memories from deletion unless force is explicit', async () => {
