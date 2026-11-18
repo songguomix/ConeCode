@@ -7,33 +7,25 @@ describe('rsiSidebarLayout', () => {
     expect(layout).toMatchObject({
       isRsi: true,
       showFolderHint: true,
-      showFileExplorer: false,
-      fillConversations: true,
     });
   });
 
   it('keeps RSI isolated even when viewMode is chat', () => {
     const layout = rsiSidebarLayout({ agentMode: 'rsi', viewMode: 'chat' });
     expect(layout.showFolderHint).toBe(true);
-    expect(layout.showFileExplorer).toBe(false);
-    expect(layout.fillConversations).toBe(true);
   });
 
-  it('keeps the Work file tree and bounded conversation list', () => {
+  it('shows the compact folder list in Work', () => {
     const layout = rsiSidebarLayout({ agentMode: 'standard', viewMode: 'work' });
     expect(layout).toMatchObject({
       isRsi: false,
-      showFolderHint: false,
-      showFileExplorer: true,
-      fillConversations: false,
+      showFolderHint: true,
     });
   });
 
   it('keeps the Chat list full height with no folder hint', () => {
     const layout = rsiSidebarLayout({ agentMode: 'goal', viewMode: 'chat' });
     expect(layout.showFolderHint).toBe(false);
-    expect(layout.showFileExplorer).toBe(false);
-    expect(layout.fillConversations).toBe(true);
   });
 });
 

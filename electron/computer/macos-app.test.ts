@@ -1,6 +1,6 @@
 import { runInNewContext } from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
-import { pressMacPoint, runMacInput } from './macos-app';
+import { captureMacWindow, MacWindowCaptureError, pressMacPoint, runMacInput } from './macos-app';
 import type { NativeWindow } from './app-target';
 
 const { launch } = vi.hoisted(() => ({ launch: vi.fn() }));
@@ -12,6 +12,17 @@ const axApp = {};
 const quartz = (window: NativeWindow) => ({
   kCGWindowNumber: Number(window.id), kCGWindowOwnerPID: window.pid, kCGWindowLayer: 0,
   kCGWindowBounds: { X: window.x, Y: window.y, Width: window.width, Height: window.height },
+});
+
+describe('macOS selected window capture', () => {
+  it('captures the specified window in one native call and preserves a nonzero exit for diagnosis', async () => {
+    launch.mockClear();
+    launch.mockImplementationOnce((_file, _args, _options, callback) =>
+      callback(Object.assign(new Error('exit 1'), { code: 1 }), '', 'could not create image from window'));
+    await expect(captureMacWindow(target)).rejects.toBeInstanceOf(MacWindowCaptureError);
+    expect(launch).toHaveBeenCalledExactlyOnceWith('/usr/sbin/screencapture',
+      ['-x', '-a', '-o', '-t', 'png', '-l', target.id, expect.any(String)], expect.anything(), expect.any(Function));
+  });
 });
 
 function simulate({ allowFocus = true, stealFocus = false, duplicate = false, floatingPanel = false, duplicateQuartz = false } = {}) {

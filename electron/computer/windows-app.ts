@@ -55,10 +55,6 @@ export async function listWindows(signal?: AbortSignal): Promise<NativeWindow[]>
   return JSON.parse(await runWindows('ConvertTo-Json -InputObject ([ScopedApp]::List()) -Compress', signal));
 }
 
-export async function activateWindow(window: NativeWindow, signal?: AbortSignal): Promise<void> {
-  await runWindows(`[ScopedApp]::Activate(${nativeArgs(window)})`, signal);
-}
-
 export async function captureWindow(window: NativeWindow, signal?: AbortSignal): Promise<Buffer> {
   return Buffer.from(await runWindows(`[ScopedApp]::Capture(${nativeFrame(window)})`, signal), 'base64');
 }
@@ -261,11 +257,6 @@ public static class ScopedApp
     static void BringToForeground(IntPtr window) {
         if (GetForegroundWindow() != window) SetForegroundWindow(window);
         RequireForeground(window);
-    }
-
-    public static void Activate(long id, uint pid) {
-        SetDpi();
-        BringToForeground(Target(id, pid));
     }
 
     static void RequireCapturable(IntPtr window) {

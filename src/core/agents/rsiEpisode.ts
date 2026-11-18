@@ -326,7 +326,7 @@ export function recoverLoopState(
   goal: GoalVector, workspaceRoot: string, baselineReward: number,
 ): { state: LoopState; rebuilt: boolean } {
   try {
-    const saved = loadLoopState(fs, rsiDir);
+    const saved = loadLoopState(fs, rsiDir, treesDir);
     if (saved) return { state: saved, rebuilt: false };
   } catch {
     // Corrupt state file: fall through to tree rebuild (never crash recovery).

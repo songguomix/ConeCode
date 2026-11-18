@@ -1,3 +1,4 @@
+import { createDomainLookup, reviewSearch, testVirusTotalKey } from './aegis';
 import { publishGithubRelease } from './githubRelease';
 import { getReplyThread, listReplyThreads, postReply } from './githubReply';
 import { DshMarketService } from './dsh-market/market-service';
@@ -41,6 +42,7 @@ import { startTunnel, stopTunnel } from './remote/tunnel';
 import { previewManager, detectPreview } from './preview/devserver';
 import { computerController } from './computer/controller';
 import { ComputerPreviewWindow } from './computer/preview-window';
+import { requestScreenRecordingAccess } from './screen-recording';
 import type { ProviderConfig } from '../src/types';
 
 // The official relay follows the desktop system proxy and PAC settings.
@@ -657,13 +659,20 @@ async function netFetch(url: string, scope?: string): Promise<string> {
   }
 }
 
-async function netSearch(query: string, scope?: string): Promise<string> {
+let lookupDomain = createDomainLookup(fetch);
+function aegisScan(urls: string[]) {
+  const cipher = readJSON('aegis-vt.json', '');
+  const key = cipher ? safeStorage.decryptString(Buffer.from(cipher, 'base64')) : '';
+  return reviewSearch(urls, key, lookupDomain);
+}
+
+async function netSearch(query: string, scope?: string, protectedSearch = true): Promise<string> {
   const q = (query || '').trim();
   // A failed/empty search must not leave #N pointing at an older query.
   saveSearchRefs(scope, []);
   if (!q) return 'No web results for "".';
   const cacheKey = q.toLowerCase();
-  const cached = searchCache.get(cacheKey);
+  const cached = protectedSearch ? undefined : searchCache.get(cacheKey);
   // A cached hit still belongs to this conversation's ref table — the numbers
   // in it must open the same pages.
   if (cached !== undefined) {
@@ -673,13 +682,20 @@ async function netSearch(query: string, scope?: string): Promise<string> {
   const done = (text: string, refs: { title: string; link: string }[]): string => {
     saveSearchRefs(scope, refs);
     // Do not cache empty/blocked results for five minutes.
-    if (refs.length) searchCache.set(cacheKey, { text, refs });
+    if (!protectedSearch && refs.length) searchCache.set(cacheKey, { text, refs });
     return text;
   };
   // Bing serves inconsistent results to plain HTTP clients in this environment.
   // Use the normal Chromium session for both Chinese and English searches.
   try {
     const results = await browserSearch(q, MAX_SEARCH_RESULTS);
+    if (protectedSearch && results.length) {
+      const report = await aegisScan(results.map(item => item.link));
+      const allowed = results.filter((_, i) => report.results[i].decision === 'allow');
+      const withheld = results.length - allowed.length;
+      const note = withheld ? `\nAegis withheld ${withheld} result(s) requiring review or blocked by policy.` : '';
+      return done(formatCompactResults(q, allowed) + note, allowed);
+    }
     return done(formatCompactResults(q, results), results);
   } catch (e: any) {
     return `Search error: ${e?.message || String(e)}`;
@@ -836,6 +852,9 @@ function createWindow() {
     mainWindow.loadURL('http://localhost:5173');
   }
 
+  if (process.platform === 'darwin') {
+    mainWindow.on('focus', () => computerPreview.statusChanged());
+  }
   mainWindow.on('closed', () => {
     computerPreview.destroy();
     mainWindow = null;
@@ -970,6 +989,18 @@ function initProviders() {
 }
 
 function registerIPC() {
+  ipcMain.handle('aegis:scan', (_, urls: string[]) => aegisScan(urls));
+  ipcMain.handle('aegis:test-key', (_, key: string) => testVirusTotalKey(key));
+  ipcMain.handle('aegis:has-key', () => Boolean(readJSON('aegis-vt.json', '')));
+  ipcMain.handle('aegis:set-key', (_, value: string) => {
+    const key = value.trim();
+    if (key && (!safeStorage.isEncryptionAvailable() ||
+      (process.platform === 'linux' && safeStorage.getSelectedStorageBackend() === 'basic_text'))) {
+      throw new Error('Secure credential storage is unavailable.');
+    }
+    writeJSON('aegis-vt.json', key ? safeStorage.encryptString(key).toString('base64') : '');
+    lookupDomain = createDomainLookup(fetch);
+  });
   ipcMain.handle('window:minimize', () => mainWindow?.minimize());
   ipcMain.handle('window:maximize', () => {
     if (mainWindow?.isMaximized()) mainWindow.unmaximize();
@@ -1147,6 +1178,8 @@ function registerIPC() {
   ipcMain.handle('conversation:delete', (_, id) => conversationRepo.delete(id));
 
   ipcMain.handle('message:list', (_, convId) => messageRepo.findByConversation(convId));
+  ipcMain.handle('message:subAgentHistory', () => messageRepo.subAgentHistory());
+  ipcMain.handle('message:recordSubAgent', (_, parentMessageId, run) => messageRepo.recordSubAgent(parentMessageId, run));
   ipcMain.handle('message:counts', () => messageRepo.countsByConversation());
   ipcMain.handle('message:create', (_, data) => messageRepo.create(data));
   ipcMain.handle('message:delete', (_, messageId) => messageRepo.delete(messageId));
@@ -1546,11 +1579,11 @@ function registerIPC() {
   ipcMain.handle('app:getAppMetrics', async () => {
     let processes: { pid: number; type: string; cpu: number; memory: number }[] = [];
     try {
-      processes = app.getAppMetrics().map((m: any) => ({
+      processes = app.getAppMetrics().map((m) => ({
         pid: m.pid,
         type: String(m.type || ''),
         cpu: Number(m.cpu?.percentCPUUsage || 0),
-        memory: Number(m.memory?.workingSetSizeKB || 0),
+        memory: Number(m.memory?.workingSetSize || 0),
       }));
     } catch {}
     return {
@@ -1809,7 +1842,7 @@ function registerIPC() {
 
   // ---- Web tools -------------------------------------------------------
   ipcMain.handle('net:fetch', (_, url: string, scope?: string) => netFetch(url, scope));
-  ipcMain.handle('net:search', (_, query: string, scope?: string) => netSearch(query, scope));
+  ipcMain.handle('net:search', (_, query: string, scope?: string, protectedSearch?: boolean) => netSearch(query, scope, protectedSearch));
   ipcMain.handle('net:download', (_, url: string, dest: string) => netDownload(url, dest));
 
   // ---- Built-in browser (headless BrowserUse for the open web) ------------
@@ -2140,14 +2173,14 @@ function registerIPC() {
     computerPreview.statusChanged();
     return status;
   });
-  ipcMain.handle('computer:openScreenSettings', (event) => {
+  ipcMain.handle('computer:openScreenSettings', async (event) => {
     computerPreview.assertMain(event);
-    if (process.platform !== 'darwin') throw new Error('Screen Recording settings are only available on macOS.');
-    return shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');
+    await requestScreenRecordingAccess();
+    computerPreview.statusChanged();
   });
   ipcMain.handle('computer:screenshot', async (event, expectedRevision?: number) => {
     computerPreview.assertMain(event);
-    return computerPreview.capture(() => computerController.screenshot(expectedRevision));
+    return computerPreview.capture(expectedRevision);
   });
   ipcMain.handle('computer:act', (event, req) => {
     computerPreview.assertMain(event);
@@ -2267,11 +2300,10 @@ function registerIPC() {
       }
     }
   });
-  // Permission recovery: deep-link straight into Screen Recording settings,
-  // and relaunch (a grant only takes effect after a full restart — the most
-  // common "I allowed it but it still fails" cause).
-  ipcMain.handle('screenshot:open-settings', async () => {
-    await shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');
+  ipcMain.handle('screenshot:open-settings', async (event) => {
+    computerPreview.assertMain(event);
+    await requestScreenRecordingAccess();
+    computerPreview.statusChanged();
     return { ok: true };
   });
   ipcMain.handle('screenshot:relaunch', () => {

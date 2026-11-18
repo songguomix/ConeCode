@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Conversation, Message } from '../../../types';
+import type { SubAgentRun } from '../../../types/subAgent.types';
 
 const disk = vi.hoisted(() => ({
   conversations: [] as Conversation[],
@@ -61,5 +62,31 @@ describe('persisted message editing', () => {
     }
     expect(writeJSON).not.toHaveBeenCalled();
     expect(disk.messages).toHaveLength(5);
+  });
+});
+
+describe('sub-agent transcripts', () => {
+  const parent: Message = { id: 'parent', conversationId: 'one', role: 'assistant', content: 'Delegating', createdAt: 1 };
+  const run: SubAgentRun = {
+    id: 'parent:0', conversationId: 'one', task: 'Read the docs', startedAt: 1, status: 'running', messages: [],
+  };
+  beforeEach(() => { disk.messages = [parent]; });
+
+  it('updates one child without replacing its siblings or expanding the parent transcript', () => {
+    const sibling = { ...run, id: 'parent:1', task: 'Review the tests' };
+    const finished: SubAgentRun = { ...run, status: 'completed', messages: [{ role: 'assistant', content: 'Findings' }] };
+    expect(messageRepo.recordSubAgent(parent.id, run)).toBe(true);
+    expect(messageRepo.recordSubAgent(parent.id, sibling)).toBe(true);
+    expect(messageRepo.recordSubAgent(parent.id, finished)).toBe(true);
+    expect(messageRepo.findByConversation('one')).toEqual([parent]);
+    expect(messageRepo.subAgentHistory()).toEqual([finished, sibling]);
+  });
+
+  it('never attaches a child to a different conversation or recreates a removed turn', () => {
+    expect(messageRepo.recordSubAgent(parent.id, { ...run, conversationId: 'two' })).toBe(false);
+    expect(messageRepo.recordSubAgent(parent.id, run)).toBe(true);
+    messageRepo.delete(parent.id);
+    expect(messageRepo.recordSubAgent(parent.id, run)).toBe(false);
+    expect(messageRepo.subAgentHistory()).toEqual([]);
   });
 });

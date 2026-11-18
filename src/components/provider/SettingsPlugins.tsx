@@ -8,6 +8,7 @@ import { useMarketStore } from '../../stores/market.store';
 import { useDshMarketStore } from '../../stores/dshMarket.store';
 import { useSkillsStore, useChatStore, useModelStore, useUIStore, useLanguageStore } from '../../stores';
 import { buildCreatePluginPrompt } from '../../core/plugins/plugins';
+import AegisView from '../plugins/AegisView';
 import SyncView from '../plugins/SyncView';
 import PerfView from '../plugins/PerfView';
 import SecurityView from '../plugins/SecurityView';
@@ -321,6 +322,7 @@ function DetailView({ id, t }: { id: string; t: (k: string) => string }) {
       </div>
       {p.view === 'sync' && <SyncView />}
       {p.view === 'perf' && <PerfView />}
+      {p.view === 'aegis-search' && <AegisView t={t} enabled={p.enabled} />}
       {p.view === 'security' && <SecurityView />}
       {p.view === 'image-gen' && <ImageGenPluginView />}
       {p.view === 'auto-screenshot' && <AutoScreenshotPluginView />}

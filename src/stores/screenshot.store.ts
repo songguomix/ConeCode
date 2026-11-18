@@ -61,7 +61,7 @@ export const useScreenshotStore = create<ScreenshotStore>((set, get) => ({
         set({ open: true, image: null, error: res?.needsPermission ? 'permission' : 'failed', starting: false });
         return;
       }
-      set({ starting: false });
+      set({ open: false, image: null, error: null, starting: false });
     } catch {
       set({ open: true, image: null, error: 'failed', starting: false });
     }

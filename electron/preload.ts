@@ -1,8 +1,10 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import type { SubAgentRun } from '../src/types/subAgent.types';
 import type { ComputerPreviewAppearance } from '../src/core/computer/preview';
 import type { UpdateDownloadProgress } from '../src/core/updates/updateClient';
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  aegis: { testKey: (key: string) => ipcRenderer.invoke('aegis:test-key', key), hasKey: () => ipcRenderer.invoke('aegis:has-key'), setKey: (key: string) => ipcRenderer.invoke('aegis:set-key', key), scan: (urls: string[]) => ipcRenderer.invoke('aegis:scan', urls) },
   free: {
     status: () => ipcRenderer.invoke('free:status'),
     usageGet: () => ipcRenderer.invoke('free:usage:get'),
@@ -41,6 +43,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   message: {
     list: (conversationId: string) => ipcRenderer.invoke('message:list', conversationId),
+    subAgentHistory: () => ipcRenderer.invoke('message:subAgentHistory'),
+    recordSubAgent: (parentMessageId: string, run: SubAgentRun) => ipcRenderer.invoke('message:recordSubAgent', parentMessageId, run),
     counts: () => ipcRenderer.invoke('message:counts'),
     create: (data: any) => ipcRenderer.invoke('message:create', data),
     delete: (messageId: string) => ipcRenderer.invoke('message:delete', messageId),
@@ -128,7 +132,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   net: {
     fetch: (url: string, scope?: string) => ipcRenderer.invoke('net:fetch', url, scope),
-    search: (query: string, scope?: string) => ipcRenderer.invoke('net:search', query, scope),
+    search: (query: string, scope?: string, protectedSearch?: boolean) => ipcRenderer.invoke('net:search', query, scope, protectedSearch),
     download: (url: string, dest: string) => ipcRenderer.invoke('net:download', url, dest),
   },
   browser: {

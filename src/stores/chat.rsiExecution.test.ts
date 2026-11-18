@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApiMessages, resetNativeToolFallback, useChatStore } from './chat.store';
 import { useCodeChangesStore } from './codeChanges.store';
+import { useAutoScreenshotStore } from './autoScreenshot.store';
+import { usePluginStore } from './plugin.store';
 import { useInstallGateStore } from './installGate.store';
 import { useMemoryStore } from './memory.store';
 import { useModelStore } from './model.store';
@@ -16,7 +18,7 @@ import type { AIModel, Conversation, Message } from '../types';
 const conversationId = 'rsi-execution';
 const model: AIModel = {
   id: 'gpt-test', name: 'GPT Test', providerId: 'p1',
-  supportsText: true, supportsVision: false, supportsImageGeneration: false,
+  supportsText: true, supportsVision: true, supportsImageGeneration: false,
   supportsAudioInput: false, supportsAudioOutput: false,
   supportsFunctionCalling: true, supportsReasoning: false,
   contextWindow: 128000, maxOutputTokens: 8192, enabled: true,
@@ -40,9 +42,18 @@ let streamCalls: Array<{ messages: Array<{ role: string; content: unknown }>; to
 let transcripts: Record<string, Message[]>;
 let files: Map<string, string>;
 let execRun: ReturnType<typeof vi.fn>;
+const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6R8sAAAAASUVORK5CYII=';
+let capture: ReturnType<typeof vi.fn>;
 
 const currentRsi = () => useChatStore.getState().conversations.find((conv) => conv.id === conversationId)!.rsi!;
 const execute = () => useChatStore.getState().sendMessage('Implement the configured RSI improvement.', 'p1', 'gpt-test', { rsiExecution: true });
+
+function freezeChecks(...commands: string[]) {
+  const rows = commands.map((command, index) => `| metric-${index} | \`${command}\` | lower | 0 |`);
+  files.set(`${rsiWorkspaceDir('/proj', conversationId)}/GOAL_VECTOR.md`, [
+    '## 2. Frozen metrics', '| id | command / fixture | direction | baseline |', '|---|---|---|---|', ...rows,
+  ].join('\n'));
+}
 
 beforeEach(() => {
   responses = [];
@@ -50,8 +61,18 @@ beforeEach(() => {
   transcripts = {};
   files = new Map([['/proj/a.ts', 'existing user code']]);
   execRun = vi.fn(async () => ({ success: true, stdout: 'tests passed', stderr: '', exitCode: 0 }));
+  capture = vi.fn().mockResolvedValue({ ok: true, dataUrl: png, width: 1, height: 1, target: 'window', timestamp: 1 });
+  vi.stubGlobal('Image', class {
+    src = '';
+    naturalWidth = 1;
+    naturalHeight = 1;
+    async decode() {
+      if (this.src !== png) throw new Error('Invalid image');
+    }
+  });
   (globalThis as any).window = {
     electronAPI: {
+      autoScreenshot: { capture },
       chat: {
         stream: async (params: typeof streamCalls[number]) => {
           streamCalls.push(params);
@@ -90,6 +111,8 @@ beforeEach(() => {
     },
   };
   resetNativeToolFallback();
+  useAutoScreenshotStore.setState({ history: [], config: { defaultTarget: 'auto', autoSaveToDisk: false, captureDelayMs: 0, maxHistory: 24 } });
+  usePluginStore.setState({ disabled: [] });
   vi.spyOn(console, 'log').mockImplementation(() => {});
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -120,7 +143,7 @@ beforeEach(() => {
   useUIStore.setState({ viewMode: 'work' });
 });
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('RSI live execution evidence', () => {
   it('keeps an ordinary direction discussion out of the execution ledger', async () => {
@@ -148,15 +171,23 @@ describe('RSI live execution evidence', () => {
     expect(useChatStore.getState().isStreaming).toBe(false);
   });
 
-  it('recovers from an early summary and completes after a real passing check', async () => {
+  it('recovers from an early summary and automatically supplies the final window capture to the next model turn', async () => {
     responses = [
       textResponse('The implementation is ready.'),
       toolResponse('exec', { command: 'npm test' }, 'verify'),
       textResponse('The test command passed.'),
+      textResponse('I inspected the resulting view.'),
     ];
     await execute();
 
-    expect(streamCalls).toHaveLength(3);
+    expect(streamCalls).toHaveLength(4);
+    expect(capture).toHaveBeenCalledTimes(1);
+    expect(capture).toHaveBeenCalledWith(expect.objectContaining({ target: 'window' }));
+    expect(JSON.stringify(streamCalls[3].messages)).toContain(png);
+    const assistantReplies = transcripts[conversationId].filter((message) => message.role === 'assistant').map((message) => message.content);
+    expect(assistantReplies).not.toContain('The test command passed.');
+    expect(assistantReplies).toContain('I inspected the resulting view.');
+    expect(useChatStore.getState().messages.find((message) => message.images?.includes(png))).toMatchObject({ role: 'user', isToolResult: true });
     expect(execRun).toHaveBeenCalledWith('npm test', '/proj', expect.any(Object));
     expect(currentRsi().runs).toHaveLength(1);
     expect(currentRsi().runs[0]).toMatchObject({ status: 'completed', result: null });
@@ -165,12 +196,204 @@ describe('RSI live execution evidence', () => {
     expect(useChatStore.getState().messages.some((message) => message.isLocalNotice)).toBe(false);
   });
 
+  it('names a missing frozen check in recovery and the stopped run record', async () => {
+    freezeChecks('npm run typecheck', 'npm test');
+    responses = [toolResponse('exec', { command: 'npm run typecheck' })];
+    await execute();
+
+    const messages = streamCalls[2].messages;
+    const recovery = String(messages[messages.length - 1]?.content);
+    expect(recovery.slice(recovery.indexOf('before completion was evidenced'))).toContain('npm test');
+    expect(currentRsi().runs[0]).toMatchObject({ status: 'stopped', result: expect.stringContaining('npm test') });
+    expect(execRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses a successful explicit plugin capture once and sends its pixels before closing', async () => {
+    responses = [
+      toolResponse('exec', { command: 'npm test' }),
+      toolResponse('auto_screenshot', { target: 'window', label: 'result view' }, 'final_capture'),
+      textResponse('I inspected the result view.'),
+    ];
+    await execute();
+    const screenshot = useChatStore.getState().messages.find((message) => message.toolCallId === 'final_capture');
+    expect(screenshot).toMatchObject({ role: 'tool', images: [png], content: expect.stringContaining('result view') });
+    expect(streamCalls).toHaveLength(3);
+    expect(JSON.stringify(streamCalls[2].messages)).toContain(png);
+    expect(capture).toHaveBeenCalledTimes(1);
+    expect(currentRsi().status).toBe('completed');
+  });
+
+  it('preserves this run’s captured pixels across a chat switch before the visual review request', async () => {
+    const persist = window.electronAPI.message.create;
+    window.electronAPI.message.create = async (message) => {
+      const saved = await persist(message);
+      if (message.toolCallId === 'final_capture') {
+        useChatStore.setState({ activeConversationId: 'other-chat', messages: [] });
+        useWorkspaceStore.setState({ rootPath: '/other' });
+      }
+      return saved;
+    };
+    responses = [
+      toolResponse('exec', { command: 'npm test' }),
+      toolResponse('auto_screenshot', { target: 'window' }, 'final_capture'),
+      textResponse('I inspected the captured view.'),
+    ];
+    await execute();
+    expect(transcripts[conversationId].find((message) => message.toolCallId === 'final_capture')?.images).toBeUndefined();
+    expect(JSON.stringify(streamCalls[2].messages)).toContain(png);
+    expect(capture).toHaveBeenCalledTimes(1);
+    expect(currentRsi().status).toBe('completed');
+    expect(useChatStore.getState().activeConversationId).toBe('other-chat');
+  });
+
+  it('drops an in-flight capture if another chat was displayed even briefly', async () => {
+    let finishCapture!: () => void;
+    capture.mockImplementationOnce(() => new Promise((resolve) => {
+      finishCapture = () => resolve({ ok: true, width: 1, height: 1, dataUrl: png, target: 'window', timestamp: 1 });
+    }));
+    responses = [toolResponse('exec', { command: 'npm test' }), textResponse('Ready for inspection.')];
+    const running = execute();
+    await vi.waitFor(() => expect(capture).toHaveBeenCalledOnce());
+    useChatStore.setState({ activeConversationId: 'another-chat' });
+    useChatStore.setState({ activeConversationId: conversationId });
+    finishCapture();
+    await running;
+    expect(currentRsi().runs[0]).toMatchObject({ status: 'stopped', result: expect.stringContaining('active workspace changed') });
+    expect(useAutoScreenshotStore.getState().history).toHaveLength(0);
+    expect(streamCalls.some((call) => JSON.stringify(call.messages).includes(png))).toBe(false);
+  });
+
+  it.each(['disabled', 'permission', 'invalid image', 'wrong preview', 'text-only model'])('keeps final screenshot verification blocked for %s', async (scenario) => {
+    if (scenario === 'disabled') usePluginStore.setState({ disabled: ['auto-screenshot'] });
+    if (scenario === 'permission') capture.mockResolvedValue({ ok: false, error: 'Capture denied', needsPermission: 'screenRecording' });
+    if (scenario === 'invalid image') capture.mockResolvedValue({ ok: true, width: 1, height: 1, target: 'window', dataUrl: 'data:image/png;base64,broken' });
+    if (scenario === 'wrong preview') useAutoScreenshotStore.getState().setConfig({ defaultTarget: 'preview' });
+    if (scenario === 'text-only model') useModelStore.setState({ models: new Map([['p1', [{ ...model, supportsVision: false }]]]) });
+    responses = [toolResponse('exec', { command: 'npm test' }), textResponse('Done.')];
+    await execute();
+    const run = currentRsi().runs[0];
+    expect(run.status).toBe('stopped');
+    expect(run.result).toMatch(/screenshot/i);
+    if (scenario === 'permission') expect(run.result).toContain('screenRecording');
+    if (scenario === 'text-only model') expect(run.result).toContain('vision-capable');
+    expect(capture).toHaveBeenCalledTimes(scenario === 'disabled' ? 0 : 1);
+    expect(transcripts[conversationId].filter((message) => message.images?.length)).toEqual([]);
+  });
+
+  it('requires the pre-edit frozen check to pass again on the current revision', async () => {
+    freezeChecks('npm run typecheck', 'npm test');
+    responses = [
+      toolResponse('exec', { command: 'npm test' }, 'baseline'),
+      toolResponse('create_file', { path: '/proj/new.ts', content: 'export const n = 1;' }, 'edit'),
+      toolResponse('exec', { command: 'npm run typecheck' }, 'other_check'),
+      textResponse('Both checks were observed.'),
+      toolResponse('exec', { command: 'npm test' }, 'current'),
+      textResponse('Both checks passed on the current revision.'),
+    ];
+    await execute();
+
+    expect(streamCalls).toHaveLength(7);
+    expect(execRun.mock.calls.map(([command]) => command)).toEqual(['npm test', 'npm run typecheck', 'npm test']);
+    expect(currentRsi().runs[0].status).toBe('completed');
+  });
+
+  it('keeps the working directory of a manually approved check', async () => {
+    freezeChecks('npm test');
+    useSettingsStore.setState({ approvalMode: 'suggest', approvalOverride: null });
+    responses = [toolResponse('exec', { command: 'npm test', cwd: '/proj/other' })];
+    await execute();
+    await useCodeChangesStore.getState().applyChange(useCodeChangesStore.getState().changes[0].id);
+    await vi.waitFor(() => expect(currentRsi().runs[1]).toMatchObject({
+      status: 'stopped', result: expect.stringContaining('npm test'),
+    }));
+
+    expect(execRun).toHaveBeenCalledWith('npm test', '/proj/other', expect.any(Object));
+  });
+
+  it('resumes approved checks in their original project and keeps another foreground chat out of the final capture', async () => {
+    freezeChecks('npm test', 'npm run build');
+    useSettingsStore.setState({ approvalMode: 'suggest', approvalOverride: null });
+    responses = [
+      toolResponse('exec', { command: 'npm test' }, 'tests'),
+      toolResponse('exec', { command: 'npm run build' }, 'build'),
+      textResponse('Both checks passed.'),
+    ];
+    await execute();
+    useChatStore.setState({ activeConversationId: 'other-chat', messages: [] });
+    useWorkspaceStore.setState({ rootPath: '/other' });
+    const changes = () => useCodeChangesStore.getState().changes;
+    await useCodeChangesStore.getState().applyChange(changes()[0].id);
+    await vi.waitFor(() => expect(changes()[0]).toMatchObject({ newCode: 'npm run build', cwd: '/proj', status: 'pending' }));
+    await useCodeChangesStore.getState().applyChange(changes()[0].id);
+    await vi.waitFor(() => expect(currentRsi().runs.slice(-1)[0]).toMatchObject({ status: 'stopped', result: expect.stringContaining('auto_screenshot') }));
+    expect(capture).not.toHaveBeenCalled();
+
+    expect(execRun.mock.calls.map(([command, cwd]) => [command, cwd])).toEqual([
+      ['npm test', '/proj'], ['npm run build', '/proj'],
+    ]);
+    expect(useChatStore.getState().activeConversationId).toBe('other-chat');
+  });
+
+  it.each(['healthy', 'breached', 'unavailable', 'missing RSS', 'missing load', 'missing CPUs'])('uses the native %s snapshot verdict for a frozen perf guard', async (reading) => {
+    freezeChecks('npm test', 'perf_snapshot');
+    window.electronAPI.app.getAppMetrics = vi.fn().mockResolvedValue(reading === 'unavailable' ? null : {
+      cpus: reading === 'missing CPUs' ? 0 : 4, load: reading === 'missing load' ? [] : [1, 0.8, 0.5],
+      freeMemory: reading === 'breached' ? 2 ** 20 : 2 ** 30, totalMemory: 8 * 2 ** 30,
+      processes: reading === 'missing RSS' ? [] : [{ pid: 123, type: 'Browser', cpu: 5, memory: 32000 }],
+      mainMemory: { rss: 10 * 2 ** 20, heapUsed: 2 ** 20, heapTotal: 2 ** 21 },
+    });
+    const snapshot = toolResponse('perf_snapshot', {}, 'host_sample');
+    // Exercise both the single tool path and the batch of independent reads.
+    if (reading === 'breached') snapshot.choices[0].message.tool_calls.push(
+      ...toolResponse('read_file', { path: '/proj/a.ts' }, 'read').choices[0].message.tool_calls,
+    );
+    responses = [toolResponse('exec', { command: 'npm test' }, 'tests'), snapshot];
+    await execute();
+
+    expect(currentRsi().runs[0].status).toBe(reading === 'healthy' ? 'completed' : 'stopped');
+    if (reading !== 'healthy') expect(currentRsi().runs[0].result).toContain('perf_snapshot');
+    if (reading.startsWith('missing')) {
+      const evidence = transcripts[conversationId].find((message) => message.toolCallId === 'host_sample');
+      expect(evidence?.content).toContain('Incomplete snapshot');
+      expect(evidence?.content).not.toContain('no defect');
+    }
+  });
+
+  it.each(['copy', 'rename'] as const)('requires fresh checks after an archive-to-product %s', async (operation) => {
+    const archived = `${rsiWorkspaceDir('/proj', conversationId)}/candidate.ts`;
+    const destination = '/proj/restored.ts';
+    const args = operation === 'rename' ? { oldPath: archived, newPath: destination } : { srcPath: archived, destPath: destination };
+    files.set(archived, 'export const restored = 1;');
+    window.electronAPI.fs[operation] = vi.fn(async (src: string, dest: string) => {
+      files.set(dest, files.get(src)!);
+      if (operation === 'rename') files.delete(src);
+      return true;
+    });
+    if (operation === 'rename') useSettingsStore.setState({ approvalMode: 'suggest', approvalOverride: null });
+    responses = [
+      toolResponse('exec', { command: 'npm test' }, 'before_restore'),
+      toolResponse(operation, args, 'restore'),
+    ];
+    await execute();
+    if (operation === 'rename') {
+      const changes = () => useCodeChangesStore.getState().changes;
+      await useCodeChangesStore.getState().applyChange(changes()[0].id);
+      await vi.waitFor(() => expect(changes()[0]).toMatchObject({ kind: 'rename', status: 'pending' }));
+      await useCodeChangesStore.getState().applyChange(changes()[0].id);
+      await vi.waitFor(() => expect(currentRsi().runs[2]?.status).toBe('stopped'));
+    }
+    expect(files.get(destination)).toBe('export const restored = 1;');
+    const runs = currentRsi().runs;
+    expect(runs[runs.length - 1]).toMatchObject({ status: 'stopped', result: expect.stringContaining('verification') });
+    expect(execRun).toHaveBeenCalledTimes(1);
+  });
+
   it('starts a run lazily when a typed request actually executes a command', async () => {
     responses = [toolResponse('exec', { command: 'npm test' }), textResponse('Verified.')];
     await useChatStore.getState().sendMessage('Run the RSI verification now.', 'p1', 'gpt-test');
 
     expect(execRun).toHaveBeenCalledTimes(1);
-    expect(streamCalls).toHaveLength(2);
+    expect(streamCalls).toHaveLength(3);
     expect(currentRsi().runs).toHaveLength(1);
     expect(currentRsi().runs[0].status).toBe('completed');
   });
@@ -187,6 +410,25 @@ describe('RSI live execution evidence', () => {
     expect(currentRsi().runs[0].result).toMatch(/failed three times/i);
     expect(currentRsi().status).toBe('idle');
     expect(useChatStore.getState().continuableConvId).toBe(conversationId);
+  });
+
+  it('stops repeated repairs when three changed revisions reproduce the original verification failure', async () => {
+    freezeChecks('npm test');
+    execRun.mockResolvedValue({ success: false, stdout: '', stderr: 'Assertion failed: expected 1, received 0', exitCode: 1 });
+    responses = [toolResponse('exec', { command: 'npm test' }, 'original_failure')];
+    for (let revision = 1; revision <= 3; revision++) {
+      responses.push(
+        toolResponse('edit_file', { path: '/proj/a.ts', content: `export const n = ${revision};` }, `edit_${revision}`),
+        toolResponse('exec', { command: 'npm test' }, `verify_${revision}`),
+      );
+    }
+    responses.push(textResponse('Should not spend another model turn.'));
+    await execute();
+
+    expect(execRun).toHaveBeenCalledTimes(4);
+    expect(files.get('/proj/a.ts')).toBe('export const n = 3;');
+    expect(responses).toHaveLength(1);
+    expect(currentRsi().runs[0]).toMatchObject({ status: 'stopped', result: expect.stringMatching(/diagnostic|repair|revision/i) });
   });
 
   it('does not complete while waiting for an ask_user answer, even after a passing check', async () => {
@@ -230,7 +472,7 @@ describe('RSI live execution evidence', () => {
     await vi.waitFor(() => expect(currentRsi().status).toBe('completed'));
 
     expect(execRun).toHaveBeenCalledTimes(1);
-    expect(streamCalls).toHaveLength(2);
+    expect(streamCalls).toHaveLength(3);
     expect(currentRsi().runs.map((run) => run.status)).toEqual(['stopped', 'completed']);
     expect(useChatStore.getState().isStreaming).toBe(false);
   });
@@ -266,7 +508,7 @@ describe('RSI live execution evidence', () => {
     await execute();
 
     expect(execRun).toHaveBeenCalledTimes(1);
-    expect(streamCalls).toHaveLength(2);
+    expect(streamCalls).toHaveLength(3);
     expect(currentRsi().runs[0]).toMatchObject({ status: 'completed', result: null });
   });
 

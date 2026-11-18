@@ -457,7 +457,6 @@ export default function ChatView() {
         </div>
       )}
 
-      <GoalProgressRow />
 
       <DiffStatPill key={activeConversationId} />
 
@@ -510,6 +509,7 @@ export default function ChatView() {
 
       {!isNewChat && (
         <div hidden={isEditing}>
+          <GoalProgressRow key={activeConversationId} />
           <ChatInput />
         </div>
       )}

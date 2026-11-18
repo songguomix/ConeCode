@@ -1,3 +1,4 @@
+import { useGoalStore } from './goal.store';
 import { useGithubPushStore } from './githubPush.store';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useChatStore } from './chat.store';
@@ -129,6 +130,120 @@ describe('runAgentLoop with native tool calling', () => {
     useMemoryStore.setState({ entries: [], enabled: false, extracting: false, loaded: true });
     useCodeChangesStore.setState({ changes: [] });
     useComputerStore.setState({ enabled: false, target: null, targetRevision: 0, frameId: null, lastShot: null, activity: [] });
+  });
+
+  it.each(['native', 'prompt'] as const)('records %s child turns under the parent message without exposing its reads to the parent model', async (mode) => {
+    useSettingsStore.setState({ toolCallMode: mode });
+    const record = vi.fn<typeof window.electronAPI.message.recordSubAgent>().mockResolvedValue(true);
+    window.electronAPI.message.recordSubAgent = record;
+    const call = (name: string, args: Record<string, string>) => mode === 'native'
+      ? toolCallResponse(name, args)
+      : textResponse('```json\n' + JSON.stringify({ action: name, ...args }) + '\n```');
+    queued = [
+      call('spawn_agent', { task: 'Investigate a.ts' }),
+      call('read_file', { path: '/proj/a.ts' }),
+      textResponse('Report from the child'),
+      textResponse('Parent answer'),
+    ];
+    // The parent request started in /proj. Selecting a different workspace
+    // during its stream must not change the workspace seen by its child.
+    const stream = window.electronAPI.chat.stream;
+    window.electronAPI.chat.stream = async (params) => {
+      if (!streamCalls.length) useWorkspaceStore.setState({ rootPath: '/another' });
+      return stream(params);
+    };
+
+    await useChatStore.getState().sendMessage('Delegate a read', 'p1', 'gpt-test');
+
+    const parent = created.find((m) => m.role === 'assistant');
+    const snapshots = record.mock.calls.map(([parentId, run]) => {
+      expect(parentId).toBe(parent.id);
+      expect(run).toMatchObject({ id: `${parent.id}:0`, conversationId: 'conv1', task: 'Investigate a.ts' });
+      return run;
+    });
+    expect(snapshots.map((run) => [run.status, run.messages.length])).toEqual([
+      ['running', 0], ['running', 1], ['running', 2], ['running', 3], ['completed', 3],
+    ]);
+    const [assistant, tool, report] = snapshots[snapshots.length - 1].messages;
+    expect(assistant.role).toBe('assistant');
+    if (mode === 'native') expect(assistant.toolCalls?.[0].name).toBe('read_file');
+    else expect(assistant.content).toContain('"action":"read_file"');
+    expect(tool).toEqual({ role: 'tool', name: 'read_file', content: 'Contents of /proj/a.ts:\nfile body' });
+    expect(report).toEqual({ role: 'assistant', content: 'Report from the child' });
+    expect(streamCalls[1]).toMatchObject({ conversationId: `sub:${parent.id}:0`, emitChunks: false });
+    expect(streamCalls[1].messages[0].content).toContain('/proj');
+    expect(streamCalls[1].messages[0].content).not.toContain('/another');
+    const parentContext = JSON.stringify(streamCalls[3].messages);
+    expect(parentContext).toContain('Report from the child');
+    expect(parentContext).not.toContain('file body');
+  });
+
+  it('records separate runs for siblings and preserves the failure from a child stream', async () => {
+    const record = vi.fn<typeof window.electronAPI.message.recordSubAgent>().mockResolvedValue(true);
+    window.electronAPI.message.recordSubAgent = record;
+    const parent = toolCallResponse('spawn_agent', { task: 'First child' }, 'first');
+    parent.choices[0].message.tool_calls.push(toolCallResponse('spawn_agent', { task: 'Second child' }, 'second').choices[0].message.tool_calls[0]);
+    queued = [parent, textResponse('First report'), textResponse('Parent answer')];
+    const stream = window.electronAPI.chat.stream;
+    window.electronAPI.chat.stream = async (params) => {
+      if (params.conversationId?.startsWith('sub:') && params.messages[1].content === 'Second child') {
+        throw new Error('child offline');
+      }
+      return stream(params);
+    };
+
+    await useChatStore.getState().sendMessage('Investigate twice', 'p1', 'gpt-test');
+
+    const done = record.mock.calls.map(([, run]) => run).filter((run) => run.status !== 'running');
+    const parentId = created.find((m) => m.role === 'assistant').id;
+    expect(done).toMatchObject([
+      { id: `${parentId}:0`, status: 'completed', messages: [{ content: 'First report' }] },
+      { id: `${parentId}:1`, status: 'failed', detail: expect.stringContaining('child offline'), messages: [] },
+    ]);
+    expect(created.find((m) => m.toolCallId === 'second').content).toContain('child offline');
+  });
+
+  it('records a stopped child immediately and discards its late model response', async () => {
+    const record = vi.fn<typeof window.electronAPI.message.recordSubAgent>().mockResolvedValue(true);
+    window.electronAPI.message.recordSubAgent = record;
+    const stop = vi.fn().mockResolvedValue(true);
+    window.electronAPI.chat.stop = stop;
+    let release!: (result: unknown) => void;
+    queued = [toolCallResponse('spawn_agent', { task: 'Wait for evidence' })];
+    const stream = window.electronAPI.chat.stream;
+    window.electronAPI.chat.stream = async (params) => {
+      if (params.conversationId?.startsWith('sub:')) return new Promise((resolve) => { release = resolve; });
+      return stream(params);
+    };
+
+    const sending = useChatStore.getState().sendMessage('Delegate', 'p1', 'gpt-test');
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    useChatStore.getState().stopGeneration();
+    const runId = record.mock.calls[0][1].id;
+    expect(stop).toHaveBeenCalledWith(`sub:${runId}`);
+    await vi.waitFor(() => expect(record.mock.calls.some(([, run]) => run.status === 'interrupted')).toBe(true));
+    release(textResponse('late report'));
+    await sending;
+
+    expect(record.mock.calls.map(([, run]) => run.status)).toEqual(['running', 'interrupted']);
+    expect(JSON.stringify(created)).not.toContain('late report');
+  });
+
+  it('retains the bounded tool history when a child exhausts its step limit', async () => {
+    const record = vi.fn<typeof window.electronAPI.message.recordSubAgent>().mockResolvedValue(true);
+    window.electronAPI.message.recordSubAgent = record;
+    queued = [
+      toolCallResponse('spawn_agent', { task: 'Keep investigating' }),
+      ...Array.from({ length: 12 }, () => toolCallResponse('read_file', { path: '/proj/a.ts' })),
+      textResponse('Parent answer'),
+    ];
+
+    await useChatStore.getState().sendMessage('Delegate', 'p1', 'gpt-test');
+
+    const lastRun = record.mock.calls[record.mock.calls.length - 1][1];
+    expect(lastRun.status).toBe('limit');
+    expect(lastRun.messages).toHaveLength(24);
+    expect(created.find((m) => m.toolName === 'spawn_agent').content).toContain('step limit');
   });
 
   function arrangeComputerWindows() {
@@ -431,6 +546,25 @@ describe('runAgentLoop with native tool calling', () => {
     expect(window.electronAPI.message.editAndTruncate).toHaveBeenCalledTimes(1);
     expect(streamCalls).toHaveLength(1);
     expect(created.some((m) => m.content === 'accidental append')).toBe(false);
+  });
+
+  it('continues a goal after a subtask and stops after the verified final report', async () => {
+    useChatStore.setState({ agentMode: 'goal' });
+    try {
+      queued = [
+        textResponse('Finished the first item.'),
+        toolCallResponse('read_file', { path: '/proj/a.ts' }),
+        textResponse('Verified the second item against the file contents.\n[GOAL_COMPLETE]'),
+      ];
+      await useChatStore.getState().sendMessage('Finish both items', 'p1', 'gpt-test');
+      expect(streamCalls).toHaveLength(3);
+      expect(useGoalStore.getState().goals.conv1.status).toBe('completed');
+      const messages = useChatStore.getState().messages;
+      expect(messages[messages.length - 1]?.content).toBe('Verified the second item against the file contents.');
+    } finally {
+      useChatStore.setState({ agentMode: 'standard' });
+      useGoalStore.getState().clearGoal('conv1');
+    }
   });
 
   it('sends the tool schemas to the provider', async () => {

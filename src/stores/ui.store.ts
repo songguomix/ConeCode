@@ -63,6 +63,7 @@ const FLOATING_PANELS_CLOSED = {
   changedFilesOpen: false,
   reviewOpen: false,
   backgroundOpen: false,
+  subAgentsOpen: false,
   worktreesOpen: false,
   remoteOpen: false,
   computerOpen: false,
@@ -88,6 +89,7 @@ interface UIStore {
   changedFilesOpen: boolean;
   reviewOpen: boolean;
   backgroundOpen: boolean;
+  subAgentsOpen: boolean;
   worktreesOpen: boolean;
   remoteOpen: boolean;
   previewOpen: boolean;
@@ -115,6 +117,8 @@ interface UIStore {
   closeReview: () => void;
   toggleBackground: () => void;
   closeBackground: () => void;
+  toggleSubAgents: () => void;
+  closeSubAgents: () => void;
   toggleWorktrees: () => void;
   closeWorktrees: () => void;
   toggleRemote: () => void;
@@ -143,6 +147,7 @@ export const useUIStore = create<UIStore>((set) => ({
   changedFilesOpen: false,
   reviewOpen: false,
   backgroundOpen: false,
+  subAgentsOpen: false,
   worktreesOpen: false,
   remoteOpen: false,
   previewOpen: false,
@@ -171,6 +176,8 @@ export const useUIStore = create<UIStore>((set) => ({
   closeReview: () => set({ reviewOpen: false }),
   toggleBackground: () => set((s) => ({ ...FLOATING_PANELS_CLOSED, backgroundOpen: !s.backgroundOpen })),
   closeBackground: () => set({ backgroundOpen: false }),
+  toggleSubAgents: () => set((s) => ({ ...FLOATING_PANELS_CLOSED, subAgentsOpen: !s.subAgentsOpen })),
+  closeSubAgents: () => set({ subAgentsOpen: false }),
   toggleWorktrees: () => set((s) => ({ ...FLOATING_PANELS_CLOSED, worktreesOpen: !s.worktreesOpen })),
   closeWorktrees: () => set({ worktreesOpen: false }),
   toggleRemote: () => set((s) => ({ ...FLOATING_PANELS_CLOSED, remoteOpen: !s.remoteOpen })),

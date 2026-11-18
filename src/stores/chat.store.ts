@@ -4,6 +4,8 @@ import { create } from 'zustand';
 import { v4 as uuidv4 } from 'uuid';
 import type { Conversation, Message, ReasoningEffort, ChatMessage, ContentPart, ToolCall, ThinkingBlock } from '../types';
 import { useWorkspaceStore } from './workspace.store';
+import { recordSubAgentRun } from './subAgents.store';
+import type { SubAgentRun } from '../types/subAgent.types';
 import { useUIStore } from './ui.store';
 import { useSettingsStore, effectiveApprovalMode } from './settings.store';
 import { useLanguageStore } from './language.store';
@@ -42,8 +44,10 @@ import type { ChangeKind } from './codeChanges.store';
 import {
   buildToolset,
   decodeMcpToolName,
+  parsePromptToolCalls,
   PLAN_MODE_TOOLS,
   renderPromptToolList,
+  toolActionLabel,
   validateToolArgs,
   type McpToolInfo,
 } from '../core/tools/definitions';
@@ -153,8 +157,9 @@ const taskMemoryByConversation = new Map<string, TaskMemoryContext>();
 const rsiSpendBaselines = new Map<string, number>();
 interface RsiExecutionSession {
   runId: string | null;
-  rootPath: string | null;
+  workspace: ReturnType<typeof useWorkspaceStore.getState>;
   monitor: RsiExecutionMonitor;
+  pendingScreenshot?: { ticket: number; dataUrl: string };
   spendUsd: number;
   startSpendUsd?: number;
 }
@@ -587,29 +592,36 @@ const KNOWN_ACTIONS = new Set([
 // perf-monitor skill): one live reading + breach verdict, plus the monitor's
 // auto-read errors/anomalies when it has been running. Check-only — it never
 // fixes anything.
-async function runPerfSnapshot(): Promise<string> {
-  let snap: any = null;
+async function runPerfSnapshot(): Promise<{ result: string; succeeded: boolean }> {
+  let snap;
   try {
     snap = await window.electronAPI.app.getAppMetrics();
   } catch {}
-  if (!snap) return 'Performance snapshot unavailable (main process did not answer).';
+  if (!snap) return { result: 'Performance snapshot unavailable (main process did not answer).', succeeded: false };
   let heap: number | null = null;
   try {
     const mem = (performance as any)?.memory;
-    if (mem && typeof mem.usedJSHeapSize === 'number') heap = mem.usedJSHeapSize;
+    if (mem && Number.isFinite(mem.usedJSHeapSize) && mem.usedJSHeapSize >= 0) heap = mem.usedJSHeapSize;
   } catch {}
-  const sample = toSample(snap, heap);
+  const sample = toSample({ ...snap, processes: Array.isArray(snap.processes) ? snap.processes : [] }, heap);
+  const hasFreeMemory = Number.isFinite(snap.freeMemory) && snap.freeMemory >= 0;
+  const hasLoad = Number.isInteger(snap.cpus) && snap.cpus > 0 && Number.isFinite(snap.load?.[0]) && snap.load[0] >= 0;
+  const missing: string[] = [];
+  if (!Number.isFinite(sample.mainRSSBytes)) missing.push('process RSS');
+  if (!hasFreeMemory) missing.push('free memory');
+  if (!hasLoad) missing.push('load per CPU');
   const breaches = checkBreaches(sample, DEFAULT_THRESHOLDS);
   const mon = useMonitorStore.getState();
   const lines = [
     'Performance snapshot:',
     `- renderer JS heap: ${formatBytes(sample.jsHeapBytes)} (limit ${formatBytes(DEFAULT_THRESHOLDS.maxHeapBytes)})`,
     `- busiest process RSS: ${formatBytes(sample.mainRSSBytes)} (limit ${formatBytes(DEFAULT_THRESHOLDS.maxMainRSSBytes)})`,
-    `- free memory: ${formatBytes(sample.freeMemBytes)} (floor ${formatBytes(DEFAULT_THRESHOLDS.minFreeMemBytes)})`,
-    `- load per CPU: ${sample.loadPerCpu.toFixed(1)} (limit ${DEFAULT_THRESHOLDS.maxLoadPerCpu})`,
+    `- free memory: ${formatBytes(hasFreeMemory ? sample.freeMemBytes : null)} (floor ${formatBytes(DEFAULT_THRESHOLDS.minFreeMemBytes)})`,
+    `- load per CPU: ${hasLoad ? sample.loadPerCpu.toFixed(1) : 'n/a'} (limit ${DEFAULT_THRESHOLDS.maxLoadPerCpu})`,
+    ...(missing.length ? [`Incomplete snapshot: missing ${missing.join(', ')}.`] : []),
     breaches.length > 0
       ? `Verdict: DEFECT LIKELY — breaching: ${breaches.map((b) => describeBreach(b, sample, DEFAULT_THRESHOLDS)).join('; ')}. One snapshot is a hint, not proof: enable the monitor (composer health dot) and re-check, or reproduce while watching.`
-      : 'Verdict: no defect in this snapshot.',
+      : missing.length ? 'Verdict: insufficient host measurements.' : 'Verdict: no defect in this snapshot.',
   ];
   if (mon.anomalies.length > 0) {
     lines.push(`Monitor anomalies on record (${mon.anomalies.length}):`);
@@ -623,7 +635,7 @@ async function runPerfSnapshot(): Promise<string> {
       lines.push(`- [${e.source}] ${String(e.message).slice(0, 200)}`);
     }
   }
-  return lines.join('\n');
+  return { result: lines.join('\n'), succeeded: breaches.length === 0 && missing.length === 0 };
 }
 
 // Spend ledger backing the cost_snapshot tool (and the RSI cost lock):
@@ -1041,18 +1053,26 @@ function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-function toolActionLabel(action: FileAction): string {
-  const raw = action.prompt || action.path || action.oldPath || action.srcPath || action.command || action.name
-    || action.url || action.query || action.id || action.tool || action.action;
-  return raw.length > 160 ? `${raw.slice(0, 157)}...` : raw;
-}
-
 function toolFailure(label: string, error: unknown): string {
   const message = error instanceof Error ? error.message : String(error || 'Unknown error');
   return `Error: ${label} failed: ${message}`;
 }
 
 async function executeIndependentRead(
+  action: FileAction,
+  ws: ReturnType<typeof useWorkspaceStore.getState>,
+  scope?: string,
+): Promise<{ result: string; succeeded: boolean }> {
+  if (isPerfSnapshot(action.action)) return runPerfSnapshot();
+  const result = await readToolText(action, ws, scope);
+  return { result, succeeded: !/^Error:/i.test(result) };
+}
+
+function isPerfSnapshot(action: FileAction['action']): boolean {
+  return action === 'perf_snapshot' || action === 'perf_monitor' || action === 'perf_inspect';
+}
+
+async function readToolText(
   action: FileAction,
   ws: ReturnType<typeof useWorkspaceStore.getState>,
   scope?: string,
@@ -1077,10 +1097,6 @@ async function executeIndependentRead(
       return `System info:\n${JSON.stringify(await window.electronAPI.app.getSystemInfo(), null, 2)}`;
     case 'background_status':
       return backgroundStatusText(scope);
-    case 'perf_snapshot':
-    case 'perf_monitor':
-    case 'perf_inspect':
-      return runPerfSnapshot();
     case 'cost_snapshot':
       return runCostSnapshot(scope);
     case 'git_status': {
@@ -1094,7 +1110,7 @@ async function executeIndependentRead(
     case 'web_fetch':
       return window.electronAPI.net.fetch(action.url!, scope);
     case 'web_search':
-      return window.electronAPI.net.search(action.query!, scope);
+      return window.electronAPI.net.search(action.query!, scope, !usePluginStore.getState().disabled.includes('aegis-search'));
     case 'use_skill': {
       const body = useSkillsStore.getState().body(action.id!);
       return body
@@ -1466,7 +1482,8 @@ export function buildApiMessages(messages: Message[]): ChatMessage[] {
   }
 
   const out: ChatMessage[] = [];
-  const emitted = new Set<string>();
+  const pendingToolReplies = new Set<string>();
+  const batchImages: string[] = [];
 
   // Only the last few chat images go over the wire; everything older is
   // described in text instead of re-sent.
@@ -1493,12 +1510,18 @@ export function buildApiMessages(messages: Message[]): ChatMessage[] {
 
     if (m.role === 'tool') {
       const content = toolKept.has(m.id) ? m.content : elideOldToolResult(m.content);
-      if (m.toolCallId && emitted.has(m.toolCallId)) {
+      if (m.toolCallId && pendingToolReplies.delete(m.toolCallId)) {
         out.push({ role: 'tool', content, tool_call_id: m.toolCallId, name: m.toolName });
+        if (screenshots) batchImages.push(...screenshots);
+        // Native callers need every matching tool reply before the next user turn.
+        if (pendingToolReplies.size === 0 && batchImages.length > 0) {
+          out.push({ role: 'user', content: screenshotParts(batchImages) });
+          batchImages.length = 0;
+        }
       } else {
         out.push({ role: 'user', content });
+        if (screenshots) out.push({ role: 'user', content: screenshotParts(screenshots) });
       }
-      if (screenshots) out.push({ role: 'user', content: screenshotParts(screenshots) });
       continue;
     }
 
@@ -1516,7 +1539,7 @@ export function buildApiMessages(messages: Message[]): ChatMessage[] {
       const complete = m.toolCalls.every((tc) => answered.has(tc.id));
       // Tool-call turns keep their reasoning — MiMo's protocol requires it.
       if (complete) {
-        for (const tc of m.toolCalls) emitted.add(tc.id);
+        for (const tc of m.toolCalls) pendingToolReplies.add(tc.id);
         out.push({
           role: 'assistant',
           content: m.content,
@@ -1579,21 +1602,12 @@ export function shouldAutoApprove(mode: 'suggest' | 'autoEdit' | 'fullAuto', kin
 }
 
 export function extractToolActionEntries(content: string): { action?: FileAction; error?: string; label: string }[] {
-  const entries: { action?: FileAction; error?: string; label: string }[] = [];
-  const regex = /```json\b[ \t]*\r?\n?([\s\S]*?)\r?\n?```/gi;
-  let match;
-  while ((match = regex.exec(content)) !== null) {
-    try {
-      const json = JSON.parse(match[1].trim());
-      if (!json || typeof json !== 'object' || Array.isArray(json) || typeof json.action !== 'string') continue;
-      const { action: name, ...args } = json;
-      const converted = toolCallToAction({ name, arguments: args });
-      entries.push('error' in converted
-        ? { error: converted.error, label: name }
-        : { action: converted.action, label: name });
-    } catch {}
-  }
-  return entries;
+  return parsePromptToolCalls(content).map((call) => {
+    const converted = toolCallToAction(call);
+    return 'error' in converted
+      ? { error: converted.error, label: call.name }
+      : { action: converted.action, label: call.name };
+  });
 }
 
 export function extractFileActions(content: string): FileAction[] {
@@ -2053,11 +2067,11 @@ ${parallelRule}
 
   // Keep mode and goal instructions authoritative. A deliberate change to
   // these settings starts a new prefix, unlike routine runtime observations.
-  if (goal) {
+  if (goal && goal.status !== 'completed') {
     systemMessages.push({
       role: 'system',
       content: goal.status === 'running'
-        ? `ACTIVE LONG-RUNNING GOAL:\n${goal.text}\n\nKeep pursuing this outcome across turns until it is verifiably complete. Preserve all normal sandbox and approval boundaries. Use the current to-do list to expose progress, and pause only when user input is genuinely required.`
+        ? `ACTIVE LONG-RUNNING GOAL:\n${goal.text}\n\nKeep pursuing this outcome across turns until it is verifiably complete. Preserve all normal sandbox and approval boundaries. After each subtask, immediately execute the next one without asking to continue. Update the checklist as you work. Audit the entire goal and report concrete verification before ending the final reply with [GOAL_COMPLETE] on its own line. For a genuine blocking question use ask_user.`
         : `PAUSED GOAL:\n${goal.text}\n\nThe user paused this goal. Answer steering or status questions, but do not autonomously advance the goal until it is resumed.`,
     });
   }
@@ -2153,19 +2167,75 @@ const SUB_AGENT_ACTIONS = new Set([
   'read_file', 'list_dir', 'search', 'glob', 'git_status', 'git_diff', 'web_fetch', 'web_search', 'perf_snapshot', 'perf_monitor', 'perf_inspect',
 ]);
 
-// Run a self-contained, READ-ONLY research sub-agent: it investigates `task`
-// using read tools and returns a text report. Its model streams are silent (they
-// don't touch the main transcript's live view). Reuses the same parse/normalize
-// helpers as the main loop. Capped at 12 steps.
-let subAgentSeq = 0;
-async function runHeadlessAgent(task: string, providerId: string, modelId: string, signal: AbortSignal): Promise<string> {
-  // Own search-ref scope, so a sub-agent's "#N" never collides with the main
-  // conversation's (or another sub-agent's) latest search.
-  const scope = `sub:${++subAgentSeq} ${Date.now().toString(36)}`;
-  const ws = useWorkspaceStore.getState();
+// The child owns an isolated provider stream and tool context. Only its final
+// report is returned to the parent model.
+async function runHeadlessAgent(
+  run: SubAgentRun,
+  parentMessageId: string,
+  providerId: string,
+  modelId: string,
+  ws: ReturnType<typeof useWorkspaceStore.getState>,
+  signal: AbortSignal,
+): Promise<string> {
+  const scope = `sub:${run.id}`;
+  const cancelledReport = '(sub-agent cancelled)';
+  let interruptedWrite: Promise<void> | undefined;
+  const cancel = () => {
+    if (run.status !== 'running') return;
+    void window.electronAPI.chat.stop?.(scope).catch(() => {});
+    run = { ...run, status: 'interrupted', detail: cancelledReport };
+    interruptedWrite = recordSubAgentRun(parentMessageId, run);
+  };
+  const append = async (messages: SubAgentRun['messages']) => {
+    signal.throwIfAborted();
+    run = { ...run, messages: [...run.messages, ...messages] };
+    await recordSubAgentRun(parentMessageId, run);
+  };
+
+  await recordSubAgentRun(parentMessageId, run);
+  signal.addEventListener('abort', cancel, { once: true });
+  try {
+    if (signal.aborted) cancel();
+    signal.throwIfAborted();
+    const report = await investigateSubAgent(run.task, providerId, modelId, ws, signal, scope, append);
+    signal.throwIfAborted();
+    if (report === null) {
+      const detail = '(sub-agent reached its step limit without a final report)';
+      run = { ...run, status: 'limit', detail };
+      await recordSubAgentRun(parentMessageId, run);
+      return detail;
+    }
+    if (!report) {
+      run = { ...run, status: 'failed', detail: '(empty report)' };
+    } else {
+      run = { ...run, status: 'completed' };
+    }
+    await recordSubAgentRun(parentMessageId, run);
+    return report || '(empty report)';
+  } catch (error) {
+    if (signal.aborted) return cancelledReport;
+    const detail = `(sub-agent error: ${error instanceof Error ? error.message : String(error)})`;
+    run = { ...run, status: 'failed', detail };
+    await recordSubAgentRun(parentMessageId, run);
+    return detail;
+  } finally {
+    signal.removeEventListener('abort', cancel);
+    await interruptedWrite;
+  }
+}
+
+async function investigateSubAgent(
+  task: string,
+  providerId: string,
+  modelId: string,
+  ws: ReturnType<typeof useWorkspaceStore.getState>,
+  signal: AbortSignal,
+  scope: string,
+  append: (messages: SubAgentRun['messages']) => Promise<void>,
+): Promise<string | null> {
   const { useModelStore } = await import('./model.store');
-  // Same protocol choice as the main loop, narrowed to the read-only tools.
-  const tools = shouldUseNativeTools(useModelStore.getState().getSelectedModel(), `${providerId}:${modelId}`)
+  const model = useModelStore.getState().models.get(providerId)?.find((item) => item.id === modelId);
+  const tools = shouldUseNativeTools(model, `${providerId}:${modelId}`)
     ? buildToolset({ planMode: true, costLock: useSettingsStore.getState().costLock }).filter((tl) => SUB_AGENT_ACTIONS.has(tl.name))
     : [];
   const native = tools.length > 0;
@@ -2185,16 +2255,12 @@ Workspace root: ${describeRoots(ws)}`;
   ];
 
   for (let i = 0; i < 12; i++) {
-    if (signal.aborted) return '(sub-agent cancelled)';
-    let res: any;
-    try {
-      res = await window.electronAPI.chat.stream({
-        providerId, modelId, messages: markHistoryBoundary(messages), maxTokens: 4096, silent: true, conversationId: scope,
-        ...(native ? { tools, toolChoice: 'auto' as const } : {}),
-      });
-    } catch (e: any) {
-      return `(sub-agent error: ${e?.message || String(e)})`;
-    }
+    signal.throwIfAborted();
+    const res = await window.electronAPI.chat.stream({
+      providerId, modelId, messages: markHistoryBoundary(messages), maxTokens: 4096, emitChunks: false, conversationId: scope,
+      ...(native ? { tools, toolChoice: 'auto' as const } : {}),
+    });
+    signal.throwIfAborted();
     const out = extractStreamResult(res);
     const split = extractThink(out.content);
     let content = normalizeBareJsonActions(normalizeToolCalls(split.content));
@@ -2220,45 +2286,46 @@ Workspace root: ${describeRoots(ws)}`;
           return entry;
         });
 
-    messages.push({
-      role: 'assistant',
-      content: content || (out.toolCalls.length ? '' : '(no output)'),
-      ...(out.toolCalls.length ? { tool_calls: out.toolCalls } : {}),
-    });
+    const toolCalls = out.toolCalls.length ? out.toolCalls : undefined;
+    if (content || toolCalls) {
+      await append([{ role: 'assistant', content, ...(toolCalls ? { toolCalls } : {}) }]);
+    }
+    if (entries.length === 0) return content.trim();
 
-    if (entries.length === 0) return content.trim() || '(empty report)';
+    signal.throwIfAborted();
+    messages.push({ role: 'assistant', content, ...(toolCalls ? { tool_calls: toolCalls } : {}) });
 
     const results = await Promise.all(entries.map(async (entry) => {
       if (!entry.action) return entry.error || 'Error: invalid tool call.';
       try {
-        return await executeIndependentRead(entry.action, ws, scope);
+        return (await executeIndependentRead(entry.action, ws, scope)).result;
       } catch (error) {
         return toolFailure(toolActionLabel(entry.action), error);
       }
     }));
 
-    if (out.toolCalls.length) {
-      // One tool message per call, budget shared across them so a batch of big
-      // reads can't blow past the context window.
-      const budget = Math.max(1, Math.floor(12000 / out.toolCalls.length));
-      out.toolCalls.forEach((call, idx) => {
-        messages.push({
-          role: 'tool',
-          tool_call_id: call.id,
-          name: call.name,
-          content: truncateToolResult(results[idx] ?? 'Done (no output).', budget),
-        });
+    // Record the same bounded results the child actually sees, including prompt
+    // protocol results (sent to the provider as one synthetic user turn).
+    const budget = Math.max(1, Math.floor(12000 / entries.length));
+    const toolResults = entries.map((entry, index) => ({
+      role: 'tool' as const,
+      name: entry.label,
+      content: truncateToolResult(results[index] ?? 'Done (no output).', budget),
+    }));
+    await append(toolResults);
+
+    if (toolCalls) {
+      toolResults.forEach((result, index) => {
+        messages.push({ ...result, tool_call_id: toolCalls[index].id });
       });
     } else {
-      const budget = Math.max(1, Math.floor(12000 / entries.length));
       messages.push({
         role: 'user',
-        content: results.map((result, index) =>
-          `Result for ${entries[index].label}:\n${truncateToolResult(result, budget)}`).join('\n\n'),
+        content: toolResults.map((result) => `Result for ${result.name}:\n${result.content}`).join('\n\n'),
       });
     }
   }
-  return '(sub-agent reached its step limit without a final report)';
+  return null;
 }
 
 // Keep this many of the most recent messages verbatim when auto-compacting.
@@ -2427,8 +2494,13 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
   let appList: { targets: ComputerTarget[]; targetRevision: number } | null = null;
 
   const turnStartTime = Date.now();
-  const workspaceAtStart = useWorkspaceStore.getState();
   const convRecord = get().conversations.find((c) => c.id === convId);
+  const previousSession = options.rsiResume ? resumableRsiSession(convId) : undefined;
+  // An approval can resume in the background after the user opens another
+  // project. Preserve the workspace that owns the frozen goal and its checks.
+  const workspaceAtStart = previousSession && get().activeConversationId !== convId
+    && convRecord?.rootPath === previousSession.workspace.rootPath
+    ? previousSession.workspace : useWorkspaceStore.getState();
   const viewMode = useUIStore.getState().viewMode;
   // A conversation that EXISTS decides its own mode. The flag was introduced
   // with Chat Mode, so every conversation saved before it — and any background
@@ -2486,9 +2558,8 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
   // Discussing the direction is not an execution. The start control opts in;
   // typed requests opt in lazily if they actually ask the executor to do work.
   let rsiExecuting = agentMode === 'rsi' && !planMode && !reviewMode && options.rsiExecution === true;
-  const previousSession = options.rsiResume ? resumableRsiSession(convId) : undefined;
-  const rsiSession: RsiExecutionSession = previousSession?.rootPath === taskWorkspace.rootPath ? previousSession : {
-    runId: null, rootPath: taskWorkspace.rootPath, monitor: new RsiExecutionMonitor(), spendUsd: 0,
+  const rsiSession: RsiExecutionSession = previousSession?.workspace.rootPath === taskWorkspace.rootPath ? previousSession : {
+    runId: null, workspace: taskWorkspace, monitor: new RsiExecutionMonitor(taskWorkspace.rootPath ?? undefined), spendUsd: 0,
   };
   let rsiRunId = rsiExecuting ? await beginRsiRun(convId).catch(() => null) : null;
   const rsiMonitor = rsiSession.monitor;
@@ -2594,6 +2665,7 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
   const MAX_CONTINUATIONS = 3;
   /** Whole-iteration auto-retries used after the per-stream budget ran out. */
   let turnRetries = 0;
+  let goalFollowup = '';
   try {
     if (agentMode === 'rsi') {
       const initialMessages = get().activeConversationId === convId ? get().messages : await window.electronAPI.message.list(convId);
@@ -2608,15 +2680,19 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
     for (let iteration = 0; ; iteration++) {
       if (abortController.signal.aborted || !ownsRun()) break;
       if (rsiExecuting) {
-        rsiCause = rsiCostStopReason();
+        rsiCause = rsiCostStopReason() ?? rsiMonitor.failureStopReason();
         if (rsiCause) break;
-        if (rsiMonitor.repeatedFailure()) {
-          rsiCause = 'RSI stopped after the same tool failed three times without a successful code change. Inspect the failure and revise the approach before continuing.';
-          break;
-        }
       }
 
       const selectedModel = resolveModel();
+      if (rsiSession.pendingScreenshot && rsiMonitor.screenshotReviewTicket() !== rsiSession.pendingScreenshot.ticket) {
+        delete rsiSession.pendingScreenshot;
+      }
+      const screenshotForReview = rsiSession.pendingScreenshot;
+      if (screenshotForReview && selectedModel?.supportsVision === false) {
+        rsiCause = 'RSI screenshot review requires a vision-capable model. Switch models and continue to inspect the captured result.';
+        break;
+      }
       const modelName = selectedModel?.name || modelId;
       const sessionKey = `${providerId}:${modelId}`;
       const toolset = shouldUseNativeTools(selectedModel, sessionKey)
@@ -2638,12 +2714,14 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
         ? get().messages
         : await window.electronAPI.message.list(convId);
       if (abortController.signal.aborted || !ownsRun()) break;
+      const turnGoal = useGoalStore.getState().goals[convId];
+      const pursuingGoal = turnGoal?.status === 'running' && agentMode !== 'rsi' && !planMode && !reviewMode;
       const allMessages: ChatMessage[] = [
         ...buildSystemMessages(
           modelName,
           planMode,
           useNativeTools,
-          useGoalStore.getState().goals[convId],
+          turnGoal,
           reviewMode,
           taskWorkspace,
           agentMode,
@@ -2668,6 +2746,7 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
       if (!continuing) stitch = freshStitch();
       const requestMessages = (frame: ComputerFrame | null): ChatMessage[] => {
         const context = [...runtimeContext];
+        if (pursuingGoal && goalFollowup) context.push({ type: 'text', text: goalFollowup });
         if (rsiHistory) context.push({ type: 'text', text: rsiHistory });
         if (rsiExecuting) context.push({ type: 'text', text: `${rsiMonitor.context()}\n${rsiRecovery}`.trim() });
         const textParts = context.filter((part): part is Extract<ContentPart, { type: 'text' }> => part.type === 'text');
@@ -2762,6 +2841,12 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
                 modelName: modelId,
               })
             : rawRequest;
+          // Disk transcripts omit transient pixels. A conversation switch or
+          // compaction between capture and review must keep this run's image.
+          if (screenshotForReview && !request.some((message) => Array.isArray(message.content)
+            && message.content.some((part) => part.type === 'image_url' && part.image_url.url === screenshotForReview.dataUrl))) {
+            request.push({ role: 'user', content: screenshotParts([screenshotForReview.dataUrl]) });
+          }
           // A previous attempt's retry pill must not linger into live streaming.
           // A retry attempt also starts with a clean thinking slate: the
           // interrupted attempt's reasoning must never flash back into view.
@@ -2785,6 +2870,10 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
             // field would break every turn, so prompt mode omits it entirely.
             ...(useNativeTools ? { tools: toolset, toolChoice: 'auto' as const } : {}),
           });
+          if (screenshotForReview && !abortController.signal.aborted && ownsRun()) {
+            rsiMonitor.confirmScreenshotReview(screenshotForReview.ticket);
+            delete rsiSession.pendingScreenshot;
+          }
           break;
         } catch (e: any) {
           // The endpoint advertised function calling but rejected the tools
@@ -3008,12 +3097,16 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
         break;
       }
 
+      // A model can announce completion before seeing the result. Keep the
+      // unverified announcement out of the transcript and the screenshot.
+      const awaitingFinalCapture = rsiExecuting && !hasWork && !rsiCause
+        && finishReason() !== 'length' && rsiMonitor.needsFinalScreenshot();
       const assistantMsg: Message = {
         id: uuidv4(),
         conversationId: convId,
         role: 'assistant',
-        content: finalContent,
-        reasoning_content: finalReasoningContent || undefined,
+        content: awaitingFinalCapture ? useLanguageStore.getState().t('autoScreenshotCapturing') : pursuingGoal ? finalContent.replace(/(?:^|\n)\[GOAL_COMPLETE\]\s*$/, '').trimEnd() : finalContent,
+        reasoning_content: awaitingFinalCapture ? undefined : finalReasoningContent || undefined,
         modelId,
         providerId,
         createdAt: Date.now(),
@@ -3025,7 +3118,7 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
         completionTokens: stitch.completionTokens || undefined,
         cacheHitTokens: stitch.cacheUsageSegments === stitch.segments ? stitch.cacheHitTokens : undefined,
         toolCalls: nativeCalls.length ? nativeCalls : undefined,
-        thinkingBlocks: stitch.thinkingBlocks,
+        thinkingBlocks: awaitingFinalCapture ? undefined : stitch.thinkingBlocks,
       };
       await window.electronAPI.message.create(assistantMsg);
       if (ownsRun()) patchRun(convId, { content: '', reasoningContent: '' });
@@ -3061,6 +3154,26 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
       if (pending.length === 0) {
         if (rsiCause) break;
         if (finishReason() !== 'length' && await appendSteering()) continue;
+        if (rsiExecuting && finishReason() !== 'length' && !abortController.signal.aborted && ownsRun()
+          && rsiMonitor.takeFinalScreenshotRequest()) {
+          // Use the regular plugin executor. This is a program-requested
+          // screenshot, so it has no provider tool_call_id.
+          const preferred = useAutoScreenshotStore.getState().config.defaultTarget;
+          pending.push({ action: { action: 'auto_screenshot', target: preferred === 'preview' ? 'preview' : 'window' } });
+        }
+      }
+      if (pending.length === 0) {
+        if (pursuingGoal && !abortController.signal.aborted && ownsRun()) {
+          const current = useGoalStore.getState().goals[convId];
+          if (current?.status !== 'running') break;
+          const verified = /\n\[GOAL_COMPLETE\]\s*$/.test(finalContent.trim()) && !turnGoal.pendingTodos;
+          if (current === turnGoal && verified && finishReason() !== 'length') {
+            useGoalStore.getState().setStatus(convId, 'completed');
+            break;
+          }
+          goalFollowup = 'Continue the active goal now. Check the remaining subtasks and execute the next one. When every requirement is verified, summarize the evidence and end with [GOAL_COMPLETE] on its own line.';
+          continue;
+        }
         // No action this turn. If the model was cut off at the token limit
         // (finish_reason 'length'), it likely meant to keep going (e.g. emit a
         // tool call) — surface that rather than ending as if it were done.
@@ -3097,16 +3210,17 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
         if (rsiExecuting && finishReason() !== 'length') {
           const decision = rsiMonitor.finish();
           if (decision === 'recover') {
-            rsiRecovery = 'The last reply ended the tool loop before completion was evidenced. Continue the authorized RSI task with one concrete investigation, implementation, or verification action. If blocked, use ask_user; if no useful safe candidate exists, explain why and stop. Do not repeat the same summary or invent measurements.';
+            rsiRecovery = `The last reply ended the tool loop before completion was evidenced. ${rsiMonitor.nextVerificationHint()} Use the existing approval path for checks. If blocked, explain the blocker or ask the user.`;
             continue;
           }
           if (decision === 'complete') rsiOutcome = 'completed';
-          else rsiCause = 'RSI stopped: no passing verification was observed after the latest edit despite two recovery attempts. The result is not marked complete.';
+          else rsiCause = `RSI stopped with incomplete verification after two recovery attempts. ${rsiMonitor.nextVerificationHint()}`;
         } else if (rsiExecuting) rsiCause = 'RSI output was truncated before completion.';
         break;
       }
 
-      if (agentMode === 'rsi' && !rsiExecuting && !planMode && !reviewMode && pending.some((entry) => entry.action && ['exec', 'edit_file', 'create_file', 'delete', 'rename', 'copy'].includes(entry.action.action))) {
+      rsiRecovery = '';
+      if (agentMode === 'rsi' && !rsiExecuting && !planMode && !reviewMode && pending.some((entry) => entry.action && ['exec', 'edit_file', 'create_file', 'create_dir', 'delete', 'rename', 'copy'].includes(entry.action.action))) {
         rsiExecuting = true;
         rsiRunId = await beginRsiRun(convId).catch(() => null);
         rsiSession.runId = rsiRunId;
@@ -3125,24 +3239,39 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
       let awaitingUserAction = false;
       let questionToShow: Message | null = null;
 
+      const observe = (action: FileAction, detail: string, succeeded = !/^Error:/i.test(detail)) => {
+        if (!rsiExecuting) return;
+        rsiMonitor.observe({
+          action: isPerfSnapshot(action.action) ? 'perf_snapshot' : action.action,
+          command: action.action === 'exec' ? action.command : undefined,
+          cwd: action.action === 'exec' ? action.cwd || ws.rootPath || undefined : undefined,
+          path: action.action === 'rename' ? action.oldPath : action.action === 'copy' ? action.srcPath : action.path,
+          destPath: action.action === 'rename' ? action.newPath : action.action === 'copy' ? action.destPath : undefined,
+          detail, succeeded,
+        });
+      };
+      const runReadBatch = async (entries: typeof pending) => {
+        const results = await Promise.all(entries.map(async (entry) => {
+          const action = entry.action!;
+          const label = toolActionLabel(action);
+          try {
+            return { call: entry.call, label, ...await executeIndependentRead(action, ws, convId) };
+          } catch (error) {
+            return { call: entry.call, label, result: toolFailure(label, error), succeeded: false };
+          }
+        }));
+        outcomes.push(...results);
+        results.forEach((outcome, i) => observe(entries[i].action!, outcome.result, outcome.succeeded));
+        shouldContinue = true;
+      };
+
       // A batch made entirely of independent reads is genuinely parallel. Keep
       // result ordering stable so each native call id still receives its result.
       const parallelReadBatch = !costBlocked && pending.length > 1 && pending.every(
         (entry) => !!entry.action && INDEPENDENT_READ_ACTIONS.has(entry.action.action),
       );
       if (parallelReadBatch) {
-        const results = await Promise.all(pending.map(async (entry) => {
-          const action = entry.action!;
-          const label = toolActionLabel(action);
-          try {
-            return { call: entry.call, label, result: await executeIndependentRead(action, ws, convId) };
-          } catch (error) {
-            return { call: entry.call, label, result: toolFailure(label, error) };
-          }
-        }));
-        outcomes.push(...results);
-        if (rsiExecuting) results.forEach((outcome, i) => rsiMonitor.observe({ ...pending[i].action!, succeeded: !/^Error:/i.test(outcome.result), detail: outcome.result }));
-        shouldContinue = true;
+        await runReadBatch(pending);
       }
 
       if (!parallelReadBatch) for (let entryIdx = 0; entryIdx < pending.length; entryIdx++) {
@@ -3162,25 +3291,7 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
             endIdx++;
           }
           if (endIdx - entryIdx > 1) {
-            const readSlice = pending.slice(entryIdx, endIdx);
-            const sliceResults = await Promise.all(readSlice.map(async (item) => {
-              const act = item.action!;
-              const lbl = toolActionLabel(act);
-              try {
-                return { call: item.call, label: lbl, result: await executeIndependentRead(act, ws, convId) };
-              } catch (error) {
-                return { call: item.call, label: lbl, result: toolFailure(lbl, error) };
-              }
-            }));
-            outcomes.push(...sliceResults);
-            if (rsiExecuting) {
-              sliceResults.forEach((outcome, i) => rsiMonitor.observe({
-                ...readSlice[i].action!,
-                succeeded: !/^Error:/i.test(outcome.result),
-                detail: outcome.result,
-              }));
-            }
-            shouldContinue = true;
+            await runReadBatch(pending.slice(entryIdx, endIdx));
             entryIdx = endIdx - 1;
             continue;
           }
@@ -3266,7 +3377,7 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
           }
           if (shouldAutoApprove(effectiveApprovalMode(), data.kind)) {
             const outcome = await codeChangesStore.autoApply(id);
-            if (rsiExecuting) rsiMonitor.observe({ ...action, path: action.path || action.oldPath || action.srcPath, succeeded: outcome.success, detail: outcome.result });
+            observe(action, outcome.result ?? '', outcome.success);
             shouldContinue = true;
             return outcome.result || pendingNote;
           }
@@ -3275,6 +3386,7 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
         };
 
         let image: string | undefined;
+        let infoSucceeded: boolean | undefined;
         try {
           // Chat mode is dialogue-only. Deny by DEFAULT here rather than
           // listing what is forbidden: the action protocol is an open surface
@@ -3399,7 +3511,9 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
           case 'perf_snapshot':
           case 'perf_monitor':
           case 'perf_inspect': {
-            result = await runPerfSnapshot();
+            const snapshot = await runPerfSnapshot();
+            result = snapshot.result;
+            infoSucceeded = snapshot.succeeded;
             break;
           }
           case 'cost_snapshot': {
@@ -3414,6 +3528,7 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
                 content: tdo.content.trim(),
                 status: (valid.includes(tdo.status as TodoStatus) ? tdo.status : 'pending') as TodoStatus,
               }));
+            if (pursuingGoal) useGoalStore.getState().setPendingTodos(convId, todos.filter(item => item.status !== 'completed').length);
             useTodosStore.getState().setTodos(todos);
             const done = todos.filter((tdo) => tdo.status === 'completed').length;
             result = `${useLanguageStore.getState().t('todoUpdated')} (${done}/${todos.length})`;
@@ -3434,7 +3549,7 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
             break;
           }
           case 'web_search': {
-            result = await window.electronAPI.net.search(action.query!, convId);
+            result = await window.electronAPI.net.search(action.query!, convId, !usePluginStore.getState().disabled.includes('aegis-search'));
             break;
           }
           case 'download': {
@@ -3465,7 +3580,15 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
             break;
           }
           case 'spawn_agent': {
-            const report = await runHeadlessAgent(action.task!, providerId, modelId, abortController.signal);
+            const run: SubAgentRun = {
+              id: `${assistantMsg.id}:${entryIdx}`,
+              conversationId: convId,
+              task: action.task!,
+              startedAt: Date.now(),
+              status: 'running',
+              messages: [],
+            };
+            const report = await runHeadlessAgent(run, assistantMsg.id, providerId, modelId, ws, abortController.signal);
             result = `Sub-agent report:\n${report}`;
             break;
           }
@@ -3533,6 +3656,12 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
             break;
           }
           case 'auto_screenshot': {
+            infoSucceeded = false;
+            const ownsView = () => get().activeConversationId === convId && useWorkspaceStore.getState().rootPath === ws.rootPath;
+            if (rsiExecuting && !ownsView()) {
+              result = 'Error: auto_screenshot requires this RSI conversation and its workspace in the foreground. Reopen this conversation and continue to capture the result.';
+              break;
+            }
             if (usePluginStore.getState().disabled.includes('auto-screenshot')) {
               result = 'Error: the Official Auto-Screenshot plugin is disabled. Enable it in Settings → Plugins first.';
               break;
@@ -3540,11 +3669,31 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
             const target = (['auto', 'window', 'preview', 'screen'].includes(String(action.target)) ? action.target : undefined) as 'auto' | 'window' | 'preview' | 'screen' | undefined;
             const delayMs = typeof action.delay_ms === 'number' && Number.isFinite(action.delay_ms) ? action.delay_ms : undefined;
             const label = typeof action.label === 'string' && action.label.trim() ? action.label.trim() : undefined;
-            const shot = await useAutoScreenshotStore.getState().captureNow({ target, delayMs, label });
+            const plugin = useAutoScreenshotStore.getState();
+            const requestedTarget = target ?? plugin.config.defaultTarget;
+            let viewChanged = false;
+            const watchView = () => { if (!ownsView()) viewChanged = true; };
+            const listeners = rsiExecuting ? [useChatStore.subscribe(watchView), useWorkspaceStore.subscribe(watchView)] : [];
+            const shot = await plugin.captureNow({ target: requestedTarget, delayMs, label })
+              .finally(() => listeners.forEach((unsubscribe) => unsubscribe()));
             if (!shot.ok || !shot.item) {
               result = `Error: auto_screenshot failed: ${shot.error || 'Unknown error'}${shot.needsPermission ? ` (missing permission: ${shot.needsPermission})` : ''}`;
               break;
             }
+            if (rsiExecuting && (viewChanged || !ownsView() || abortController.signal.aborted || !ownsRun())) {
+              plugin.removeHistoryItem(shot.item.id);
+              result = 'Error: auto_screenshot was interrupted or the active workspace changed before capture finished. Return to this conversation and capture again.';
+              break;
+            }
+            if (rsiExecuting && requestedTarget !== 'auto' && shot.item.target !== requestedTarget) {
+              result = `Error: auto_screenshot captured the ${shot.item.target} instead of the requested ${requestedTarget}. Make the requested target visible and capture it again.`;
+              break;
+            }
+            if (rsiExecuting && selectedModel?.supportsVision === false) {
+              result = 'Error: auto_screenshot captured an image, but the selected model does not support image input. Switch to a vision-capable model and capture again for verification. The image is available for manual inspection in the Auto-Screenshot plugin history.';
+              break;
+            }
+            infoSucceeded = true;
             image = shot.item.dataUrl;
             result = `Captured screenshot [${shot.item.label}] (target: ${shot.item.target}, ${shot.item.width}×${shot.item.height}${shot.item.savedPath ? `, saved to ${shot.item.savedPath}` : ''}). Visually inspect the attached image to verify every modified location.`;
             break;
@@ -3892,11 +4041,15 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
           // provider with an unanswered tool_call_id. Return the failure to the
           // model so it can correct the next attempt.
           result = toolFailure(label, error);
-          if (rsiExecuting && !INFO_ACTIONS.has(action.action)) rsiMonitor.observe({ ...action, succeeded: false, detail: result });
+          if (!INFO_ACTIONS.has(action.action)) observe(action, result, false);
           shouldContinue = true;
         }
 
-        if (rsiExecuting && INFO_ACTIONS.has(action.action)) rsiMonitor.observe({ ...action, succeeded: !/^Error:/i.test(result), detail: result });
+        if (INFO_ACTIONS.has(action.action)) observe(action, result, infoSucceeded);
+        if (rsiExecuting && action.action === 'auto_screenshot' && infoSucceeded && image) {
+          const ticket = rsiMonitor.screenshotReviewTicket();
+          if (ticket !== null) rsiSession.pendingScreenshot = { ticket, dataUrl: image };
+        }
         if (result) outcomes.push({ call, label, result, image });
         if (INFO_ACTIONS.has(action.action)) shouldContinue = true;
       }
@@ -4054,6 +4207,9 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
     }
   } finally {
     if (runControllers.get(convId) === abortController) {
+      if (!waitingForUser && useGoalStore.getState().goals[convId]?.status === 'running' && !planMode && !reviewMode && agentMode !== 'rsi') {
+        useGoalStore.getState().setStatus(convId, 'paused');
+      }
       endRun(convId);
       rsiSpendBaselines.delete(convId);
       if (rsiOutcome === 'completed' && rsiExecutionSessions.get(convId) === rsiSession) rsiExecutionSessions.delete(convId);
@@ -4122,7 +4278,7 @@ interface ChatStore {
    */
   newConversation: (providerId: string, modelId: string, folderPath?: string | null) => Promise<string>;
   /** Same reuse rule for RSI conversations (blank RSI state only). */
-  newRsiConversation: (providerId: string, modelId: string) => Promise<string>;
+  newRsiConversation: (providerId: string, modelId: string, rootPath?: string | null) => Promise<string>;
   setActiveConversation: (id: string) => Promise<void>;
   setConversationFolder: (rootPath: string | null) => Promise<void>;
   /**
@@ -4143,7 +4299,7 @@ interface ChatStore {
   deleteConversation: (id: string) => Promise<void>;
   renameConversation: (id: string, title: string) => Promise<void>;
   /** Create an independent RSI conversation with its own direction state. */
-  createRsiConversation: (providerId: string, modelId: string) => Promise<string>;
+  createRsiConversation: (providerId: string, modelId: string, rootPath?: string | null) => Promise<string>;
   /** Update ONLY the given conversation's RSI direction config. */
   updateRsiDirection: (convId: string, patch: Partial<RsiDirectionConfig>) => Promise<void>;
   sendMessage: (content: string, providerId: string, modelId: string, options?: SendMessageOptions) => Promise<void>;
@@ -4381,9 +4537,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     });
   },
 
-  newRsiConversation: async (providerId, modelId) => {
-    const rootPath = useWorkspaceStore.getState().rootPath ?? null;
-
+  newRsiConversation: async (providerId, modelId, rootPath = useWorkspaceStore.getState().rootPath) => {
     return coalesceNewConversation(`rsi:${rootPath ?? ''}`, async () => {
       const counts = await readMessageCounts();
       const current = get();
@@ -4395,7 +4549,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         current.messages.length,
         counts,
       );
-      if (!reusable) return get().createRsiConversation(providerId, modelId);
+      if (!reusable) return get().createRsiConversation(providerId, modelId, rootPath);
 
       const patch: Partial<Conversation> = {};
       if (providerId && reusable.providerId !== providerId) patch.providerId = providerId;
@@ -4635,7 +4789,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }));
   },
 
-  createRsiConversation: async (providerId, modelId) => {
+  createRsiConversation: async (providerId, modelId, rootPath = useWorkspaceStore.getState().rootPath) => {
     const state = get();
     conversationLoadRequest++;
     const ws = useWorkspaceStore.getState();
@@ -4655,7 +4809,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     const conv = await window.electronAPI.conversation.create({
       providerId,
       modelId,
-      rootPath: ws.rootPath,
+      rootPath,
       isChatMode: false,
       agentMode: 'rsi',
       rsi: defaultRsiState(),
@@ -4720,6 +4874,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     // (even on the same model) may keep streaming concurrently. Mid-run typing
     // goes through enqueueMessage instead of being dropped here.
     if (get().streamingRuns[convId] || get().messageEdits[convId]) return;
+
+    const goalState = useGoalStore.getState();
+    if (get().agentMode === 'goal' && content.trim() && (!goalState.goals[convId] || goalState.goals[convId].status === 'completed')) {
+      goalState.setGoal(convId, content);
+    }
 
     // Task start: decide whether history is needed and retrieve it BEFORE the
     // system prompt is assembled. Bounded and failure-tolerant (see beginTask).
@@ -5013,6 +5172,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   stopGeneration: (conversationId) => {
     const convId = conversationId ?? get().activeConversationId;
     if (!convId) return;
+    if (useGoalStore.getState().goals[convId]?.status === 'running') useGoalStore.getState().setStatus(convId, 'paused');
     runControllers.get(convId)?.abort();
     window.electronAPI.chat.stop?.(convId);
     endRun(convId);

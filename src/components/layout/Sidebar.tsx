@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { ReactNode } from 'react';
-import { FiPlus, FiSettings, FiTrash2, FiGlobe, FiEdit3, FiMenu, FiTerminal, FiFileText, FiSmartphone, FiMonitor, FiCpu, FiGrid, FiShield, FiGitBranch, FiLoader, FiMessageSquare, FiBriefcase, FiChevronDown, FiChevronRight, FiClock, FiShare2, FiX, FiZap, FiPackage, FiFolder, FiArchive, FiCornerUpLeft } from 'react-icons/fi';
+import { FiPlus, FiSettings, FiTrash2, FiGlobe, FiEdit3, FiMenu, FiTerminal, FiFileText, FiSmartphone, FiMonitor, FiCpu, FiGrid, FiShield, FiGitBranch, FiLoader, FiMessageSquare, FiBriefcase, FiChevronDown, FiChevronRight, FiClock, FiUsers, FiShare2, FiX, FiZap, FiPackage, FiArchive, FiCornerUpLeft } from 'react-icons/fi';
 import { useChatStore, useUIStore, useLanguageStore, usePreviewStore, useComputerStore, useModelStore, useCodeChangesStore, useWorkspaceStore, useAiHighlightsStore, useSettingsStore, LOCALES, type Locale } from '../../stores';
 import { useBackgroundStore } from '../../stores/background.store';
 import { useDshMarketStore } from '../../stores/dshMarket.store';
@@ -12,7 +12,6 @@ import HandoffPanel from '../handoff/HandoffPanel';
 import { mostUrgentDot, type DotKind } from './panelDot';
 import { rsiSidebarLayout } from './rsiLayout';
 import RsiFolderHint from './RsiFolderHint';
-import FileTree from './FileTree';
 
 interface PanelItem {
   key: string;
@@ -100,8 +99,6 @@ export default function Sidebar() {
   const toggleSettings = useUIStore((s) => s.toggleSettings);
   const openMarket = useDshMarketStore((s) => s.openPanel);
   const toggleSidebar = useUIStore((s) => s.toggleSidebar);
-  const fileTreeOpen = useUIStore((s) => s.fileTreeOpen);
-  const toggleFileTree = useUIStore((s) => s.toggleFileTree);
   const terminalOpen = useUIStore((s) => s.terminalOpen);
   const toggleTerminal = useUIStore((s) => s.toggleTerminal);
   const changedFilesOpen = useUIStore((s) => s.changedFilesOpen);
@@ -120,6 +117,8 @@ export default function Sidebar() {
   const computerEnabled = useComputerStore((s) => s.enabled);
   const backgroundOpen = useUIStore((s) => s.backgroundOpen);
   const toggleBackground = useUIStore((s) => s.toggleBackground);
+  const subAgentsOpen = useUIStore((s) => s.subAgentsOpen);
+  const toggleSubAgents = useUIStore((s) => s.toggleSubAgents);
   const bgTasks = useBackgroundStore((s) => s.tasks);
   const bgRunning = Object.values(bgTasks).some((task) => task.status === 'running');
   const bgUnseen = Object.values(bgTasks).filter((task) => task.unseen).length;
@@ -169,16 +168,10 @@ export default function Sidebar() {
   );
 
   const rsiGroups = useMemo(
-    () => groupConversationsByFolder(rsiConversations, rootPath),
-    [rsiConversations, rootPath],
+    () => groupConversationsByFolder(rsiConversations, rootPath, openFolderPaths),
+    [rsiConversations, rootPath, openFolderPaths],
   );
 
-  // Work keeps file browsing beside the project list; collapsing it hands the
-  // whole column to the projects (the choice is remembered by the UI store).
-  const filesOpen = sidebar.showFileExplorer && fileTreeOpen;
-  const convAreaClass = !filesOpen || sidebar.fillConversations
-    ? 'flex-1'
-    : 'max-h-[50%] shrink-0';
   // Labels disambiguate against every listed project, closed ones included.
   const projectPaths = useMemo(() => workGroups.map(([path]) => path), [workGroups]);
 
@@ -196,6 +189,7 @@ export default function Sidebar() {
   const panels: PanelItem[] = [
     { key: 'terminal', icon: <FiTerminal size={15} />, label: t('terminal'), open: terminalOpen, toggle: toggleTerminal },
     { key: 'background', icon: <FiClock size={15} />, label: `${t('backgroundTasks')}${bgUnseen > 0 ? ` · ${bgUnseen}` : ''}`, open: backgroundOpen, toggle: toggleBackground, dot: bgUnseen > 0 ? 'warning-pulse' : bgRunning ? 'success' : null },
+    { key: 'subAgents', icon: <FiUsers size={15} />, label: t('subAgents'), open: subAgentsOpen, toggle: toggleSubAgents },
     { key: 'changed', icon: <FiFileText size={15} />, label: t('changedFiles'), open: changedFilesOpen, toggle: toggleChangedFiles },
     { key: 'review', icon: <FiShield size={15} />, label: t('codeReview'), open: reviewOpen, toggle: toggleReview },
     { key: 'preview', icon: <FiMonitor size={15} />, label: t('preview'), open: previewOpen, toggle: togglePreview, dot: previewState === 'starting' ? 'warning-pulse' : previewState === 'error' ? 'error' : null },
@@ -286,6 +280,7 @@ export default function Sidebar() {
       setCollapsedGroups((previous) => {
         const next = new Set(previous);
         next.delete(path);
+        next.delete(`rsi:${path}`);
         return next;
       });
     } catch {
@@ -493,22 +488,14 @@ export default function Sidebar() {
           )}
         </div>
 
-        {/* In Chat mode: creates a new Chat conversation. In RSI mode: creates
-            a new RSI conversation. In Work mode: creates a work conversation. */}
-        <button onClick={() => {
-          if (agentMode === 'rsi') {
-            void newRsiConversation(selectedModel?.providerId || '', selectedModel?.id || '');
-          } else if (viewMode === 'chat') {
-            void newConversation(selectedModel?.providerId || '', selectedModel?.id || '', null);
-          } else {
-            void newConversation(selectedModel?.providerId || '', selectedModel?.id || '', rootPath);
-          }
-        }}
+        {!sidebar.isRsi && viewMode === 'chat' && (
+          <button onClick={() => void newConversation(selectedModel?.providerId || '', selectedModel?.id || '', null)}
           style={{ WebkitAppRegion: 'no-drag' } as any}
           className="w-8 h-8 rounded-xl flex items-center justify-center text-[var(--text-muted)] hover:bg-[var(--glass-card)] hover:text-[var(--text-primary)] hover:shadow-2xs border border-transparent hover:border-[var(--glass-border)] transition-all cursor-pointer"
-          title={agentMode === 'rsi' ? (t('rsiConvNew') || '新建 RSI 对话') : t('newChat')}>
+          title={t('newChat')}>
           <FiPlus size={16} />
         </button>
+        )}
         <button onClick={() => setHandoffOpen(true)}
           style={{ WebkitAppRegion: 'no-drag' } as any}
           className="w-8 h-8 rounded-xl flex items-center justify-center text-[var(--text-muted)] hover:bg-[var(--glass-card)] hover:text-[var(--text-primary)] hover:shadow-2xs border border-transparent hover:border-[var(--glass-border)] transition-all cursor-pointer"
@@ -524,13 +511,15 @@ export default function Sidebar() {
             paths={openFolderPaths}
             activePath={rootPath}
             error={folderError}
-            onAdd={() => void handleAddRsiFolder()}
-            onRemove={handleRemoveRsiFolder}
+            mode={sidebar.isRsi ? "rsi" : "work"}
+            busy={!sidebar.isRsi && projectBusy}
+            onAdd={sidebar.isRsi ? handleAddRsiFolder : handleAddProject}
+            onRemove={sidebar.isRsi ? handleRemoveRsiFolder : (path) => void closeFolderGroup(path)}
             onDismissError={() => setFolderError(null)}
           />
         )}
         {/* Work groups chats under open projects; RSI/Chat use the full list height. */}
-        <div className={`min-h-0 overflow-y-auto overscroll-contain ${convAreaClass}`}>
+        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
           <div className="px-1 pt-1 pb-1 text-[11px] font-semibold tracking-wide text-[var(--text-muted)] flex items-center justify-between">
             <div className="flex items-center gap-1.5">
               {agentMode === 'rsi' ? (
@@ -550,13 +539,6 @@ export default function Sidebar() {
                 <span>· {sidebar.isRsi ? rsiConversations.length : chatConversations.length}</span>
               )}
             </div>
-            {!sidebar.isRsi && viewMode === 'work' && openFolderPaths.length > 0 && (
-              <button onClick={() => void handleAddProject()} disabled={projectBusy}
-                aria-label={t('addFolder')} title={t('addFolder')}
-                className="p-1 rounded-md hover:bg-[var(--glass-card)] hover:text-[var(--text-primary)] disabled:opacity-50">
-                <FiPlus size={14} />
-              </button>
-            )}
           </div>
 
           {archiveError && (
@@ -611,6 +593,17 @@ export default function Sidebar() {
                       <span className="flex-1 truncate text-[12px] font-semibold tracking-wide min-w-0">
                         {folderKey ? (folderKey.split('/').pop() || folderKey) : t('unbound')}
                       </span>
+                      {folderKey && (
+                        <button type="button" disabled={projectBusy}
+                          aria-label={`${t('rsiConvNew')} · ${folderDisplayName(folderKey)}`} title={t('rsiConvNew')}
+                          className="p-1 rounded-md hover:bg-[var(--bg-3)] disabled:opacity-50"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void handleProjectChat(() => newRsiConversation(selectedModel?.providerId || '', selectedModel?.id || '', folderKey));
+                          }}>
+                          <FiPlus size={13} />
+                        </button>
+                      )}
                       <span className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
                         isCurrent ? 'bg-[var(--accent)] text-white shadow-2xs' : 'bg-[var(--bg-3)] text-[var(--text-muted)]'
                       }`}>
@@ -625,16 +618,9 @@ export default function Sidebar() {
                   </div>
                 );
               })}
-              {rsiConversations.length === 0 && (
+              {rsiGroups.length === 0 && (
                 <div className="px-2 py-4 text-center">
                   <p className="text-[11px] text-[var(--text-muted)]">{t('rsiConvEmpty')}</p>
-                  <button
-                    onClick={() => void newRsiConversation(selectedModel?.providerId || '', selectedModel?.id || '')}
-                    className="mt-2 inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-lg bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[var(--accent)] hover:text-white transition-colors cursor-pointer"
-                  >
-                    <FiPlus size={12} />
-                    <span>{t('rsiConvNew')}</span>
-                  </button>
                 </div>
               )}
             </div>
@@ -647,15 +633,6 @@ export default function Sidebar() {
             </div>
           ) : (
             <div className="space-y-2.5 mt-1">
-              {folderError && (
-                <div role="alert" className="px-2 py-1.5 text-xs text-[var(--error)]">{folderError}</div>
-              )}
-              {openFolderPaths.length === 0 && (
-                <button onClick={() => void handleAddProject()} disabled={projectBusy}
-                  className="w-full px-2.5 py-2 rounded-lg text-[12px] font-medium text-[var(--accent)] bg-[var(--accent-soft)] hover:bg-[var(--glass-card)] disabled:opacity-50 transition-colors">
-                  {t('openFolder')}
-                </button>
-              )}
               {workGroups.map(([folderKey, items]) => {
                 const collapsed = collapsedGroups.has(folderKey);
                 const label = rootLabel(folderKey, projectPaths);
@@ -699,26 +676,6 @@ export default function Sidebar() {
           )}
         </div>
 
-        {/* RSI never shows files — only its folder hint. Work keeps the tree,
-            collapsible from its header so projects can take the whole column. */}
-        {sidebar.showFileExplorer && (
-          <div className={`shrink-0 min-h-0 flex flex-col border-t border-[var(--border)] mt-2 ${fileTreeOpen ? 'flex-1' : ''}`}>
-            <button onClick={toggleFileTree} aria-expanded={fileTreeOpen} aria-controls="sidebar-files"
-              title={t('files')}
-              className="shrink-0 w-full px-1 pt-1.5 pb-1 text-[11px] font-semibold tracking-wide text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors cursor-pointer flex items-center gap-1.5">
-              {fileTreeOpen
-                ? <FiChevronDown size={11} className="shrink-0" />
-                : <FiChevronRight size={11} className="shrink-0" />}
-              <FiFolder size={10} className="text-amber-500 shrink-0" />
-              <span className="truncate">{t('files')}</span>
-            </button>
-            {fileTreeOpen && (
-              <div id="sidebar-files" className="flex-1 min-h-0 flex flex-col">
-                <FileTree />
-              </div>
-            )}
-          </div>
-        )}
       </div>
 
       <div className="p-2.5 border-t border-[var(--glass-border)] bg-[color-mix(in_srgb,var(--glass-subtle)_30%,transparent)]">

@@ -75,6 +75,12 @@ export interface RewardIncumbent {
   metrics?: Record<string, number>;
 }
 
+export function isMeasuredVector(value: unknown): value is Record<string, number> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const entries = Object.entries(value);
+  return entries.length > 0 && entries.every(([id, delta]) => id.trim().length > 0 && Number.isFinite(delta));
+}
+
 function clamp01(n: number): number {
   if (!Number.isFinite(n)) return 0;
   return Math.min(1, Math.max(0, n));
@@ -134,7 +140,7 @@ export function breachesHardFloor(r: EpisodeResult): string[] {
 
 export type SelectDecision =
   | { accept: true; reason: 'improves-best' | 'first-passing' }
-  | { accept: false; reason: 'external-fail' | 'discipline-veto' | 'hard-floor-breach' | 'not-better-than-best' | 'not-better-than-baseline' };
+  | { accept: false; reason: 'external-fail' | 'discipline-veto' | 'hard-floor-breach' | 'missing-incumbent-evidence' | 'not-better-than-best' | 'not-better-than-baseline' };
 
 /**
  * Greedy policy improvement: accept only if the candidate is strictly better
@@ -161,13 +167,17 @@ export function selectCandidate(
   if (breachesHardFloor(candidate).length > 0) return { accept: false, reason: 'hard-floor-breach' };
   const reward = computeReward(candidate);
   if (reward === REWARD_FAIL) return { accept: false, reason: 'external-fail' };
-  if (best?.metrics && (Object.keys(best.metrics).length !== candidate.metrics.length
-    || candidate.metrics.some((metric) => !Number.isFinite(best.metrics![metric.id])))) {
-    return { accept: false, reason: 'external-fail' };
+  const reference = best?.metrics;
+  if (best) {
+    if (!isMeasuredVector(reference)) return { accept: false, reason: 'missing-incumbent-evidence' };
+    if (Object.keys(reference).length !== candidate.metrics.length
+      || candidate.metrics.some((metric) => !Number.isFinite(reference[metric.id]))) {
+      return { accept: false, reason: 'external-fail' };
+    }
   }
   // Judge enthusiasm is not a measured improvement. Equal or uniformly worse
   // metrics must not replace the incumbent just because a new panel is nicer.
-  if (!hasMeasuredGain(candidate.metrics, best?.metrics, epsilon)) {
+  if (!hasMeasuredGain(candidate.metrics, reference, epsilon)) {
     return { accept: false, reason: best ? 'not-better-than-best' : 'not-better-than-baseline' };
   }
   if (best == null) {
@@ -189,7 +199,7 @@ export function selectCandidate(
 export type ArchiveVerdict =
   | { action: 'replace-best'; reason: 'improves-best' | 'first-passing' }
   | { action: 'retain-frontier'; reason: 'pareto-nondominated' }
-  | { action: 'reject'; reason: 'external-fail' | 'discipline-veto' | 'hard-floor-breach' | 'not-better-than-best' | 'not-better-than-baseline' };
+  | { action: 'reject'; reason: 'external-fail' | 'discipline-veto' | 'hard-floor-breach' | 'missing-incumbent-evidence' | 'not-better-than-best' | 'not-better-than-baseline' };
 
 export function selectForArchive(
   candidate: EpisodeResult,

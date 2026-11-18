@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { sameWindow, sameWindowBounds, type NativeWindow } from './app-target';
+import type { NativeWindow } from './app-target';
 
 // Quartz window coordinates and CGEvent coordinates both use a top-left
 // origin in the global desktop. This query returns metadata only, no pixels.
@@ -194,14 +194,11 @@ JSON.stringify(onScreenWindows().flatMap(function (w) {
   return JSON.parse(output) as NativeWindow[];
 }
 
+/** A nonzero exit from screencapture; the controller checks for a target change before classifying it. */
+export class MacWindowCaptureError extends Error {}
+
+/** The controller verifies window identity and bounds on both sides of this operation. */
 export async function captureMacWindow(window: NativeWindow, signal?: AbortSignal): Promise<Buffer> {
-  const assertLive = async () => {
-    const live = (await listMacWindows(signal)).find((item) => sameWindow(item, window));
-    if (!live || !sameWindowBounds(live, window)) {
-      throw new Error('The selected app window closed, moved, or resized. Capture it again.');
-    }
-  };
-  await assertLive();
   const dir = await mkdtemp(join(tmpdir(), 'conecode-window-'));
   const path = join(dir, 'window.png');
   try {
@@ -210,11 +207,12 @@ export async function captureMacWindow(window: NativeWindow, signal?: AbortSigna
     await new Promise<void>((resolve, reject) => {
       execFile('/usr/sbin/screencapture', ['-x', '-a', '-o', '-t', 'png', '-l', window.id, path],
         { signal, timeout: 10_000 }, (error, _stdout, stderr) => {
-          if (error) reject(Object.assign(new Error(stderr.trim() || 'macOS could not capture the selected app window.'), { cause: error }));
-          else resolve();
+          if (!error) return resolve();
+          if (typeof error.code !== 'number' || error.killed || error.signal) return reject(error);
+          reject(Object.assign(new MacWindowCaptureError(stderr.trim() || 'macOS could not capture the selected app window.'), { cause: error }));
         });
     });
-    await assertLive();
+    signal?.throwIfAborted();
     return await readFile(path, { signal });
   } finally {
     await rm(dir, { recursive: true, force: true });

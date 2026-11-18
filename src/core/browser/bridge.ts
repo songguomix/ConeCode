@@ -9,7 +9,7 @@ export function installBrowserBridge(target: { electronAPI?: unknown }): void {
     provider: { list: emptyList },
     model: { list: emptyList },
     conversation: { list: emptyList },
-    message: { list: emptyList },
+    message: { list: emptyList, subAgentHistory: emptyList },
     favorite: { list: emptyList },
     recent: { list: emptyList },
     memory: { list: emptyList },

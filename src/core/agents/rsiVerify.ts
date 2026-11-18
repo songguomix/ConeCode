@@ -201,40 +201,92 @@ export interface ParsedGoalVector {
   warnings: string[];
 }
 
-function section(md: string, heading: string): string {
-  const re = new RegExp(`^##\\s+${heading}\\s*$`, 'm');
+function section(md: string, heading: string): string | undefined {
+  const re = new RegExp(`^##[ \\t]+(?:\\d+[.)、][ \\t]*)?(?:${heading})[ \\t]*\\r?$`, 'im');
   const m = re.exec(md);
-  if (!m) return '';
+  if (!m) return undefined;
   const rest = md.slice(m.index + m[0].length);
-  const next = /^##\s+\S/m.exec(rest);
+  const next = /^#{1,2}[ \t]+\S/m.exec(rest);
   return (next ? rest.slice(0, next.index) : rest).trim();
+}
+
+/** Keep pipes in inline code intact so a shell pipeline is never read as a shorter command. */
+function metricCells(line: string): string[] {
+  const row = line.trim().replace(/^\||\|$/g, '');
+  const cells: string[] = [];
+  let start = 0;
+  for (const match of row.matchAll(/`[^`]*`|\\\||\|/g)) {
+    if (match[0] !== '|') continue;
+    cells.push(row.slice(start, match.index).trim());
+    start = match.index! + 1;
+  }
+  cells.push(row.slice(start).trim());
+  return cells;
+}
+
+const COMMAND_LABEL = /^\s*(?:(?:[-*]|\d+[.)、])\s*)?(?:verification\s+command|command|验证命令|驗證命令|命令)\s*[:：]\s*(.*?)\s*$/i;
+
+function frozenMetricTable(md: string) {
+  const rows: { id: string; measurement: string; direction: string; baselineNote: string }[] = [];
+  const body = section(md, '(?:Frozen metrics|冻结指标|凍結指標)(?:[ \\t]*[（(][^()（）\\r\\n]*[)）])?');
+  if (body === undefined) return { body, rows };
+  for (const line of body.split('\n')) {
+    if (!line.includes('|') || COMMAND_LABEL.test(line)) continue;
+    const cells = metricCells(line);
+    if (!line.trimStart().startsWith('|') && cells.length < 3) continue;
+    const [id, measurement = '', direction = '', baselineNote = ''] = cells;
+    if (/^(?:id|metric(?: id)?|指标(?: ID)?|指標(?: ID)?)$/i.test(id) || /^:?-+:?$/.test(id)) continue;
+    rows.push({ id, measurement, direction, baselineNote });
+  }
+  return { body, rows };
+}
+
+/** Commands that must run even when a guard's direction is non-numeric (e.g. "== 0"). */
+export function parseGoalChecks(markdown: string): { commands: string[]; issues: string[] } {
+  const { body, rows } = frozenMetricTable(markdown);
+  const commands = new Set<string>();
+  const issues: string[] = [];
+  for (const { id, measurement } of rows) {
+    // The live files append notes such as "(exit code)". Multiple code spans
+    // or shell fragments outside the span make a declaration ambiguous.
+    const command = /^`([^`]+)`(?:\s*\([^`]*\))?$/.exec(measurement)?.[1].trim();
+    if (id && command) commands.add(command);
+    else issues.push(`metric "${id || '(missing id)'}": expected one backticked measurement command`);
+  }
+  if (body !== undefined && !rows.length && !body.split('\n').some((line) => COMMAND_LABEL.test(line))) {
+    issues.push('Frozen metrics contains no readable command declarations.');
+  }
+  for (const line of markdown.split('\n')) {
+    const label = COMMAND_LABEL.exec(line);
+    if (!label) continue;
+    const command = /^`([^`]+)`$/.exec(label[1])?.[1].trim();
+    if (command) commands.add(command);
+    else issues.push('Command declaration requires one backticked command.');
+  }
+  return { commands: [...commands], issues };
 }
 
 /** Parse the frozen-metrics markdown table. Unknown rows → warnings, never guesses. */
 export function parseGoalVector(md: string): ParsedGoalVector {
+  const { rows } = frozenMetricTable(md);
   const warnings: string[] = [];
-  const frozenAt = /Frozen\s+(\S+)/.exec(md)?.[1] ?? '';
-  const charter = section(md, 'Charter');
-  const nonGoals = section(md, 'Non-goals');
-  const tableSection = section(md, 'Frozen metrics');
+  const frozenAt = /Frozen\s+(\d{4}-\d{2}-\d{2}[^)\s]*)/i.exec(md)?.[1] ?? /Frozen\s+(\S+)/.exec(md)?.[1] ?? '';
+  const charter = section(md, 'Charter(?: goal)?') ?? '';
+  const nonGoals = section(md, 'Non-goals(?:\\s*/\\s*scope)?') ?? '';
   const metrics: ParsedGoalMetric[] = [];
-  for (const line of tableSection.split('\n')) {
-    const cells = line.split('|').map((c) => c.trim());
-    // Leading/trailing pipes produce empty edge cells: | id | cmd | dir | base |
-    if (cells.length < 6 || cells[1] === '' || /^id$/i.test(cells[1]) || /^-+$/.test(cells[1])) continue;
-    const [, id, cmdCell, dirCell, baseCell] = cells;
-    const command = /`([^`]+)`/.exec(cmdCell)?.[1]?.trim() ?? '';
-    const dir = dirCell.toLowerCase();
-    const direction: MetricDirection | null = dir === 'lower' ? 'lower' : dir === 'higher' ? 'higher' : null;
-    if (!command) {
-      warnings.push(`metric "${id}": no backticked command, skipped`);
+  for (const { id, measurement, direction: directionCell, baselineNote } of rows) {
+    // Historical numeric vectors allowed explanatory prose around the command.
+    const command = /`([^`]+)`/.exec(measurement)?.[1].trim();
+    if (!command || !id) {
+      warnings.push(`metric "${id}": no backticked command or id, skipped`);
       continue;
     }
-    if (!direction) {
-      warnings.push(`metric "${id}": unknown direction "${dirCell}", skipped`);
+    const direction = directionCell.toLowerCase();
+    if (direction !== 'lower' && direction !== 'higher') {
+      warnings.push(`metric "${id}": unknown direction "${directionCell}", skipped`);
       continue;
     }
-    metrics.push({ id, command, direction, baselineNote: baseCell ?? '' });
+    metrics.push({ id, command, direction, baselineNote });
   }
   return { charter, frozenAt, metrics, nonGoals, warnings };
 }

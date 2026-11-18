@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ComputerController } from './controller';
+import { MacWindowCaptureError } from './macos-app';
 import type { NativeWindow } from './app-target';
 
 const native = vi.hoisted(() => ({
-  list: vi.fn(), accessibility: vi.fn(), capture: vi.fn(), press: vi.fn(), input: vi.fn(), image: vi.fn(),
+  list: vi.fn(), accessibility: vi.fn(), mediaAccess: vi.fn(), capture: vi.fn(), press: vi.fn(), input: vi.fn(), image: vi.fn(),
 }));
 
 vi.mock('electron', () => ({
@@ -11,10 +12,11 @@ vi.mock('electron', () => ({
   screen: { getCursorScreenPoint: () => ({ x: 1, y: 1 }) },
   systemPreferences: {
     isTrustedAccessibilityClient: native.accessibility,
-    getMediaAccessStatus: () => 'granted',
+    getMediaAccessStatus: native.mediaAccess,
   },
 }));
-vi.mock('./macos-app', () => ({
+vi.mock('./macos-app', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./macos-app')>(),
   listMacWindows: native.list,
   captureMacWindow: native.capture, pressMacPoint: native.press, runMacInput: native.input,
 }));
@@ -29,6 +31,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   native.list.mockResolvedValue([a, b, { ...b, id: '3', pid: process.pid }]);
   native.accessibility.mockReturnValue(true);
+  native.mediaAccess.mockReturnValue('granted');
   native.capture.mockResolvedValue(Buffer.from('app frame'));
   native.press.mockResolvedValue(undefined);
   native.input.mockResolvedValue('ok');
@@ -74,9 +77,56 @@ describe('desktop computer app scope', () => {
     expect(native.input).not.toHaveBeenCalled();
   });
 
+  it('captures the selected window when macOS still reports the previous denial', async () => {
+    native.mediaAccess.mockReturnValue('denied');
+    await select('111:1');
+    const frame = await screenshot();
+    expect(frame.target.id).toBe('111:1');
+    expect(native.capture).toHaveBeenCalledExactlyOnceWith(a, expect.any(AbortSignal));
+  });
+
+  it('explains a native capture failure using the current screen permission', async () => {
+    await select('111:1');
+    native.capture.mockRejectedValue(new MacWindowCaptureError('could not capture this window'));
+    native.mediaAccess.mockReturnValue('denied');
+    await expect(controller.screenshot()).resolves.toMatchObject({ needsPermission: 'screenRecording' });
+    native.mediaAccess.mockReturnValue('granted');
+    await expect(controller.screenshot()).resolves.toEqual({ error: 'could not capture this window' });
+  });
+
+  it('prioritizes a recycled window ID over a possible permission error from screencapture', async () => {
+    await select('111:1');
+    native.list.mockResolvedValueOnce([a]).mockResolvedValueOnce([{ ...a, pid: b.pid }]);
+    native.capture.mockRejectedValueOnce(new MacWindowCaptureError('could not capture this window'));
+    native.mediaAccess.mockReturnValue('denied');
+    await expect(controller.screenshot()).resolves.toEqual({ error: expect.stringContaining('no longer available') });
+    expect(native.image).not.toHaveBeenCalled();
+  });
+
+  it('discards pixels if the window moved during capture and retries at the new bounds', async () => {
+    await select('111:1');
+    const moved = { ...a, x: a.x + 5, width: a.width + 10 };
+    native.list.mockResolvedValueOnce([a]).mockResolvedValue([moved]);
+    await expect(controller.screenshot()).resolves.toEqual({ error: expect.stringContaining('moved during capture') });
+    expect(native.image).not.toHaveBeenCalled();
+    expect((await screenshot()).geometry.logicalWidth).toBe(moved.width);
+    expect(native.capture).toHaveBeenLastCalledWith(moved, expect.any(AbortSignal));
+  });
+
+  it('preserves target and revision errors when macOS reports denied', async () => {
+    native.mediaAccess.mockReturnValue('denied');
+    await select('111:1');
+    await expect(controller.screenshot(0)).resolves.toEqual({ error: expect.stringContaining('changed') });
+    native.list.mockResolvedValue([]);
+    await expect(controller.screenshot()).resolves.toEqual({ error: expect.stringContaining('no longer available') });
+    expect(native.capture).not.toHaveBeenCalled();
+  });
+
   it('captures only the selected window and maps screenshot coordinates including a negative desktop origin', async () => {
     await expect(select('111:1')).resolves.toMatchObject({ ok: true });
+    native.list.mockClear();
     const shot = await screenshot();
+    expect(native.list).toHaveBeenCalledTimes(2);
     expect(native.capture).toHaveBeenCalledExactlyOnceWith(a, expect.any(AbortSignal));
     await expect(controller.act({ action: 'left_click', coordinate: [15, 20], frameId: shot.frameId }))
       .resolves.toMatchObject({ ok: true });
@@ -116,11 +166,13 @@ describe('desktop computer app scope', () => {
   });
 
   it('discards a capture interrupted by emergency stop even if the native reply arrives late', async () => {
+    native.mediaAccess.mockReturnValue('denied');
     await select('111:1');
     let finish!: (value: Buffer) => void;
     native.capture.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
     const pending = controller.screenshot();
     await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    await expect(controller.screenshot()).resolves.toEqual({ error: expect.stringContaining('in progress') });
     await controller.panic();
     finish(Buffer.from('late image'));
     await expect(pending).resolves.toHaveProperty('error');

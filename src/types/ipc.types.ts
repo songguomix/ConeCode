@@ -1,5 +1,6 @@
 import type { AIModel } from './model.types';
 import type { Conversation, Message } from './chat.types';
+import type { SubAgentRun } from './subAgent.types';
 import type { ProviderConfig } from './provider.types';
 import type {
   ReplyContextRequest,
@@ -83,6 +84,8 @@ export interface IPCChannels {
   'conversation:delete': { id: string; result: boolean };
   'message:list': { conversationId: string; result: any[] };
   'message:counts': { result: Record<string, number> };
+  'message:subAgentHistory': { result: SubAgentRun[] };
+  'message:recordSubAgent': { parentMessageId: string; run: SubAgentRun; result: boolean };
   'message:create': { data: any; result: any };
   'model:list': { providerId?: string; result: any[] };
   'model:upsert': { models: any[]; result: boolean };
@@ -191,6 +194,12 @@ export interface ChatStreamParams {
  * call site is an error the build silently tolerated.
  */
 export interface ElectronAPI {
+  aegis: {
+    testKey: (key: string) => Promise<'connected' | 'invalid' | 'forbidden' | 'limited' | 'unavailable'>;
+    hasKey: () => Promise<boolean>;
+    setKey: (key: string) => Promise<void>;
+    scan: (urls: string[]) => Promise<{ results: { decision: 'allow' | 'review' | 'block'; vt: string }[] }>;
+  };
   free: {
     status: () => Promise<import('../core/providers/free.adapter').FreeCatalog>;
     // Durable weekly-usage store (main-process file). Optional so older test
@@ -235,6 +244,8 @@ export interface ElectronAPI {
   };
   message: {
     list: (conversationId: string) => Promise<Message[]>;
+    subAgentHistory: () => Promise<SubAgentRun[]>;
+    recordSubAgent: (parentMessageId: string, run: SubAgentRun) => Promise<boolean>;
     /** Message count per conversation (including never-used ones as absent/0). */
     counts: () => Promise<Record<string, number>>;
     create: (data: any) => Promise<Message>;
@@ -324,7 +335,7 @@ export interface ElectronAPI {
   };
   net: {
     fetch: (url: string, scope?: string) => Promise<string>;
-    search: (query: string, scope?: string) => Promise<string>;
+    search: (query: string, scope?: string, protectedSearch?: boolean) => Promise<string>;
     download: (url: string, dest: string) => Promise<string>;
   };
   /**

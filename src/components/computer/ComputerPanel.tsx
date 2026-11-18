@@ -4,14 +4,16 @@ import {
 } from 'react-icons/fi';
 import { useUIStore, useLanguageStore, useComputerStore, useSettingsStore } from '../../stores';
 import type { ComputerTarget } from '../../core/computer/computer';
+import type { ComputerStatus } from '../../types/ipc.types';
+import ScreenRecordingRecovery from '../screenshot/ScreenRecordingRecovery';
 
 // The consent surface for letting the agent drive the machine. Everything the
 // user needs in order to decide is here: what it will be able to do, which OS
 // permissions are missing, what it has done so far, and one button that takes
 // the keys back. Mirrors the floating-card pattern of RemotePanel.
 
-function PermissionRow({ granted, label, hint, action }: {
-  granted: boolean; label: string; hint: string; action?: React.ReactNode;
+function PermissionRow({ granted, label, hint, action, children }: {
+  granted: boolean; label: string; hint: string; action?: React.ReactNode; children?: React.ReactNode;
 }) {
   return (
     <div className="flex items-start gap-2.5 px-3 py-2.5 rounded-xl bg-[var(--bg-0)] border border-[var(--border)]">
@@ -23,10 +25,48 @@ function PermissionRow({ granted, label, hint, action }: {
       <div className="flex-1 min-w-0">
         <div className="text-[13px] font-medium">{label}</div>
         <div className="text-[12px] text-[var(--text-muted)] leading-relaxed">{hint}</div>
+        {!granted && children}
       </div>
       {!granted && action}
     </div>
   );
+}
+
+type WindowTask = { action: 'list' | 'capture'; revision: number; select?: string };
+type WindowScope = Pick<ComputerStatus, 'enabled' | 'targetRevision' | 'target'>;
+
+function appliesToWindow(task: WindowTask, state: WindowScope) {
+  // Selecting a window advances the revision once, before its first screenshot.
+  return state.enabled && (state.targetRevision === task.revision ||
+    (task.select !== undefined && state.targetRevision === task.revision + 1 && state.target?.id === task.select));
+}
+
+export async function runPanelWindowTask(task: WindowTask, latest: () => boolean, showApps: (apps: ComputerTarget[]) => void) {
+  const current = () => latest() && appliesToWindow(task, useComputerStore.getState());
+  let revision = task.revision;
+  try {
+    if (!current() || revision !== useComputerStore.getState().targetRevision) return;
+    const api = window.electronAPI.computer;
+    if (task.action === 'list') {
+      const result = await api.act({ action: 'list_apps' });
+      if (!result.ok) throw new Error(result.message);
+      if (current()) showApps(result.targets ?? []);
+      return;
+    }
+    if (task.select !== undefined) {
+      const result = await api.act({ action: 'switch_app', targetId: task.select, targetRevision: revision });
+      if (!result.ok) throw new Error(result.message);
+      if (!current()) return;
+      revision += 1;
+    }
+    const shot = await api.screenshot(revision);
+    if ('error' in shot) throw new Error(shot.error);
+    if (current()) useComputerStore.getState().setLastShot(shot);
+  } catch (error) {
+    if (current() && useComputerStore.getState().targetRevision === revision) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  }
 }
 
 export default function ComputerPanel() {
@@ -34,60 +74,48 @@ export default function ComputerPanel() {
   const { t, locale } = useLanguageStore();
   const approvalMode = useSettingsStore((s) => s.approvalOverride ?? s.approvalMode);
   const {
-    enabled, supported, platform, accessibility, screenRecording, geometry, target,
-    activity, lastShot, refresh, setEnabled, requestPermissions, panic, clearActivity, previewVisible, refreshPreview, setLastShot,
+    enabled, supported, platform, accessibility, screenRecording, geometry, target, targetRevision,
+    activity, lastShot, refresh, setEnabled, requestPermissions, panic, clearActivity, previewVisible, refreshPreview,
   } = useComputerStore();
   const bottomRef = useRef<HTMLDivElement>(null);
   const [openingPreview, setOpeningPreview] = useState(false);
   const [previewError, setPreviewError] = useState<string>();
   const [apps, setApps] = useState<ComputerTarget[] | null>(null);
-  const [appBusy, setAppBusy] = useState(false);
-  const [appError, setAppError] = useState<string | null>(null);
+  const latestTask = useRef<WindowTask | null>(null);
+  const [operation, setOperation] = useState<{ task: WindowTask; error?: string } | null>(null);
+  const currentOperation = operation && appliesToWindow(operation.task, { enabled, targetRevision, target }) ? operation : null;
+  const appBusy = !!currentOperation && currentOperation.error === undefined;
+  const appError = currentOperation?.error;
 
   useEffect(() => { refresh(); }, [refresh]);
   useEffect(() => { void refreshPreview().catch(() => undefined); }, [refreshPreview]);
   useEffect(() => { bottomRef.current?.scrollIntoView({ block: 'end' }); }, [activity.length]);
 
   const isMac = platform === 'darwin';
-  const ready = accessibility && screenRecording;
-  const loadApps = useCallback(async () => {
-    setAppBusy(true);
-    setAppError(null);
-    try {
-      const result = await window.electronAPI.computer.act({ action: 'list_apps' });
-      if (!result.ok) throw new Error(result.message);
-      setApps(result.targets!);
-    } catch (error) {
-      setAppError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setAppBusy(false);
-    }
+  const runWindowTask = useCallback(async (task: WindowTask) => {
+    const state = useComputerStore.getState();
+    if (!state.enabled || task.revision !== state.targetRevision) return;
+    latestTask.current = task;
+    setOperation({ task });
+    const latest = () => latestTask.current === task;
+    const error = await runPanelWindowTask(task, latest, setApps);
+    if (latest()) setOperation(error === undefined ? null : { task, error });
   }, []);
   useEffect(() => {
-    if (enabled) void loadApps();
-    else {
-      setApps(null);
-      setAppError(null);
-    }
-  }, [enabled, loadApps]);
-
-  const selectApp = async (targetId: string) => {
-    setAppBusy(true);
-    setAppError(null);
-    try {
-      const api = window.electronAPI.computer;
-      const { targetRevision } = await api.status();
-      const result = await api.act({ action: 'switch_app', targetId, targetRevision });
-      if (!result.ok) throw new Error(result.message);
-      const shot = await api.screenshot(targetRevision + 1);
-      if ('error' in shot) throw new Error(shot.error);
-      setLastShot(shot);
-    } catch (error) {
-      setAppError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setAppBusy(false);
-    }
-  };
+    const syncEnabled = ({ enabled, targetRevision }: WindowScope) => {
+      latestTask.current = null;
+      if (enabled) void runWindowTask({ action: 'list', revision: targetRevision });
+      else {
+        setApps(null);
+        setOperation(null);
+      }
+    };
+    syncEnabled(useComputerStore.getState());
+    const off = useComputerStore.subscribe((next, previous) => {
+      if (next.enabled !== previous.enabled) syncEnabled(next);
+    });
+    return () => { off(); latestTask.current = null; };
+  }, [runWindowTask]);
   const openPreview = async () => {
     setOpeningPreview(true);
     setPreviewError(undefined);
@@ -102,7 +130,7 @@ export default function ComputerPanel() {
         if (!result?.ok) throw new Error(result?.error || 'Unavailable');
       }
       await refreshPreview();
-      if (!previewVisible) closeComputer();
+      if (!previewVisible && useComputerStore.getState().target) closeComputer();
     } catch { setPreviewError(t('computerPreviewOpenFailed')); }
     finally { setOpeningPreview(false); }
   };
@@ -178,13 +206,13 @@ export default function ComputerPanel() {
                   <div className="space-y-2 rounded-xl border border-[var(--border)] bg-[var(--bg-0)] p-3">
                     <div className="flex items-center justify-between gap-2">
                       <label htmlFor="computer-target" className="text-[13px] font-medium">{t('computerTarget')}</label>
-                      <button type="button" onClick={loadApps} disabled={appBusy}
+                      <button type="button" onClick={() => void runWindowTask({ action: 'list', revision: targetRevision })} disabled={appBusy}
                         className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-[var(--accent)] hover:bg-[var(--accent-soft)] disabled:opacity-50">
-                        <FiRefreshCw size={12} aria-hidden="true" /> {t('refresh')}
+                        <FiRefreshCw size={12} aria-hidden="true" /> {t('computerRefreshWindows')}
                       </button>
                     </div>
                     <select id="computer-target" disabled={appBusy || !apps?.length}
-                      value={target?.id ?? ''} onChange={(event) => void selectApp(event.target.value)}
+                      value={target?.id ?? ''} onChange={(event) => void runWindowTask({ action: 'capture', select: event.target.value, revision: targetRevision })}
                       className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-2)] px-2 py-1.5 text-xs">
                       <option value="" disabled>{t('computerPickApp')}</option>
                       {target && !apps?.some((app) => app.id === target.id) && (
@@ -195,6 +223,12 @@ export default function ComputerPanel() {
                       ))}
                     </select>
                     <p className="text-xs text-[var(--text-muted)]">{t(apps?.length === 0 ? 'computerNoApps' : 'computerTargetHint')}</p>
+                    {target && (
+                      <button type="button" onClick={() => void runWindowTask({ action: 'capture', revision: targetRevision })} disabled={appBusy}
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--bg-2)] px-2.5 py-1.5 text-xs text-[var(--accent)] hover:bg-[var(--accent-soft)] disabled:opacity-50">
+                        <FiRefreshCw size={12} aria-hidden="true" /> {t('computerPreviewRefresh')}
+                      </button>
+                    )}
                     {appError && <p role="alert" className="break-words text-xs text-[var(--error)]">{appError}</p>}
                   </div>
                   <button
@@ -225,16 +259,11 @@ export default function ComputerPanel() {
                     granted={screenRecording}
                     label={t('computerScreenRecording')}
                     hint={screenRecording ? t('computerGranted') : t('computerScreenRecordingHint')}
-                    action={
-                      <button type="button" onClick={() => {
-                        void window.electronAPI.computer.openScreenSettings().catch((error: Error) => setAppError(error.message));
-                      }} className="shrink-0 rounded-lg px-2 py-1 text-xs text-[var(--accent)] hover:bg-[var(--accent-soft)]">
-                        {t('computerOpenSettings')} <FiExternalLink className="inline" size={11} />
-                      </button>
-                    }
-                  />
-                  {!enabled && appError && <p role="alert" className="break-words text-xs text-[var(--error)]">{appError}</p>}
-                  {!ready && (
+                  >
+                    <ScreenRecordingRecovery requestPermission={() => window.electronAPI.computer.openScreenSettings()}
+                      retry={refresh} retryLabel={t('rsiRecheck')} />
+                  </PermissionRow>
+                  {screenRecording && !accessibility && (
                     <p className="text-[11.5px] text-[var(--text-muted)] leading-relaxed px-1">
                       {t('computerRestartHint')}
                     </p>

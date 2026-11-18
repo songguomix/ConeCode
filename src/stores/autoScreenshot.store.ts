@@ -115,7 +115,7 @@ export const useAutoScreenshotStore = create<AutoScreenshotState>((set, get) => 
     const saveToDisk = opts.saveToDisk ?? cfg.autoSaveToDisk;
     const label = opts.label?.trim() || target;
 
-    const api = (window as any)?.electronAPI?.autoScreenshot;
+    const api = window.electronAPI?.autoScreenshot;
     if (!api?.capture) {
       const error = 'Auto-screenshot IPC bridge is unavailable in this environment.';
       set({ lastError: error });
@@ -130,10 +130,23 @@ export const useAutoScreenshotStore = create<AutoScreenshotState>((set, get) => 
         set({ capturing: false, lastError: error });
         return { ok: false, error, needsPermission: res?.needsPermission };
       }
+      if (!Number.isInteger(res.width) || res.width < 1 || !Number.isInteger(res.height) || res.height < 1
+        || typeof res.dataUrl !== 'string' || !res.dataUrl.startsWith('data:image/png;base64,')
+        || !['window', 'preview', 'screen'].includes(res.target)) {
+        throw new Error('Screenshot capture returned incomplete image data.');
+      }
+      // Decode the same bytes that will be attached to the model's next turn.
+      // IPC success and positive metadata alone can accompany an empty frame.
+      const image = new Image();
+      image.src = res.dataUrl;
+      await image.decode();
+      if (!image.naturalWidth || !image.naturalHeight) {
+        throw new Error('Screenshot capture returned an empty image.');
+      }
       const item: AutoScreenshotItem = {
         id: uuidv4(),
         timestamp: res.timestamp || Date.now(),
-        target: res.target || 'window',
+        target: res.target,
         label,
         width: res.width,
         height: res.height,

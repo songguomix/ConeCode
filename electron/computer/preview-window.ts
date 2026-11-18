@@ -22,7 +22,7 @@ interface Options {
   devServerUrl?: string;
 }
 
-interface CaptureToken { generation: number; requestSeq: number }
+interface CaptureToken { generation: number; requestSeq: number; targetRevision: number }
 type CaptureResult = ComputerFrame | { error: string; needsPermission?: 'screenRecording' };
 
 const windowsPointerActions = new Set<ComputerRequest['action']>([
@@ -62,6 +62,7 @@ export class ComputerPreviewWindow {
   private loading?: Promise<void>;
   private generation = 0;
   private captureSeq = 0;
+  private activeCapture?: { token: CaptureToken; result: Promise<CaptureResult> };
   private activitySeq = 0;
   private pointerSeq = 0;
   private aspectRatio = 1.6;
@@ -195,8 +196,7 @@ export class ComputerPreviewWindow {
 
   close(): void { if (this.window && !this.window.isDestroyed()) this.window.close(); }
 
-  statusChanged(forceClear = false): void {
-    const status = this.options.getStatus();
+  statusChanged(forceClear = false, status = this.options.getStatus()): void {
     if (forceClear || status.targetRevision !== this.state.status.targetRevision || status.enabled !== this.state.status.enabled) {
       this.generation += 1;
       this.state.shot = null;
@@ -224,24 +224,44 @@ export class ComputerPreviewWindow {
     return this.generation;
   }
 
-  beginScreenshot(): CaptureToken {
-    this.statusChanged();
-    this.beginOperation();
-    return { generation: this.generation, requestSeq: ++this.captureSeq };
+  beginScreenshot(status = this.options.getStatus()): CaptureToken {
+    this.state.inFlight += 1;
+    this.statusChanged(false, status);
+    return { generation: this.generation, requestSeq: ++this.captureSeq, targetRevision: status.targetRevision };
   }
 
   /** Guard both the viewer and the result returned to the agent/model. */
-  async capture(screenshot: () => Promise<CaptureResult>): Promise<CaptureResult> {
-    if (!this.options.getStatus().enabled) return { error: 'Computer control is switched off. No screenshot was captured.' };
-    const token = this.beginScreenshot();
+  async capture(expectedRevision?: number): Promise<CaptureResult> {
+    const status = this.options.getStatus();
+    if (!status.enabled) return { error: 'Computer control is switched off. No screenshot was captured.' };
+    if (expectedRevision !== undefined && expectedRevision !== status.targetRevision) {
+      return { error: 'The selected app changed. Request a new screenshot.' };
+    }
+    const pending = this.activeCapture;
+    if (pending && pending.token.targetRevision === status.targetRevision && pending.token.generation === this.generation) {
+      return pending.result;
+    }
+
+    const token = this.beginScreenshot(status);
+    const result = this.captureFrame(token);
+    this.activeCapture = { token, result };
     try {
-      const result = await screenshot();
-      const accepted = this.endScreenshot(result, token);
-      return 'dataUrl' in result && !accepted ? { error: 'Screenshot discarded: control changed or a newer capture was requested.' } : result;
+      return await result;
+    } finally {
+      if (this.activeCapture?.result === result) this.activeCapture = undefined;
+    }
+  }
+
+  private async captureFrame(token: CaptureToken): Promise<CaptureResult> {
+    let result: CaptureResult;
+    try {
+      result = await this.options.screenshot(token.targetRevision);
     } catch (error) {
       this.endScreenshot({ error: String(error) }, token);
       throw error;
     }
+    const accepted = this.endScreenshot(result, token);
+    return 'dataUrl' in result && !accepted ? { error: 'Screenshot discarded: control changed or a newer capture was requested.' } : result;
   }
 
   endScreenshot(result: CaptureResult, token: CaptureToken): boolean {
@@ -249,7 +269,7 @@ export class ComputerPreviewWindow {
     // Disabling/re-enabling or emergency stop fences captures started earlier.
     const status = this.options.getStatus();
     const accepted = token.generation === this.generation && token.requestSeq === this.captureSeq
-      && status.enabled && 'dataUrl' in result && status.frameId === result.frameId
+      && status.targetRevision === token.targetRevision && status.enabled && 'dataUrl' in result && status.frameId === result.frameId
       && status.target?.id === result.target.id && /^data:image\/(?:png|jpe?g|webp);base64,/.test(result.dataUrl);
     if (accepted && 'dataUrl' in result) {
       const pointer = this.state.pointer;
@@ -270,7 +290,7 @@ export class ComputerPreviewWindow {
         win.setSize(width, Math.max(1, Math.round(width / ratio)));
       }
     }
-    this.statusChanged();
+    this.statusChanged(false, status);
     return accepted;
   }
 
@@ -326,9 +346,9 @@ export class ComputerPreviewWindow {
     if (!status.enabled || !status.target || status.targetRevision !== revision) {
       return { ok: false, message: 'The selected app changed. Wait for the current target before refreshing.' };
     }
-    if (this.state.inFlight) return { ok: false, message: 'Another computer action is in progress.' };
+    if (this.state.inFlight && !this.activeCapture) return { ok: false, message: 'Another computer action is in progress.' };
     try {
-      const result = await this.capture(() => this.options.screenshot(status.targetRevision));
+      const result = await this.capture(status.targetRevision);
       return 'error' in result ? { ok: false, message: result.error } : { ok: true, message: `Captured ${result.target.name}.` };
     } catch (error) {
       return { ok: false, message: error instanceof Error ? error.message : String(error) };
@@ -360,7 +380,8 @@ export class ComputerPreviewWindow {
   private publish(): void {
     this.state.revision += 1;
     this.state.updatedAt = Date.now();
-    if (this.window && !this.window.isDestroyed()) this.window.webContents.send(CHANNELS.state, this.snapshot());
+    // Electron serializes the snapshot for IPC, including the full image.
+    if (this.window && !this.window.isDestroyed()) this.window.webContents.send(CHANNELS.state, this.state);
   }
 
   private publishVisibility(): void {

@@ -56,6 +56,19 @@ function harness(extra: { devServerUrl?: string } = {}) {
   return { manager, main, preview, createWindow, status, act, screenshot, handlers, event };
 }
 
+async function showInitialFrame(h: ReturnType<typeof harness>) {
+  h.screenshot.mockResolvedValueOnce(image);
+  await expect(h.manager.capture(h.status.targetRevision)).resolves.toEqual(image);
+  h.screenshot.mockClear();
+}
+
+function delayNextFrame(h: ReturnType<typeof harness>) {
+  let finish!: (frame: Screenshot) => void;
+  h.screenshot.mockImplementationOnce(() => new Promise<Screenshot>((resolve) => { finish = resolve; }));
+  const pending = h.manager.capture(h.status.targetRevision);
+  return { pending, finish };
+}
+
 describe('native computer preview manager (mock Electron window)', () => {
   it('creates one movable always-on-top sandboxed viewer without focusing either window', async () => {
     const h = harness();
@@ -130,9 +143,8 @@ describe('native computer preview manager (mock Electron window)', () => {
 
   it('clears the old preview and rejects an in-flight capture after switching apps', async () => {
     const h = harness();
-    await expect(h.manager.capture(async () => image)).resolves.toEqual(image);
-    let finish!: (value: typeof image) => void;
-    const pending = h.manager.capture(() => new Promise((resolve) => { finish = resolve; }));
+    await showInitialFrame(h);
+    const { pending, finish } = delayNextFrame(h);
     h.status.target = { id: '22:2', name: 'Browser', title: '' };
     h.status.targetRevision += 1;
     h.manager.statusChanged();
@@ -152,12 +164,10 @@ describe('native computer preview manager (mock Electron window)', () => {
 
   it('does not capture at all while disabled or return pixels after the control generation changed', async () => {
     const h = harness(); h.status.enabled = false;
-    const read = vi.fn(async () => image);
-    expect(await h.manager.capture(read)).toHaveProperty('error');
-    expect(read).not.toHaveBeenCalled();
+    expect(await h.manager.capture()).toHaveProperty('error');
+    expect(h.screenshot).not.toHaveBeenCalled();
     h.status.enabled = true;
-    let finish!: (value: typeof image) => void;
-    const pending = h.manager.capture(() => new Promise((resolve) => { finish = resolve; }));
+    const { pending, finish } = delayNextFrame(h);
     h.status.enabled = false; h.manager.statusChanged();
     h.status.enabled = true; h.manager.statusChanged();
     finish(image);
@@ -165,13 +175,51 @@ describe('native computer preview manager (mock Electron window)', () => {
     expect(h.manager.snapshot().shot).toBeNull();
   });
 
-  it('discards an earlier capture that finishes after a newer request, including its result to the model', async () => {
+  it('shares a capture across the main panel and the floating preview, then takes a fresh shot on the next refresh', async () => {
+    const h = harness(); await h.manager.open();
+    const { pending, finish } = delayNextFrame(h);
+    const refresh = h.handlers.get(CHANNELS.refresh)!(h.event(h.preview), h.status.targetRevision);
+    expect(await h.manager.capture(h.status.targetRevision - 1)).toHaveProperty('error');
+    expect(h.manager.snapshot().inFlight).toBe(1);
+    expect(h.screenshot).toHaveBeenCalledOnce();
+    finish(image);
+    await expect(pending).resolves.toEqual(image);
+    await expect(refresh).resolves.toMatchObject({ ok: true });
+    expect(h.manager.snapshot()).toMatchObject({ shot: image, inFlight: 0 });
+    await expect(h.manager.capture()).resolves.toHaveProperty('frameId', 'next-frame');
+    expect(h.screenshot).toHaveBeenCalledTimes(2);
+  });
+
+  it('allows retry after a shared capture fails', async () => {
     const h = harness();
-    let finish!: (value: typeof image) => void;
-    const earlier = h.manager.capture(() => new Promise((resolve) => { finish = resolve; }));
+    const { pending, finish } = delayNextFrame(h);
+    const joined = h.manager.capture();
+    const denied = { error: 'Permission denied', needsPermission: 'screenRecording' } as const;
+    finish(denied);
+    expect(await Promise.all([pending, joined])).toEqual([denied, denied]);
+    await expect(h.manager.capture()).resolves.toHaveProperty('frameId', 'next-frame');
+    expect(h.screenshot).toHaveBeenCalledTimes(2);
+  });
+
+  it('drops a shared frame if the same window was reselected before the status update arrived', async () => {
+    const h = harness();
+    const { pending, finish } = delayNextFrame(h);
+    const joined = h.manager.capture();
+    h.status.targetRevision += 1;
+    finish(image);
+    for (const result of await Promise.all([pending, joined])) expect(result).not.toHaveProperty('dataUrl');
+    expect(h.manager.snapshot()).toMatchObject({ shot: null, inFlight: 0 });
+  });
+
+  it('discards a late capture after a new selection and keeps the newer frame', async () => {
+    const h = harness();
+    const { pending: earlier, finish } = delayNextFrame(h);
+    h.status.targetRevision += 1;
+    h.manager.statusChanged();
     const newer = { ...image, dataUrl: 'data:image/png;base64,bmV3', frameId: 'frame2' };
     h.status.frameId = newer.frameId;
-    expect(await h.manager.capture(async () => newer)).toEqual(newer);
+    h.screenshot.mockResolvedValueOnce(newer);
+    expect(await h.manager.capture()).toEqual(newer);
     finish(image);
     expect(await earlier).not.toHaveProperty('dataUrl');
     expect(h.manager.snapshot().shot?.dataUrl).toBe(newer.dataUrl);
@@ -219,7 +267,7 @@ describe('native computer preview manager (mock Electron window)', () => {
   it('accepts a preview click only for its displayed current frame and refreshes the same target', async () => {
     const h = harness();
     await h.manager.open();
-    await h.manager.capture(async () => image);
+    await showInitialFrame(h);
     const action = h.handlers.get(CHANNELS.act)!;
     const sender = h.event(h.preview);
     const click = { frameId: image.frameId, action: 'left_click', coordinate: [480, 320] };
@@ -273,7 +321,7 @@ describe('native computer preview manager (mock Electron window)', () => {
   it('visualizes a pending agent click and does not publish an old pointer after the target changes', async () => {
     const h = harness();
     await h.manager.open();
-    await h.manager.capture(async () => image);
+    await showInitialFrame(h);
     let finish!: (result: ComputerActionResult) => void;
     h.act.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
     const click: ComputerRequest = { action: 'left_click', frameId: image.frameId, coordinate: [480, 320] };
@@ -295,7 +343,7 @@ describe('native computer preview manager (mock Electron window)', () => {
   it('does not mark a rejected native pointer action as sent', async () => {
     const h = harness();
     await h.manager.open();
-    await h.manager.capture(async () => image);
+    await showInitialFrame(h);
     h.act.mockResolvedValueOnce({ ok: false, message: 'Native click rejected' });
     const result = await h.manager.runAction({ action: 'left_click', frameId: image.frameId, coordinate: [480, 320] });
     expect(result.ok).toBe(false);
@@ -307,7 +355,7 @@ describe('native computer preview manager (mock Electron window)', () => {
   it('keeps successful input distinct from a failed refresh so input is not retried', async () => {
     const h = harness();
     await h.manager.open();
-    await h.manager.capture(async () => image);
+    await showInitialFrame(h);
     h.screenshot.mockImplementationOnce(async () => {
       h.status.frameId = null;
       return { error: 'Target moved' };

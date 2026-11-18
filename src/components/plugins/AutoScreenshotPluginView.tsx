@@ -4,11 +4,14 @@ import {
 } from 'react-icons/fi';
 import { useAutoScreenshotStore, type AutoScreenshotItem, type AutoScreenshotTarget } from '../../stores/autoScreenshot.store';
 import { useLanguageStore } from '../../stores/language.store';
+import ScreenRecordingRecovery from '../screenshot/ScreenRecordingRecovery';
 
 export default function AutoScreenshotPluginView() {
   const { config, history, capturing, lastError, setConfig, captureNow, removeHistoryItem, clearHistory } = useAutoScreenshotStore();
   const { t } = useLanguageStore();
   const [previewItem, setPreviewItem] = useState<AutoScreenshotItem | null>(null);
+  const capture = () => captureNow({ label: 'manual-test' });
+  const needsScreenPermission = lastError === 'permission';
 
   const targets: { id: AutoScreenshotTarget; labelKey: string }[] = [
     { id: 'auto', labelKey: 'autoScreenshotTargetAuto' },
@@ -40,7 +43,7 @@ export default function AutoScreenshotPluginView() {
           </div>
           <button
             type="button"
-            onClick={() => void captureNow({ label: 'manual-test' })}
+            onClick={() => void capture()}
             disabled={capturing}
             className="px-2.5 py-1.5 rounded-lg bg-[var(--accent)] text-white font-medium text-xs flex items-center gap-1.5 hover:bg-[var(--accent-hover)] transition-colors shrink-0 cursor-pointer disabled:opacity-50"
           >
@@ -51,9 +54,15 @@ export default function AutoScreenshotPluginView() {
       </div>
 
       {lastError && (
-        <div className="p-2.5 rounded-xl bg-[color-mix(in_srgb,var(--error)_10%,transparent)] border border-[color-mix(in_srgb,var(--error)_30%,transparent)] flex items-center gap-2 text-[11px] text-[var(--error)]">
-          <FiAlertCircle size={13} className="shrink-0" />
-          <span className="truncate">{lastError}</span>
+        <div className="p-2.5 rounded-xl bg-[color-mix(in_srgb,var(--error)_10%,transparent)] border border-[color-mix(in_srgb,var(--error)_30%,transparent)] text-[11px] text-[var(--error)]">
+          <div role="alert" className="flex items-center gap-2">
+            <FiAlertCircle size={13} className="shrink-0" />
+            <span>{needsScreenPermission ? t('screenshotNoPermission') : lastError}</span>
+          </div>
+          {needsScreenPermission && (
+            <ScreenRecordingRecovery requestPermission={() => window.electronAPI.screenshot.openSettings()}
+              retry={capture} retryLabel={t('screenshotRetry')} />
+          )}
         </div>
       )}
 

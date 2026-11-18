@@ -133,6 +133,39 @@ describe('rsiLoop executable closed loop', () => {
     expect(second.state.archive.map((a) => a.id)).toContain('lean');
   });
 
+  it('compares against the deployed incumbent after it leaves the Pareto frontier', () => {
+    const input = (id: string, gain: number, score: number) => ({
+      candidate: cand({ id }),
+      result: {
+        ...goodResult(), metrics: [{ id: 'test.failures', delta: gain, scale: 10 }],
+        judges: { alignment: score, simplicity: score, discipline: score },
+      },
+      parentId: null, baselineId: 'base', strategyId: 'default', costUsd: 0.1,
+    });
+    const first = recordEpisodeOutcome(createLoopState(goal, '/ws'), input('deployed', 10, 0.65));
+    const frontier = recordEpisodeOutcome(first.state, input('alternative', 11, 0.1));
+    expect(frontier.verdict.action).toBe('retain-frontier');
+    expect(frontier.state.archive.map((node) => node.id)).toEqual(['alternative']);
+
+    const weaker = recordEpisodeOutcome(frontier.state, input('popular', 9, 1));
+    expect(weaker.reward).toBeGreaterThan(first.reward);
+    expect(weaker.verdict.action).toBe('reject');
+    expect(weaker.state.best).toEqual({ id: 'deployed', reward: first.reward, metrics: { 'test.failures': 1 } });
+    const stronger = recordEpisodeOutcome(weaker.state, input('better', 12, 1));
+    expect(stronger.verdict.action).toBe('replace-best');
+  });
+
+  it('keeps a legacy incumbent when its measurements cannot be recovered', () => {
+    const previous = { ...createLoopState(goal, '/ws'), best: { id: 'pruned', reward: 0.5 } };
+    const result = recordEpisodeOutcome(previous, {
+      candidate: cand(), result: goodResult(), costUsd: 0.1,
+      parentId: null, baselineId: 'base', strategyId: 'default',
+    });
+    expect(result.verdict).toEqual({ action: 'reject', reason: 'missing-incumbent-evidence' });
+    expect(result.mustRollback).toBe(true);
+    expect(result.state.best).toEqual(previous.best);
+  });
+
   it('is idempotent on repeated delivery and survives restarts', () => {
     const fs = memFs();
     let s = createLoopState(goal, '/ws');

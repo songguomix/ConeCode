@@ -82,14 +82,14 @@ describe('selectCandidate', () => {
 
   it('rejects a candidate that does not beat the incumbent best', () => {
     const strong = episode({ metrics: [{ id: 'm', delta: 1 }], judges: { alignment: 1, simplicity: 1, discipline: 1 } });
-    const best = { reward: computeReward(strong) };
+    const best = { reward: computeReward(strong), metrics: { m: 1 } };
     const d = selectCandidate(episode({ metrics: [{ id: 'm', delta: 0 }] }), best, baseline);
     expect(d.accept).toBe(false);
   });
 
   it('accepts strictly better than best (greedy improvement)', () => {
     const weak = episode({ metrics: [{ id: 'm', delta: 0.1 }] });
-    const best = { reward: computeReward(weak) };
+    const best = { reward: computeReward(weak), metrics: { m: 0.1 } };
     const stronger = episode({
       metrics: [{ id: 'm', delta: 0.8 }],
       judges: { alignment: 1, simplicity: 1, discipline: 1 },
@@ -145,7 +145,7 @@ describe('selectForArchive (one decision, four fates)', () => {
   it('retains a pareto-nondominated candidate that trails overall', () => {
     // Archive leads on speed; candidate is slower overall but best on memory.
     const archive = [{ id: 'fast', metrics: { speed: 0.9, mem: 0.0 } }];
-    const best = { reward: 5 };
+    const best = { reward: 5, metrics: archive[0].metrics };
     const candidate = episode({
       metrics: [
         { id: 'speed', delta: 0.1 },
@@ -167,7 +167,7 @@ describe('selectForArchive (one decision, four fates)', () => {
 
   it('rejects dominated candidates everywhere', () => {
     const archive = [{ id: 'fast', metrics: { speed: 0.9, mem: 0.8 } }];
-    const best = { reward: 5 };
+    const best = { reward: 5, metrics: archive[0].metrics };
     const weak = episode({
       metrics: [
         { id: 'speed', delta: 0.1 },

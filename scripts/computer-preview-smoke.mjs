@@ -67,7 +67,7 @@ app.whenReady().then(async()=>{
   });
   manager.register(ipcMain);
   await manager.open({ locale: 'en', theme: 'dark' });
-  const initialFrame = await manager.capture(() => screenshot(status.targetRevision));
+  const initialFrame = await manager.capture(status.targetRevision);
   if ('error' in initialFrame) throw new Error(initialFrame.error);
   globalThis.previewSmoke = { manager, status, actions, releaseAction: () => unblockAction?.() };
   app.on('before-quit',()=>manager.destroy());

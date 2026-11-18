@@ -32,8 +32,9 @@ export function isWorkConversation(conv: Conversation): boolean {
 export function groupConversationsByFolder(
   conversations: Conversation[],
   currentRootPath: string | null,
+  openFolders: string[] = [],
 ): [folderKey: string, items: Conversation[]][] {
-  const map = new Map<string, Conversation[]>();
+  const map = new Map<string, Conversation[]>(openFolders.map(path => [path, []]));
   for (const conv of conversations) {
     const key = conv.rootPath || '';
     const list = map.get(key);

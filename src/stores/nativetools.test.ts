@@ -158,6 +158,25 @@ describe('buildApiMessages', () => {
     expect(out.filter((m) => m.role === 'tool')).toHaveLength(2);
   });
 
+  it('delivers native screenshot attachments after all tool replies from their batch', () => {
+    const first = 'data:image/png;base64,Zmlyc3Q=';
+    const second = 'data:image/png;base64,c2Vjb25k';
+    const out = buildApiMessages([
+      msg({ role: 'assistant', toolCalls: [
+        { id: 'window', name: 'auto_screenshot', arguments: {} },
+        { id: 'state', name: 'git_status', arguments: {} },
+        { id: 'preview', name: 'auto_screenshot', arguments: {} },
+      ] }),
+      msg({ role: 'tool', content: 'Window', toolCallId: 'window', images: [first] }),
+      msg({ role: 'tool', content: 'State', toolCallId: 'state' }),
+      msg({ role: 'tool', content: 'Preview', toolCallId: 'preview', images: [second] }),
+      msg({ role: 'assistant', content: 'I checked both images.' }),
+    ]);
+    expect(out.map((m) => m.role)).toEqual(['assistant', 'tool', 'tool', 'tool', 'user', 'assistant']);
+    expect(out.slice(1, 4).map((m) => m.tool_call_id)).toEqual(['window', 'state', 'preview']);
+    expect(out[4].content).toEqual([first, second].map((url) => ({ type: 'image_url', image_url: { url, detail: 'auto' } })));
+  });
+
   it('demotes the whole turn when only some calls were answered', () => {
     const out = buildApiMessages([
       msg({

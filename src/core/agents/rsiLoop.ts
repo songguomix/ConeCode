@@ -17,10 +17,13 @@ import {
   REWARD_FAIL,
   computeReward,
   dominates,
+  isMeasuredVector,
+  scaledDelta,
   selectForArchive,
   type ArchiveVerdict,
   type EpisodeResult,
   type ParetoCandidate,
+  type RewardIncumbent,
 } from './rsiReward';
 import { appendExperiment, type DiscoveryTree, type ExperimentStatus, type RsiModule } from './rsiTree';
 
@@ -147,6 +150,7 @@ export function validateCandidate(
 
 export type FailureClass =
   | 'external-fail'
+  | 'missing-incumbent-evidence'
   | 'discipline-veto'
   | 'hard-floor-breach'
   | 'no-improvement'
@@ -157,6 +161,7 @@ export function classifyFailure(reason: ArchiveVerdict['reason'], costExceeded: 
   if (costExceeded) return 'budget-exceeded';
   switch (reason) {
     case 'external-fail': return 'external-fail';
+    case 'missing-incumbent-evidence': return reason;
     case 'discipline-veto': return 'discipline-veto';
     case 'hard-floor-breach': return 'hard-floor-breach';
     case 'not-better-than-best':
@@ -189,7 +194,7 @@ export interface LoopState {
   goal: GoalVector;
   workspaceRoot: string;
   episodeIndex: number;
-  best: { reward: number; id: string | null };
+  best: RewardIncumbent & { id: string | null };
   baselineReward: number;
   rewardHistory: number[];
   consecutiveNonImproving: number;
@@ -202,6 +207,14 @@ export interface LoopState {
   recentModules: RsiModule[];
   stopped: boolean;
   stopReasons: string[];
+}
+
+/** Older v1 checkpoints stored the incumbent's measurements only on the frontier. */
+export function recordedIncumbentMetrics(state: Pick<LoopState, 'best' | 'archive'>): Record<string, number> | undefined {
+  if (state.best.id == null) return undefined;
+  if (isMeasuredVector(state.best.metrics)) return state.best.metrics;
+  const legacy = Array.isArray(state.archive) ? state.archive.find((entry) => entry?.id === state.best.id) : undefined;
+  return isMeasuredVector(legacy?.metrics) ? legacy.metrics : undefined;
 }
 
 export function createLoopState(goal: GoalVector, workspaceRoot: string, baselineReward = 0): LoopState {
@@ -262,13 +275,11 @@ export function recordEpisodeOutcome(prev: LoopState, input: EpisodeInput, epsil
     ? { ...gated, externalPass: false }
     : gated;
   const reward = computeReward(effective);
-  const bestForSelect = prev.best.id == null ? null : {
-    reward: prev.best.reward,
-    metrics: prev.archive.find((entry) => entry.id === prev.best.id)?.metrics,
-  };
+  const incumbentMetrics = recordedIncumbentMetrics(prev);
+  const incumbent = incumbentMetrics ? { ...prev.best, metrics: incumbentMetrics } : prev.best;
   const verdict = selectForArchive(
     effective, input.candidate.id,
-    bestForSelect, { reward: prev.baselineReward },
+    incumbent.id === null ? null : incumbent, { reward: prev.baselineReward },
     prev.archive, epsilon,
   );
   const accepted = verdict.action === 'replace-best';
@@ -278,11 +289,7 @@ export function recordEpisodeOutcome(prev: LoopState, input: EpisodeInput, epsil
     ? null
     : classifyFailure(verdict.reason, costExceeded);
   const status: ExperimentStatus = accepted ? 'accepted' : hardFail ? 'failed' : 'rolled-back';
-  const metrics: Record<string, number> = {};
-  for (const m of effective.metrics) {
-    const scale = m.scale ?? 1;
-    metrics[m.id] = m.delta / Math.max(scale, 1e-9);
-  }
+  const metrics = Object.fromEntries(effective.metrics.map((metric) => [metric.id, scaledDelta(metric)]));
   const nextArchive = [...prev.archive];
   if (verdict.action !== 'reject' && !nextArchive.some((a) => a.id === input.candidate.id)) {
     nextArchive.push({ id: input.candidate.id, metrics });
@@ -292,7 +299,7 @@ export function recordEpisodeOutcome(prev: LoopState, input: EpisodeInput, epsil
   const state: LoopState = {
     ...prev,
     episodeIndex: prev.episodeIndex + 1,
-    best: accepted ? { reward, id: input.candidate.id } : prev.best,
+    best: accepted ? { reward, id: input.candidate.id, metrics: { ...metrics } } : incumbent,
     rewardHistory: [...prev.rewardHistory, reward],
     consecutiveNonImproving: accepted ? 0 : prev.consecutiveNonImproving + 1,
     consecutiveHardFails: hardFail ? prev.consecutiveHardFails + 1 : 0,
@@ -315,10 +322,7 @@ export function pruneArchive(archive: ParetoCandidate[]): ParetoCandidate[] {
 export function toExperimentRecord(
   input: EpisodeInput, outcome: EpisodeOutcome, timestamp = Date.now(),
 ): import('./rsiTree').ExperimentRecord {
-  const metrics: Record<string, number> = {};
-  for (const m of input.result.metrics) {
-    metrics[m.id] = m.delta / Math.max(m.scale ?? 1, 1e-9);
-  }
+  const metrics = Object.fromEntries(input.result.metrics.map((metric) => [metric.id, scaledDelta(metric)]));
   return {
     id: input.candidate.id,
     parentId: input.parentId,

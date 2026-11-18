@@ -22,8 +22,10 @@ macOS supports clicking accessible controls and sending keys or text to the
 selected window. Other pointer gestures are unavailable in this mode.
 Windows input is restricted to actions the app accepts through window messages;
 modified shortcuts, key holds, triple clicks, and drags are unavailable there.
-Windows may require the user to bring the requested app forward if it denies
-the focus change. Linux desktop Computer Use is unavailable. ConeCode’s
+On Windows, selecting and previewing an open background window keeps the current
+app in front. When sending input, ConeCode brings the target forward. If Windows
+denies the focus change, bring the target window to the front and retry the input.
+Linux desktop Computer Use is unavailable. ConeCode’s
 separate manual screenshot tool still supports user-selected screen regions.
 
 ## Standalone runtime

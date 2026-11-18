@@ -4,6 +4,8 @@ interface RsiFolderHintProps {
   t: (key: string) => string;
   /** Open folders, primary first. */
   paths: string[];
+  mode?: 'rsi' | 'work';
+  busy?: boolean;
   /** The folder the active RSI conversation is bound to. */
   activePath: string | null;
   error: string | null;
@@ -16,27 +18,22 @@ function folderName(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() || path;
 }
 
-/**
- * RSI's only workspace control. Unlike Work — which pairs conversations with a
- * file tree — RSI never lists files: it gets a short folder hint (which folder
- * the loop runs in), an add-folder action, and nothing else. Everything below
- * this strip belongs to the conversation list.
- */
 export default function RsiFolderHint({
-  t, paths, activePath, error, onAdd, onRemove, onDismissError,
+  t, mode = 'rsi', busy = false, paths, activePath, error, onAdd, onRemove, onDismissError,
 }: RsiFolderHintProps) {
   return (
     <section
-      aria-label={t('rsiFolders')}
-      className="mx-1 mb-2 shrink-0 rounded-xl border border-[var(--glass-border)] bg-[color-mix(in_srgb,var(--glass-card)_55%,transparent)] overflow-hidden"
+      aria-label={t(mode === 'rsi' ? 'rsiFolders' : 'workFolders')}
+      className="mx-1 mb-2 shrink-0 max-h-[45%] overflow-y-auto rounded-xl border border-[var(--glass-border)] bg-[color-mix(in_srgb,var(--glass-card)_55%,transparent)]"
     >
       <div className="flex items-center gap-1.5 px-2.5 pt-2 pb-1.5 min-w-0">
         <FiFolder size={12} className="shrink-0 text-amber-500" />
         <span className="flex-1 min-w-0 truncate text-[11px] font-semibold tracking-wide text-[var(--text-secondary)]">
-          {t('rsiFolders')}
+          {t(mode === 'rsi' ? 'rsiFolders' : 'workFolders')}
         </span>
         <button
           type="button"
+          disabled={busy}
           onClick={onAdd}
           title={t('addFolder')}
           aria-label={t('addFolder')}
@@ -49,11 +46,12 @@ export default function RsiFolderHint({
       {paths.length === 0 ? (
         <div className="px-2.5 pb-2.5 min-w-0">
           <p className="text-[11px] leading-relaxed text-[var(--text-muted)] break-words [overflow-wrap:anywhere]">
-            {t('rsiFoldersEmpty')}
+            {t(mode === 'rsi' ? 'rsiFoldersEmpty' : 'workFoldersEmpty')}
           </p>
           <button
             type="button"
-            onClick={onAdd}
+            disabled={busy}
+          onClick={onAdd}
             className="mt-1.5 inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-[var(--accent-soft)] text-[11px] font-medium text-[var(--accent)] hover:bg-[var(--accent)] hover:text-white transition-colors cursor-pointer"
           >
             <FiPlus size={11} />
@@ -80,12 +78,13 @@ export default function RsiFolderHint({
                     <div className="truncate text-[11.5px] font-medium">{folderName(path)}</div>
                     {active && (
                       <div className="truncate text-[9.5px] text-[var(--text-muted)]">
-                        {t('rsiFolderActiveHint')}
+                        {t(mode === 'rsi' ? 'rsiFolderActiveHint' : 'workFolderActiveHint')}
                       </div>
                     )}
                   </div>
                   <button
                     type="button"
+                    disabled={busy}
                     onClick={() => onRemove(path)}
                     title={t('closeFolder')}
                     aria-label={`${t('closeFolder')}: ${folderName(path)}`}

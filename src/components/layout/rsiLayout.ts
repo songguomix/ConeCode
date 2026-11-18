@@ -1,14 +1,6 @@
 import type { AgentMode } from '../../core/agents/modePrompts';
 import type { ViewMode } from '../../stores/ui.store';
 
-/**
- * Layout decisions for the workbench sidebar.
- *
- * RSI keeps its conversations separate from Work: the file explorer is hidden,
- * a compact folder hint replaces it, and every leftover pixel goes to the RSI
- * conversation list. Work keeps its bounded conversation area plus the file
- * tree, and Chat keeps its full-height conversation list.
- */
 export function rsiSidebarLayout({ agentMode, viewMode }: {
   agentMode: AgentMode;
   viewMode: ViewMode;
@@ -16,10 +8,7 @@ export function rsiSidebarLayout({ agentMode, viewMode }: {
   const isRsi = agentMode === 'rsi';
   return {
     isRsi,
-    showFolderHint: isRsi,
-    showFileExplorer: !isRsi && viewMode === 'work',
-    /** Conversation list owns all the remaining sidebar height. */
-    fillConversations: isRsi || viewMode === 'chat',
+    showFolderHint: isRsi || viewMode === 'work',
   };
 }
 

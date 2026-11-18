@@ -35,7 +35,7 @@ describe('rsiReward hardening', () => {
 
   it('does not grow the frontier with equivalent evidence under a fresh id', () => {
     const candidate = episode({ metrics: [{ id: 'm', delta: 0.5 }] });
-    expect(selectForArchive(candidate, 'clone', { reward: 5 }, { reward: 0 }, [{ id: 'first', metrics: { m: 0.5 } }]).action).toBe('reject');
+    expect(selectForArchive(candidate, 'clone', { reward: 5, metrics: { m: 0.5 } }, { reward: 0 }, [{ id: 'first', metrics: { m: 0.5 } }]).action).toBe('reject');
     expect(selectForArchive(candidate, 'first', null, { reward: 0 }, [{ id: 'first', metrics: { m: 0.5 } }]).action).toBe('reject');
   });
 

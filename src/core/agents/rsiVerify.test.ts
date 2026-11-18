@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  buildMetricDeltas, defaultMetricBindings, parseGoalVector, parseTscOutput,
+  buildMetricDeltas, defaultMetricBindings, parseGoalChecks, parseGoalVector, parseTscOutput,
   parseVitestSummary, runVerifyCascade, signedDelta,
   type CommandResult,
 } from './rsiVerify';
@@ -144,5 +144,76 @@ describe('parseGoalVector', () => {
     expect(g.metrics[0]).toMatchObject({ command: 'npm run typecheck', direction: 'lower' });
     expect(g.nonGoals).toMatch(/No new scope/);
     expect(g.warnings).toHaveLength(2);
+  });
+});
+
+describe('parseGoalChecks', () => {
+  it('keeps all commands from a numbered project goal, including non-numeric guards', () => {
+    const goal = [
+      '# GOAL VECTOR (frozen 2026-11-08)',
+      '## 1. Charter goal', 'Fix plugin installation.',
+      '## 2. Frozen metrics',
+      '| id | command / fixture | direction | baseline | scale |',
+      '|:---|---|---|---|---:|',
+      '| M1 primary | `npx vitest run installer.test.ts` (passed-test count) | higher | 0 passed | tests |',
+      '| M2 guard | `npm run typecheck` (exit code) | == 0 | 0 | binary |',
+      '| M3 guard | `npm test` | lower | 3 failed | tests |',
+      '| M4 guard | `perf_snapshot` (heap, RSS, verdict) | lower/none | no defect | MB |',
+      '## 3. Non-goals / scope', 'Preserve the original dirty diff.',
+      '| Other | `irrelevant command` | lower | 0 | n/a |',
+    ].join('\r\n');
+    expect(parseGoalChecks(goal)).toEqual({
+      commands: ['npx vitest run installer.test.ts', 'npm run typecheck', 'npm test', 'perf_snapshot'],
+      issues: [],
+    });
+    const numeric = parseGoalVector(goal);
+    expect(numeric.metrics.map((m) => m.id)).toEqual(['M1 primary', 'M3 guard']);
+    expect(numeric.warnings).toHaveLength(2);
+    expect(numeric.charter).toBe('Fix plugin installation.');
+    expect(numeric.nonGoals).toContain('Preserve the original dirty diff.');
+    expect(numeric.frozenAt).toBe('2026-11-08');
+  });
+
+  it('keeps exact compound commands and deduplicates explicit multilingual labels', () => {
+    const goal = [
+      '## Frozen metrics',
+      'id | Exact measurement | Direction | Initial baseline',
+      '--- | --- | --- | ---',
+      'quality | `cd web && npm test | tee checks` | lower | 1',
+      '## Notes',
+      'Verification command: `cd web && npm test | tee checks`',
+      '- 验证命令：`./check "release build"`',
+      '1. 驗證命令：`./check "release build"`',
+      'Inspect `incidental.txt` as background.',
+    ].join('\n');
+    expect(parseGoalChecks(goal)).toEqual({
+      commands: ['cd web && npm test | tee checks', './check "release build"'], issues: [],
+    });
+  });
+
+  it('surfaces unreadable or ambiguous declarations alongside the usable commands', () => {
+    const goal = [
+      '## 冻结指标（2–5）',
+      '| id | 命令 | 方向 | 基线 |',
+      '|---|---|---|---|',
+      '| compile | `npm run build` | lower | 0 |',
+      '| tests | no runnable command | lower | 0 |',
+      '| lint | `npm run lint` and `npm run lint:css` | lower | 0 |',
+      '| check | `npm test` && run-other-check | lower | 0 |',
+      '命令：',
+    ].join('\n');
+    const checks = parseGoalChecks(goal);
+    expect(checks.commands).toEqual(['npm run build']);
+    expect(checks.issues).toHaveLength(4);
+    expect(parseGoalChecks('## Frozen metrics\nTo be written.').issues).toHaveLength(1);
+    expect(parseGoalChecks('Inspect `npm test` and the docs.')).toEqual({ commands: [], issues: [] });
+  });
+
+  it('retains historical numeric readings from a command embedded in explanatory prose', () => {
+    const goal = '## Frozen metrics\n| tests | Measure with `npm test`, see `out.log` | lower | 3 failures |';
+    expect(parseGoalVector(goal).metrics).toEqual([
+      { id: 'tests', command: 'npm test', direction: 'lower', baselineNote: '3 failures' },
+    ]);
+    expect(parseGoalChecks(goal).issues).toHaveLength(1);
   });
 });

@@ -5,6 +5,7 @@ import {
 } from 'react-icons/fi';
 import { useLanguageStore, useWorkspaceStore } from '../../stores';
 import { useScreenshotStore } from '../../stores/screenshot.store';
+import ScreenRecordingRecovery from './ScreenRecordingRecovery';
 
 type Tool = 'rect' | 'ellipse' | 'arrow' | 'pen' | 'text';
 
@@ -278,6 +279,7 @@ export default function ScreenshotOverlay({ onClose, onConfirm, onReady }: {
 } = {}) {
   const image = useScreenshotStore((s) => s.image);
   const captureError = useScreenshotStore((s) => s.error);
+  const start = useScreenshotStore((s) => s.start);
   const close = useScreenshotStore((s) => s.close);
   const handleClose = onClose ?? close;
   const addPastedImage = useWorkspaceStore((s) => s.addPastedImage);
@@ -780,21 +782,14 @@ export default function ScreenshotOverlay({ onClose, onConfirm, onReady }: {
                 {t(permission ? 'screenshotNoPermission' : 'screenshotFailed')}
               </span>
             </div>
-            {permission && (
-              <div className="mt-3 flex items-center gap-2">
-                <button
-                  onClick={() => void (window as any).electronAPI?.screenshot?.openSettings?.()}
-                  className="flex-1 px-3 py-1.5 rounded-lg bg-[var(--accent)] text-white text-xs font-medium hover:bg-[var(--accent-hover)] transition-colors"
-                >
-                  {t('screenshotOpenSettings')}
-                </button>
-                <button
-                  onClick={() => void (window as any).electronAPI?.screenshot?.relaunch?.()}
-                  className="flex-1 px-3 py-1.5 rounded-lg bg-[var(--bg-3)] text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-4)] transition-colors"
-                >
-                  {t('screenshotRelaunch')}
-                </button>
-              </div>
+            {permission ? (
+              <ScreenRecordingRecovery requestPermission={() => window.electronAPI.screenshot.openSettings()}
+                retry={start} retryLabel={t('screenshotRetry')} />
+            ) : (
+              <button type="button" onClick={() => void start()}
+                className="mt-3 rounded-lg bg-[var(--bg-3)] px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-4)]">
+                {t('screenshotRetry')}
+              </button>
             )}
           </div>
         </div>

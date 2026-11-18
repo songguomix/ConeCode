@@ -13,10 +13,10 @@
 //   LOOP_STATE.json               crash/interrupt recovery (validated on load)
 //   STRATEGY.md                   current exploration-policy id (DREAM output)
 
-import { dominates, type ArchiveVerdict, type EpisodeResult } from './rsiReward';
+import { dominates, isMeasuredVector, type ArchiveVerdict, type EpisodeResult } from './rsiReward';
 import type { CandidateDeclaration, GoalVector, LoopState } from './rsiLoop';
-import { classifyFailure, createLoopState } from './rsiLoop';
-import type { DiscoveryTree, ExperimentRecord, RsiFs } from './rsiTree';
+import { classifyFailure, createLoopState, recordedIncumbentMetrics } from './rsiLoop';
+import { loadAllTrees, type DiscoveryTree, type ExperimentRecord, type RsiFs } from './rsiTree';
 
 export const RSI_ITERATIONS_DIR = 'iterations';
 export const RSI_TREES_DIR = 'trees';
@@ -254,7 +254,7 @@ export function saveLoopState(fs: RsiFs, rsiDir: string, state: LoopState): stri
   return path;
 }
 
-export function loadLoopState(fs: RsiFs, rsiDir: string): LoopState | null {
+export function loadLoopState(fs: RsiFs, rsiDir: string, treesDir = join(rsiDir, RSI_TREES_DIR)): LoopState | null {
   const raw = fs.readFile(join(rsiDir, RSI_LOOP_STATE));
   if (raw == null) return null;
   let parsed: unknown;
@@ -265,7 +265,22 @@ export function loadLoopState(fs: RsiFs, rsiDir: string): LoopState | null {
   }
   const root = parsed as { version?: unknown; state?: unknown };
   if (root.version !== LOOP_STATE_VERSION) throw new Error(`unsupported LOOP_STATE version: ${String(root.version)}`);
-  return validateLoopState(root.state);
+  const state = validateLoopState(root.state);
+  if (state.best.id === null || isMeasuredVector(state.best.metrics)) return state;
+  let metrics = recordedIncumbentMetrics(state);
+  if (!metrics) {
+    const { trees } = loadAllTrees(fs, treesDir);
+    for (const tree of trees) {
+      const accepted = tree.nodes.find((node) => node.id === state.best.id && node.status === 'accepted'
+        && node.externalPass && node.reward === state.best.reward && isMeasuredVector(node.metrics));
+      if (accepted) {
+        metrics = accepted.metrics;
+        break;
+      }
+    }
+  }
+  if (metrics) state.best = { ...state.best, metrics };
+  return state;
 }
 
 function validateLoopState(s: unknown): LoopState {
@@ -281,6 +296,10 @@ function validateLoopState(s: unknown): LoopState {
     throw new Error('LOOP_STATE rewardHistory must be number[]');
   }
   if (!Array.isArray(st.seenIds) || !Array.isArray(st.archive)) throw new Error('LOOP_STATE archive/seenIds must be arrays');
+  const best = st.best as Partial<LoopState['best']> | null;
+  if (!best || !(best.id === null || typeof best.id === 'string' && best.id.trim()) || !Number.isFinite(best.reward)) {
+    throw new Error('LOOP_STATE best must have an id and finite reward');
+  }
   return st as unknown as LoopState;
 }
 
@@ -310,8 +329,12 @@ export function rebuildLoopStateFromTrees(
       state.consecutiveNonImproving = 0;
       state.consecutiveHardFails = 0;
       state.recentFailures = [];
-      if (state.best.id == null || n.reward > state.best.reward) state.best = { reward: n.reward, id: n.id };
-      state.archive.push({ id: n.id, metrics: { ...n.metrics } });
+      const measured = n.externalPass && isMeasuredVector(n.metrics);
+      if (state.best.id == null || n.reward > state.best.reward) {
+        state.best = { reward: n.reward, id: n.id };
+        if (measured) state.best.metrics = { ...n.metrics };
+      }
+      if (measured) state.archive.push({ id: n.id, metrics: { ...n.metrics } });
     } else {
       state.consecutiveNonImproving += 1;
       state.consecutiveHardFails = n.status === 'failed' ? state.consecutiveHardFails + 1 : 0;

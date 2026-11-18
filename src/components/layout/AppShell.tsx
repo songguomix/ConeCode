@@ -17,6 +17,7 @@ import ComputerPanel from '../computer/ComputerPanel';
 import CodeReviewPanel from '../review/CodeReviewPanel';
 import WorktreePanel from '../worktree/WorktreePanel';
 import BackgroundPanel from '../background/BackgroundPanel';
+import SubAgentPanel from '../subagents/SubAgentPanel';
 import ScreenshotOverlay from '../screenshot/ScreenshotOverlay';
 import ImageGeneratorModal from '../chat/ImageGeneratorModal';
 import DshMarketPanel from '../dsh-market/DshMarketPanel';
@@ -37,6 +38,7 @@ export default function AppShell() {
   const reviewOpen = useUIStore((s) => s.reviewOpen);
   const worktreesOpen = useUIStore((s) => s.worktreesOpen);
   const backgroundOpen = useUIStore((s) => s.backgroundOpen);
+  const subAgentsOpen = useUIStore((s) => s.subAgentsOpen);
   const remoteOpen = useUIStore((s) => s.remoteOpen);
   const computerOpen = useUIStore((s) => s.computerOpen);
   const previewOpen = useUIStore((s) => s.previewOpen);
@@ -180,6 +182,7 @@ export default function AppShell() {
       {settingsOpen && <SettingsModal />}
       {shotOpen && <ScreenshotOverlay />}
       {backgroundOpen && <BackgroundPanel />}
+      {subAgentsOpen && <SubAgentPanel />}
       {changedFilesOpen && <ChangedFilesPanel />}
       {reviewOpen && <CodeReviewPanel />}
       {worktreesOpen && <WorktreePanel />}

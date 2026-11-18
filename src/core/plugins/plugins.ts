@@ -13,7 +13,7 @@
 export type PluginKind = 'builtin' | 'market' | 'custom';
 
 /** Which dedicated view a plugin opens. `skill` = generic run/recent-runs. */
-export type PluginView = 'sync' | 'perf' | 'security' | 'skill' | 'image-gen' | 'auto-screenshot';
+export type PluginView = 'sync' | 'perf' | 'security' | 'skill' | 'image-gen' | 'auto-screenshot' | 'aegis-search';
 
 export interface PluginDef {
   id: string;
@@ -97,6 +97,14 @@ export const BUILTIN_PLUGINS: PluginDef[] = [
     kind: 'builtin',
     icon: 'camera',
     view: 'auto-screenshot',
+  },
+  {
+    id: 'aegis-search',
+    name: 'Aegis AISearch',
+    description: '在本地审查搜索结果链接，识别仿冒域名。',
+    kind: 'builtin',
+    icon: 'shield',
+    view: 'aegis-search',
   },
 ];
 

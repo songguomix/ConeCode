@@ -6,7 +6,7 @@ import {
   MAX_LESSONS,
 } from './rsiPersistence';
 import { appendToTree, createLoopState, recordEpisodeOutcome } from './rsiLoop';
-import { appendExperiment, createDiscoveryTree, type RsiFs } from './rsiTree';
+import { appendExperiment, createDiscoveryTree, saveTree, type RsiFs } from './rsiTree';
 import type { GoalVector } from './rsiLoop';
 
 function memFs(): RsiFs & { files: Map<string, string> } {
@@ -98,17 +98,45 @@ describe('rsiPersistence', () => {
       costUsd: 0.1, costSteps: 5, budgetUsd: 0.5, attempts: 1, status: 'accepted', timestamp: 1,
     }).tree;
     t = appendExperiment(t, {
+      id: 'alternative', parentId: 'a', baselineId: 'b', candidateId: 'alternative', module: 'tools',
+      strategyId: 'default', externalPass: true, metrics: { m: 0.4 }, reward: 0.2,
+      costUsd: 0.1, costSteps: 1, budgetUsd: 0.5, attempts: 1, status: 'rolled-back',
+      failureReason: 'pareto-nondominated', timestamp: 2,
+    }).tree;
+    t = appendExperiment(t, {
       id: 'b', parentId: 'a', baselineId: 'b', candidateId: 'b', module: 'tools',
       strategyId: 'default', externalPass: false, metrics: {}, reward: -999,
       costUsd: 0.2, costSteps: 2, budgetUsd: 0.5, attempts: 1, status: 'failed',
-      failureReason: 'external-fail', timestamp: 2,
+      failureReason: 'external-fail', timestamp: 3,
     }).tree;
     const s = rebuildLoopStateFromTrees(goal, '/ws', 0, [t]);
     expect(s.acceptedCount).toBe(1);
     expect(s.best.id).toBe('a');
-    expect(s.seenIds).toEqual(['a', 'b']);
+    expect(s.best.metrics).toEqual({ m: 0.3 });
+    expect(s.archive).toEqual([{ id: 'alternative', metrics: { m: 0.4 } }]);
+    expect(s.seenIds).toEqual(['a', 'alternative', 'b']);
     expect(s.consecutiveHardFails).toBe(1);
-    expect(s.spentUsd).toBeCloseTo(0.3, 10);
+    expect(s.spentUsd).toBeCloseTo(0.4, 10);
+  });
+
+  it('recovers the exact legacy incumbent from its archive or the matching accepted tree record', () => {
+    const fs = memFs();
+    const best = { id: 'win', reward: 0.6 };
+    const legacy = { ...createLoopState(goal, '/ws'), best, acceptedCount: 1, episodeIndex: 1 };
+    saveLoopState(fs, 'rsi', { ...legacy, archive: [{ id: 'win', metrics: { m: 1 } }] });
+    expect(loadLoopState(fs, 'rsi')?.best.metrics).toEqual({ m: 1 });
+
+    const record = {
+      id: 'win', parentId: null, baselineId: 'base', candidateId: 'win', module: 'product' as const,
+      strategyId: 'default', externalPass: true, metrics: { m: 1 }, reward: best.reward,
+      costUsd: 0.1, costSteps: 1, budgetUsd: 0.5, attempts: 1, status: 'accepted' as const, timestamp: 1,
+    };
+    saveLoopState(fs, 'rsi', legacy);
+    for (const update of [{ reward: 0.8 }, { status: 'rolled-back' as const }, {}]) {
+      const tree = appendExperiment(createDiscoveryTree('e', 'default'), { ...record, ...update }).tree;
+      saveTree(fs, 'rsi/trees', tree);
+      expect(loadLoopState(fs, 'rsi')?.best.metrics).toEqual(Object.keys(update).length ? undefined : { m: 1 });
+    }
   });
 
   it('rebuilds the same failure streaks and Pareto frontier as the live loop', () => {

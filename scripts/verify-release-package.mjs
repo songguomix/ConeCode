@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { extractFile } from '@electron/asar';
+import { extractFile, statFile } from '@electron/asar';
 import { parse } from 'yaml';
 
 const [platform, version, resources] = process.argv.slice(2);
@@ -33,8 +33,27 @@ if (!entry || size !== entry.size || digest !== entry.sha512 || digest !== updat
   throw new Error('Installer does not match the size and SHA-512 recorded by electron-builder.');
 }
 
-const app = JSON.parse(extractFile(path.join(resources, 'app.asar'), 'package.json').toString());
+const archive = path.join(resources, 'app.asar');
+const app = JSON.parse(extractFile(archive, 'package.json').toString());
 if (app.name !== 'conecode' || app.version !== version) throw new Error('Packaged app version mismatch.');
+let runtimeFiles = 0;
+for (const directory of ['dist', 'dist-electron']) {
+  const entries = await readdir(directory, { recursive: true, withFileTypes: true });
+  const files = entries.filter((item) => !item.isDirectory());
+  if (!files.length) throw new Error('Empty build output: ' + directory);
+  for (const file of files) {
+    const relative = path.relative(process.cwd(), path.join(file.parentPath, file.name));
+    if (!file.isFile()) throw new Error('Unexpected build output type: ' + relative);
+    const info = statFile(archive, relative, false);
+    const packaged = info.unpacked
+      ? await readFile(path.join(archive + '.unpacked', relative))
+      : extractFile(archive, relative, false);
+    if (!packaged.equals(await readFile(relative))) {
+      throw new Error('Packaged runtime differs from build output: ' + relative);
+    }
+  }
+  runtimeFiles += files.length;
+}
 for (const relative of [
   'app.asar.unpacked/dist-electron/dsh-worker.js',
   'dsh-market/catalog.json',
@@ -47,4 +66,4 @@ const target = path.join('release-assets', publicName);
 await mkdir('release-assets', { recursive: true });
 await copyFile(installer, target);
 await writeFile(target + '.sha256', sha256.digest('hex') + '  ' + publicName + '\n');
-console.log('Verified ' + publicName + ' (' + size + ' bytes), metadata and packaged resources.');
+console.log('Verified ' + publicName + ' (' + size + ' bytes), ' + runtimeFiles + ' runtime files, metadata and packaged resources.');

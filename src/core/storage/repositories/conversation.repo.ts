@@ -1,5 +1,7 @@
 import { readJSON, writeJSON } from '../database';
 import type { Conversation, Message } from '../../../types';
+import type { SubAgentRun } from '../../../types/subAgent.types';
+import { collectSubAgentRuns } from '../../agents/subAgentHistory';
 import { v4 as uuidv4 } from 'uuid';
 
 const CONV_FILE = 'conversations.json';
@@ -73,6 +75,24 @@ export const conversationRepo = {
 };
 
 export const messageRepo = {
+  subAgentHistory(): SubAgentRun[] {
+    return collectSubAgentRuns(readJSON<Message[]>(MSG_FILE, []));
+  },
+
+  recordSubAgent(parentMessageId: string, run: SubAgentRun): boolean {
+    const messages = readJSON<Message[]>(MSG_FILE, []);
+    const parent = messages.find((m) => m.id === parentMessageId && m.conversationId === run.conversationId && m.role === 'assistant');
+    // A late tool reply cannot recreate a deleted or rewound conversation.
+    if (!parent) return false;
+    const siblings = parent.subAgentRuns ?? [];
+    const index = siblings.findIndex((sibling) => sibling.id === run.id);
+    if (index === -1) siblings.push(run);
+    else siblings[index] = run;
+    parent.subAgentRuns = siblings;
+    writeJSON(MSG_FILE, messages);
+    return true;
+  },
+
   // Replace a user turn and its tail in one write, scoped to this conversation.
   editAndTruncate(conversationId: string, messageId: string, content: string): Message {
     const messages = readJSON<Message[]>(MSG_FILE, []);
@@ -92,7 +112,11 @@ export const messageRepo = {
   },
 
   findByConversation(conversationId: string): Message[] {
-    return readJSON<Message[]>(MSG_FILE, []).filter((m) => m.conversationId === conversationId);
+    const messages = readJSON<Message[]>(MSG_FILE, []).filter((m) => m.conversationId === conversationId);
+    // Only the sub-agent panel requests child transcripts. Ordinary chat loads,
+    // including those replayed to the model, need just the parent's messages.
+    for (const message of messages) delete message.subAgentRuns;
+    return messages;
   },
 
   /** Message count per conversation, used to find never-used blank chats. */

@@ -30,6 +30,15 @@ describe('RSI live history context', () => {
     }
   });
 
+  it('reports the incumbent measurements after frontier pruning, and surfaces missing evidence on legacy resumes', () => {
+    const archive = [{ id: 'frontier', metrics: { latency: 1 } }];
+    const current = rsiHistoryContext({ loopState: state({ best: { id: 'win-1', reward: 0.8, metrics: { latency: 0.4 } }, archive }) });
+    expect(current).toContain('"recordedBestScaledDeltas":{"latency":0.4}');
+    const legacy = rsiHistoryContext({ loopState: state({ archive }) });
+    expect(legacy).toContain('incumbentEvidenceNotice');
+    expect(legacy).not.toContain('recordedBestScaledDeltas');
+  });
+
   it('prioritizes failed lessons and excludes unsupported or contaminated advice', () => {
     const reflections = [
       '- [success] [product] [accepted] Check visible behavior. (episodes: e1)',

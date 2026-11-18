@@ -37,6 +37,7 @@ import QuestionPromptCard from '../chat/QuestionPromptCard';
 import MessageBubble from '../chat/MessageBubble';
 import MessageContent from '../chat/MessageContent';
 import SyncView from '../plugins/SyncView';
+import ScreenRecordingRecovery from '../screenshot/ScreenRecordingRecovery';
 import RsiDirectionPanel from './RsiDirectionPanel';
 import RsiWorkspaceHeader from './RsiWorkspaceHeader';
 import RsiWelcome from './RsiWelcome';
@@ -88,7 +89,6 @@ export default function RsiView() {
   const [startingConversationId, setStartingConversationId] = useState<string | null>(null);
   const startLockRef = useRef(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [asking, setAsking] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [showLogs, setShowLogs] = useState(true);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
@@ -351,18 +351,6 @@ export default function RsiView() {
     window.addEventListener(REMOTE_RSI_ACTION, handle);
     return () => window.removeEventListener(REMOTE_RSI_ACTION, handle);
   }, []);
-
-  const askScreen = async () => {
-    setAsking(true);
-    setActionError(null);
-    try {
-      await window.electronAPI.computer.openScreenSettings();
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : t('rsiOperationFailed'));
-    } finally {
-      setAsking(false);
-    }
-  };
 
   const stages = [
     {
@@ -817,24 +805,8 @@ export default function RsiView() {
                           : t('computerScreenRecordingHint')}
                     </p>
                     {isMac && !screenRecording && (
-                      <div className="flex flex-wrap gap-1.5 pt-1">
-                        <button
-                          type="button"
-                          onClick={() => void askScreen()}
-                          disabled={asking}
-                          className="px-2.5 py-1 rounded-xl bg-[var(--accent)] text-white text-[11px] font-medium hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50 shrink-0 cursor-pointer"
-                        >
-                          {t('computerOpenSettings')}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => void refresh()}
-                          className="px-2.5 py-1 rounded-xl bg-[var(--bg-3)] text-[11px] text-[var(--text-secondary)] hover:bg-[var(--bg-4)] transition-colors flex items-center gap-1 shrink-0 cursor-pointer"
-                        >
-                          <FiRefreshCw size={10} />
-                          <span>{t('rsiRecheck')}</span>
-                        </button>
-                      </div>
+                      <ScreenRecordingRecovery requestPermission={() => window.electronAPI.computer.openScreenSettings()}
+                        retry={refresh} retryLabel={t('rsiRecheck')} />
                     )}
                   </div>
                 </div>

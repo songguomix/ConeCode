@@ -55,7 +55,7 @@ jobs:
             platform: mac
             asset: cloudflared-darwin-arm64.tgz
             sha256: 647615df99d49cd179ea5e13ef760b9bbfb33630f6ae62f87e33dfadda60adcc
-            target: --mac dmg --arm64 -c.mac.identity=-
+            target: --mac dmg --arm64
             resources: release/mac-arm64/ConeCode.app/Contents/Resources
           - os: windows-2025
             platform: win
@@ -106,8 +106,30 @@ jobs:
       - run: npm ci
       - run: npm run build
       - name: Package installer
+        if: matrix.platform != 'mac'
         shell: bash
         run: npx --no-install electron-builder $BUILDER_TARGET --publish=never
+      - name: Package and sign macOS installer
+        if: matrix.platform == 'mac'
+        shell: bash
+        env:
+          # Store the same base64-encoded signing .p12 and its password as release secrets.
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$CSC_LINK" ]]; then
+            # Override the local "ConeCode" identity filter so the imported certificate can be selected.
+            npx --no-install electron-builder $BUILDER_TARGET -c.mac.identity= -c.forceCodeSigning=true --publish=never
+            codesign -dvv "$PACKAGED_RESOURCES/../.." 2>&1 | grep -E '^Signature size=[1-9][0-9]*$'
+          else
+            if [[ -n "$CSC_KEY_PASSWORD" ]]; then
+              echo "MAC_CSC_KEY_PASSWORD requires MAC_CSC_LINK." >&2
+              exit 1
+            fi
+            unset CSC_LINK CSC_KEY_PASSWORD
+            npx --no-install electron-builder $BUILDER_TARGET -c.mac.identity=- --publish=never
+          fi
       - name: Check installer metadata, checksums and resources
         shell: bash
         run: node scripts/verify-release-package.mjs "$PLATFORM" "$VERSION" "$PACKAGED_RESOURCES"

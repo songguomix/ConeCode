@@ -8,8 +8,8 @@ import {
 } from '../../src/core/computer/computer';
 import type { ComputerPreviewStatus } from '../../src/core/computer/preview';
 import { capturePoint, publicTarget, sameWindow, sameWindowBounds, windowPoint, type NativeWindow } from './app-target';
-import { captureMacWindow, listMacWindows, pressMacPoint, runMacInput } from './macos-app';
-import { activateWindow, captureWindow, listWindows, performWindowsAction, windowsCursorPoint } from './windows-app';
+import { captureMacWindow, listMacWindows, MacWindowCaptureError, pressMacPoint, runMacInput } from './macos-app';
+import { captureWindow, listWindows, performWindowsAction, windowsCursorPoint } from './windows-app';
 
 export type { ComputerRequest };
 export type ComputerStatus = ComputerPreviewStatus;
@@ -92,6 +92,14 @@ export class ComputerController {
     return current;
   }
 
+  private async verifyCapturedWindow(before: NativeWindow, signal: AbortSignal): Promise<NativeWindow> {
+    signal.throwIfAborted();
+    const after = await this.currentWindow(before, signal);
+    signal.throwIfAborted();
+    if (!sameWindowBounds(before, after)) throw new Error('The app window moved during capture. Request a new screenshot.');
+    return after;
+  }
+
   /** Keep switch, capture and input from interleaving; the stop switch can abort any of them. */
   private async exclusive<T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> {
     if (this.operation) throw new Error('Another computer action is in progress.');
@@ -110,9 +118,6 @@ export class ComputerController {
     const status = this.status();
     if (!status.enabled) return { error: 'Computer control is switched off.' };
     if (!status.supported) return { error: `App window capture is not supported on ${status.platform}.` };
-    if (!status.screenRecording) {
-      return { error: 'Enable Screen Recording for ConeCode in System Settings › Privacy & Security, then restart ConeCode.', needsPermission: 'screenRecording' };
-    }
     if (expectedRevision !== undefined && expectedRevision !== this.targetRevision) {
       return { error: 'The selected app changed. Request a new screenshot.' };
     }
@@ -124,10 +129,15 @@ export class ComputerController {
         this.frame = null;
         const current = await this.currentWindow(target, signal);
         signal.throwIfAborted();
-        const png = await (status.platform === 'darwin' ? captureMacWindow(current, signal) : captureWindow(current, signal));
-        const after = await this.currentWindow(current, signal);
-        signal.throwIfAborted();
-        if (!sameWindowBounds(current, after)) throw new Error('The app window moved during capture. Request a new screenshot.');
+        let png: Buffer;
+        try {
+          png = await (status.platform === 'darwin' ? captureMacWindow(current, signal) : captureWindow(current, signal));
+        } catch (error) {
+          // A window that closed or moved can produce the same native error as a denial.
+          if (error instanceof MacWindowCaptureError) await this.verifyCapturedWindow(current, signal);
+          throw error;
+        }
+        const after = await this.verifyCapturedWindow(current, signal);
         let image = nativeImage.createFromBuffer(png);
         if (image.isEmpty()) throw new Error('The selected app did not return an image.');
         const nativeSize = image.getSize();
@@ -143,6 +153,14 @@ export class ComputerController {
         return { dataUrl: image.toDataURL(), geometry, target: publicTarget(after), frameId: id };
       });
     } catch (error) {
+      // macOS may report a stale denial after a grant. Let the selected
+      // window capture run, then use the permission status to explain failure.
+      if (error instanceof MacWindowCaptureError) {
+        const permission = systemPreferences.getMediaAccessStatus('screen');
+        if (permission === 'denied' || permission === 'restricted' || permission === 'not-determined') {
+          return { error: 'Allow Screen Recording in System Settings › Privacy & Security and retry. If macOS asks, quit and reopen the app.', needsPermission: 'screenRecording' };
+        }
+      }
       return { error: error instanceof Error ? error.message : String(error) };
     }
   }
@@ -201,10 +219,6 @@ export class ComputerController {
     return this.exclusive(async (signal) => {
       const target = (await this.windows(signal)).find((window) => publicTarget(window).id === id);
       if (!target) throw new Error('This app window is unavailable. List open apps again.');
-      signal.throwIfAborted();
-      // Quartz can capture an individual background window. Focus is checked
-      // later, when macOS actually needs to send input to the captured target.
-      if (process.platform !== 'darwin') await activateWindow(target, signal);
       signal.throwIfAborted();
       this.target = target;
       this.frame = null;

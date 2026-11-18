@@ -84,9 +84,11 @@ async function flushIfResolved(convId: string | undefined) {
 // Perform a change's filesystem/command effect and keep the open editor in sync.
 // Pure side effect: does not touch change status, the model batch, or flush — so
 // both the manual (applyChange) and auto-approve (autoApply) paths can reuse it.
-async function applyEffect(change: CodeChange): Promise<{ success: boolean; result: string }> {
+async function applyEffect(change: CodeChange) {
   let result = '';
   let success = false;
+  let cwd: string | undefined;
+  let destPath: string | undefined;
   const kind = change.kind || 'edit';
 
   try {
@@ -98,16 +100,16 @@ async function applyEffect(change: CodeChange): Promise<{ success: boolean; resu
       }
       result = success ? `Deleted: ${change.filePath}` : `Failed to delete: ${change.filePath}`;
     } else if (kind === 'rename') {
-      const newPath = change.newCode.replace('Rename to: ', '');
-      success = await window.electronAPI.fs.rename(change.filePath, newPath);
-      result = success ? `Renamed to: ${newPath}` : `Failed to rename`;
+      destPath = change.newCode.replace('Rename to: ', '');
+      success = await window.electronAPI.fs.rename(change.filePath, destPath);
+      result = success ? `Renamed to: ${destPath}` : `Failed to rename`;
     } else if (kind === 'copy') {
-      const destPath = change.newCode.replace('Copy to: ', '');
+      destPath = change.newCode.replace('Copy to: ', '');
       success = await window.electronAPI.fs.copy(change.filePath, destPath);
       result = success ? `Copied to: ${destPath}` : `Failed to copy`;
     } else if (kind === 'exec') {
       const command = change.newCode;
-      const cwd = change.cwd || useWorkspaceStore.getState().rootPath || undefined;
+      cwd = change.cwd || useWorkspaceStore.getState().rootPath || undefined;
       // Confine the command: it may read the machine but only write inside the
       // workspace (see core/exec/sandbox.ts). The main process resolves the real
       // paths and falls back to unconfined where seatbelt is unavailable.
@@ -171,7 +173,7 @@ async function applyEffect(change: CodeChange): Promise<{ success: boolean; resu
     }
   }
 
-  return { success, result };
+  return { success, result, cwd, destPath };
 }
 
 // Undo one applied edit against the CURRENT file content. Writing the stale
@@ -430,7 +432,7 @@ export const useCodeChangesStore = create<CodeChangesStore>((set, get) => ({
     const change = get().changes.find((c) => c.id === id);
     if (!change) return { success: false, result: 'Change not found' };
 
-    const { success, result } = await applyEffect(change);
+    const { success, result, cwd, destPath } = await applyEffect(change);
 
     set((s) => ({
       changes: s.changes.map((c) => c.id === id
@@ -443,8 +445,10 @@ export const useCodeChangesStore = create<CodeChangesStore>((set, get) => ({
       ? `User approved ${label}.\n${result}`
       : `User approved ${label}, but the action failed.\n${result}`, {
         action: change.kind === 'create' ? 'create_file' : change.kind,
-        path: change.filePath,
+        path: change.kind === 'exec' ? undefined : change.filePath,
+        destPath,
         command: change.kind === 'exec' ? change.newCode : undefined,
+        cwd,
         succeeded: success,
         detail: result,
       });

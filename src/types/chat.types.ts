@@ -34,6 +34,8 @@ export interface Message {
   // — on the matching tool-result turns — which call each one answers. Persisted
   // so a reloaded conversation still replays a protocol-valid history.
   toolCalls?: import('./provider.types').ToolCall[];
+  /** Read-only child transcripts owned by this assistant turn. */
+  subAgentRuns?: import('./subAgent.types').SubAgentRun[];
   toolCallId?: string;
   toolName?: string;
   // Anthropic extended thinking blocks, kept verbatim (signature included) so a

@@ -888,6 +888,30 @@ function validateSchemaValue(name: string, schema: JsonSchema, value: any, path:
 // Prompt fallback.
 // ---------------------------------------------------------------------------
 
+/** The executor and history reader must agree on the index of every fenced call. */
+export function parsePromptToolCalls(content: string): { name: string; arguments: Record<string, any> }[] {
+  const calls: { name: string; arguments: Record<string, any> }[] = [];
+  for (const block of content.matchAll(/```json\b[ \t]*\r?\n?([\s\S]*?)\r?\n?```/gi)) {
+    try {
+      const value = JSON.parse(block[1].trim());
+      if (value && typeof value.action === 'string') {
+        const { action: name, ...args } = value;
+        calls.push({ name, arguments: args });
+      }
+    } catch { /* Incomplete or illustrative JSON does not form a call. */ }
+  }
+  return calls;
+}
+
+export function toolActionLabel(action: {
+  action: string; prompt?: string; path?: string; oldPath?: string; srcPath?: string; command?: string;
+  name?: string; url?: string; query?: string; id?: string; tool?: string;
+}): string {
+  const raw = action.prompt || action.path || action.oldPath || action.srcPath || action.command || action.name
+    || action.url || action.query || action.id || action.tool || action.action;
+  return raw.length > 160 ? `${raw.slice(0, 157)}...` : raw;
+}
+
 /** Render the catalog as the numbered ```json action list for prompt mode. */
 export function renderPromptToolList(tools: ToolDefinition[] = BUILTIN_TOOLS): string {
   return tools
