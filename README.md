@@ -188,6 +188,8 @@ npm run dist:linux  # Linux AppImage (x64)
 npm run dist:all    # macOS arm64 + Windows x64 + Linux x64 in one run
 ```
 
+For AppImage builds, install `zsyncmake` on the build host (the `zsync` package on Ubuntu). The build produces a matching `.AppImage.zsync` file for AppImageUpdate. Publish it alongside the AppImage under the same release tag.
+
 Packaging requires the matching electron-builder tooling; signing and notarization need your own credentials and nothing is committed. Cloudflared is optional and not committed to this repository. Bundled tunnel support expects `resources/bin/cloudflared-darwin-arm64` on macOS Apple Silicon, `resources/bin/cloudflared-win-x64.exe` on Windows x64, or `resources/bin/cloudflared-linux-x64` on Linux x64. Obtain binaries from the [official Cloudflare releases](https://github.com/cloudflare/cloudflared/releases), or remove the matching `extraResources` entry.
 
 ## Privacy and execution boundaries

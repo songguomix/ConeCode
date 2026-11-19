@@ -9,35 +9,33 @@ interface ThemeStore {
   toggle: () => void;
 }
 
-function getSystemTheme(): 'light' | 'dark' {
-  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-}
-
-function resolveTheme(theme: ThemeMode): 'light' | 'dark' {
-  return theme === 'system' ? getSystemTheme() : theme;
+function savedTheme(): ThemeMode {
+  try {
+    const saved = localStorage.getItem('theme');
+    if (saved === 'light' || saved === 'dark') return saved;
+  } catch {}
+  return 'system';
 }
 
 export const useThemeStore = create<ThemeStore>((set, get) => {
-  const saved = (localStorage.getItem('theme') as ThemeMode) || 'dark';
-  const resolved = resolveTheme(saved);
-  document.documentElement.classList.toggle('dark', resolved === 'dark');
+  const systemDark = window.matchMedia('(prefers-color-scheme: dark)');
+  function apply(theme: ThemeMode): 'light' | 'dark' {
+    const dark = theme === 'dark' || (theme === 'system' && systemDark.matches);
+    document.documentElement.classList.toggle('dark', dark);
+    return dark ? 'dark' : 'light';
+  }
+  const saved = savedTheme();
 
-  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
-    if (get().theme === 'system') {
-      const r = getSystemTheme();
-      document.documentElement.classList.toggle('dark', r === 'dark');
-      set({ resolved: r });
-    }
+  systemDark.addEventListener('change', () => {
+    if (get().theme === 'system') set({ resolved: apply('system') });
   });
 
   return {
     theme: saved,
-    resolved,
+    resolved: apply(saved),
     setTheme: (theme) => {
-      const resolved = resolveTheme(theme);
-      localStorage.setItem('theme', theme);
-      document.documentElement.classList.toggle('dark', resolved === 'dark');
-      set({ theme, resolved });
+      try { localStorage.setItem('theme', theme); } catch {}
+      set({ theme, resolved: apply(theme) });
     },
     toggle: () => {
       const current = get().resolved;

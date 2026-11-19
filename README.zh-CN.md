@@ -188,6 +188,8 @@ npm run dist:linux  # Linux AppImage (x64)
 npm run dist:all    # 一次构建 macOS arm64、Windows x64 与 Linux x64
 ```
 
+构建 AppImage 前需在打包机上安装 `zsyncmake`（Ubuntu 的 `zsync` 软件包提供此命令）。打包会生成供 AppImageUpdate 使用的同名 `.AppImage.zsync` 文件，发布时将它与 AppImage 上传至同一版本。
+
 打包需要 Electron Builder 对应平台的工具。签名和公证需要自己的凭据，仓库不会携带签名材料。
 
 Cloudflared 是可选的运行时工具，**二进制文件不提交到仓库**。需要捆绑隧道功能时，现有打包配置会寻找：

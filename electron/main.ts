@@ -825,6 +825,7 @@ function createWindow() {
   }
   if (mainWindow) return;
   mainWindow = new BrowserWindow({
+    show: false,
     width: 1400,
     height: 900,
     minWidth: 900,
@@ -840,6 +841,8 @@ function createWindow() {
       webviewTag: true,
     },
   });
+  const window = mainWindow;
+  window.once('ready-to-show', () => window.show());
 
   const distPath = path.join(__dirname, '../dist/index.html');
   // vite-plugin-electron sets this in dev: the dev server always wins when it

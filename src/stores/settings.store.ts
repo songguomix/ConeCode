@@ -74,7 +74,7 @@ export function effectiveApprovalMode(): ApprovalMode {
 }
 
 export const useSettingsStore = create<SettingsStore>((set, get) => ({
-  theme: 'dark',
+  theme: 'system',
   language: 'en',
   sendWithEnter: true,
   streamEnabled: true,

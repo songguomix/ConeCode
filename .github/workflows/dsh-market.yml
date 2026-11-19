@@ -106,6 +106,9 @@ jobs:
           if [[ "$PLATFORM" != win ]]; then chmod +x resources/bin/cloudflared-*; fi
       - run: npm ci
       - run: npm run build
+      - name: Install AppImage delta update tools
+        if: matrix.platform == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends zsync
       - name: Package installer
         if: matrix.platform != 'mac'
         shell: bash
@@ -157,13 +160,25 @@ jobs:
           $installed = Get-FileHash (Join-Path $destination "resources\app.asar")
           $packaged = Get-FileHash (Join-Path $env:PACKAGED_RESOURCES "app.asar")
           if ($installed.Hash -ne $packaged.Hash) { throw "Installed app.asar does not match the packaged app" }
-      - name: Extract the Linux AppImage
+      - name: Verify the Linux AppImage and its delta update
         if: matrix.platform == 'linux'
         shell: bash
         run: |
-          set -eu
-          chmod +x "release-assets/ConeCode-$VERSION.AppImage"
-          "release-assets/ConeCode-$VERSION.AppImage" --appimage-extract >/dev/null
+          set -euo pipefail
+          name="ConeCode-$VERSION.AppImage"
+          image="release-assets/$name"
+          chmod +x "$image"
+          readelf -lW "$image" > "$RUNNER_TEMP/appimage-program-headers"
+          if grep -q 'INTERP' "$RUNNER_TEMP/appimage-program-headers"; then
+            echo "Expected a statically linked AppImage runtime" >&2
+            exit 1
+          fi
+          test "$("$image" --appimage-updateinformation)" = 'gh-releases-zsync|songguomix|ConeCode|latest|ConeCode-*.AppImage.zsync'
+          grep -aFx "Filename: $name" "$image.zsync"
+          grep -aFx "URL: $name" "$image.zsync"
+          zsync -u "http://127.0.0.1/$name.zsync" -i "$image" -o "$RUNNER_TEMP/reconstructed.AppImage" "$image.zsync"
+          cmp "$image" "$RUNNER_TEMP/reconstructed.AppImage"
+          "$image" --appimage-extract >/dev/null
           cmp squashfs-root/resources/app.asar "$PACKAGED_RESOURCES/app.asar"
       - uses: actions/upload-artifact@v4
         with:
@@ -213,7 +228,7 @@ jobs:
           sums="SHA256SUMS-$VERSION.txt"
           (
             cd release-assets
-            cat "$mac.sha256" "$win.sha256" "$linux.sha256" > "$sums"
+            cat "$mac.sha256" "$win.sha256" "$linux.sha256" "$linux.zsync.sha256" > "$sums"
             sha256sum -c --strict "$sums"
           )
           git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
@@ -221,13 +236,13 @@ jobs:
           git push origin "refs/tags/$tag"
           gh release create "$tag" --repo "$GITHUB_REPOSITORY" --verify-tag --draft \
             --title "ConeCode $VERSION" --notes-file "docs/releases/$VERSION.md"
-          for asset in "$mac" "$win" "$linux" "$sums"; do
+          for asset in "$mac" "$win" "$linux" "$linux.zsync" "$sums"; do
             gh release upload "$tag" "release-assets/$asset" --repo "$GITHUB_REPOSITORY"
           done
           release_id=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json databaseId --jq .databaseId)
           gh api "repos/$GITHUB_REPOSITORY/releases/$release_id/assets" > remote-assets.json
-          jq -e 'length == 4 and all(.[]; .state == "uploaded")' remote-assets.json >/dev/null
-          for asset in "$mac" "$win" "$linux" "$sums"; do
+          jq -e 'length == 5 and all(.[]; .state == "uploaded")' remote-assets.json >/dev/null
+          for asset in "$mac" "$win" "$linux" "$linux.zsync" "$sums"; do
             expected=$(sha256sum "release-assets/$asset" | cut -d ' ' -f1)
             actual=$(jq -r --arg name "$asset" '.[] | select(.name == $name) | .digest' remote-assets.json)
             test "$actual" = "sha256:$expected"

@@ -66,4 +66,10 @@ const target = path.join('release-assets', publicName);
 await mkdir('release-assets', { recursive: true });
 await copyFile(installer, target);
 await writeFile(target + '.sha256', sha256.digest('hex') + '  ' + publicName + '\n');
+if (platform === 'linux') {
+  const control = await readFile(installer + '.zsync');
+  await writeFile(target + '.zsync', control);
+  const controlHash = createHash('sha256').update(control).digest('hex');
+  await writeFile(target + '.zsync.sha256', controlHash + '  ' + publicName + '.zsync\n');
+}
 console.log('Verified ' + publicName + ' (' + size + ' bytes), ' + runtimeFiles + ' runtime files, metadata and packaged resources.');
