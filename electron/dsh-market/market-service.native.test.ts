@@ -53,6 +53,9 @@ describe.skipIf(!workerBuilt)('DshMarketService native flow', () => {
     expect((tool.value as any).message).toContain('Ada');
     const command = await service.invokeCommand('default', 'hello-conecode', 'hello', 'ConeCode');
     expect(command.ok).toBe(true);
+    await service.saveConfig('default', installed.id, { native: { greeting: 'Welcome' } });
+    expect((await service.invokeTool('default', installed.id, 'hello_conecode', { name: 'Ada' })).value)
+      .toMatchObject({ message: 'Welcome, Ada!' });
 
     const chatTools = await service.listChatTools();
     expect(chatTools.some((tool) => tool.name === 'hello_conecode')).toBe(true);
@@ -75,7 +78,15 @@ describe.skipIf(!workerBuilt)('DshMarketService native flow', () => {
     await service.initialize();
     state = await service.snapshot();
     expect(state.installed.some((plugin) => plugin.name === 'hello-conecode' && plugin.enabled)).toBe(true);
-    expect((await service.invokeTool('default', 'hello-conecode', 'hello_conecode', { name: 'Restored' })).ok).toBe(true);
+    expect((await service.invokeTool('default', 'hello-conecode', 'hello_conecode', { name: 'Restored' })).value)
+      .toMatchObject({ message: 'Welcome, Restored!' });
+    service.createProfile('separate');
+    await service.switchProfile('separate');
+    await expect(service.invokeTool('default', installed.id, 'hello_conecode', {})).rejects.toThrow('no longer active');
+    await expect(service.setEnabled('default', installed.id, false)).rejects.toThrow('no longer active');
+    await expect(service.saveConfig('default', installed.id, {})).rejects.toThrow('no longer active');
+    await expect(service.contributions('default', installed.id)).rejects.toThrow('no longer active');
+    await service.switchProfile('default');
 
     const packageDirBeforeUninstall = (await service.snapshot()).installed.find((plugin) => plugin.name === 'hello-conecode')!.packageDir;
     await service.uninstall('default', 'hello-conecode', false);
@@ -143,5 +154,50 @@ describe.skipIf(!workerBuilt)('DshMarketService native flow', () => {
     await service.runtime.shutdown();
     service = new DshMarketService({ rootDir: root, appPath: process.cwd(), versions: { app: 'test', electron: 'unknown' } });
     expect((await service.snapshot()).sources.find((item) => item.id === source.id)).toMatchObject(failed);
+  });
+
+  it('cancels oversized streamed catalogs before buffering the remaining chunks', async () => {
+    const cancel = vi.fn();
+    const chunk = new Uint8Array(1024 * 1024);
+    const response = new Response(new ReadableStream({
+      pull(controller) { controller.enqueue(chunk); },
+      cancel,
+    }));
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response));
+    try {
+      const source = await service.addRemoteSource('https://catalog.example.test/large.json');
+      expect(source.lastError).toContain('12.0 MiB limit');
+      expect(cancel).toHaveBeenCalledOnce();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('keeps the cancelled install locked until cleanup without stopping other packages', async () => {
+    let release!: () => void;
+    const wait = new Promise<void>((resolve) => { release = resolve; });
+    const prepare = vi.spyOn(service.installer, 'prepare').mockImplementationOnce(async (options) => {
+      await wait;
+      expect(options.signal.aborted).toBe(true);
+      throw new Error('Cancelled');
+    });
+    const killAll = vi.spyOn(service.installer, 'killAll');
+    try {
+      const first = service.install('default', 'hello-conecode', '1.0.0');
+      await vi.waitFor(() => expect(prepare).toHaveBeenCalled());
+      const running = service.state.operations().find((operation) => operation.pluginId === 'hello-conecode' && operation.phase === 'installing')!;
+      service.cancel(running.requestId);
+      await expect(service.install('default', 'hello-conecode', '1.0.0')).rejects.toThrow('already running');
+      expect(killAll).not.toHaveBeenCalled();
+      const rejected = expect(first).rejects.toThrow('Cancelled');
+      release();
+      await rejected;
+      expect((await service.install('default', 'hello-conecode')).status).toBe('loaded');
+      await service.uninstall('default', 'hello-conecode');
+    } finally {
+      release();
+      prepare.mockRestore();
+      killAll.mockRestore();
+    }
   });
 });

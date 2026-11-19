@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import semver from 'semver';
 import type { MarketVersionSource } from '../../src/core/dsh-market/types';
+import { MAX_README_BYTES } from './constants';
 
 const PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/;
 const COMMIT = /^[0-9a-f]{40}$/;
@@ -124,6 +125,21 @@ export function assertInside(root: string, candidate: string, label: string): st
     throw new Error(`${label} must stay inside ${realRoot}`);
   }
   return real;
+}
+
+export function packageReadme(directory: string, declared?: string): { text: string; source: string } | undefined {
+  if (!fs.statSync(directory, { throwIfNoEntry: false })?.isDirectory()) return;
+  for (const name of declared ? [declared] : ['README.md', 'readme.md', 'Readme.md', 'README.en.md']) {
+    const source = assertInside(directory, path.resolve(directory, name), 'Plugin README');
+    const stat = fs.statSync(source, { throwIfNoEntry: false });
+    if (!stat?.isFile()) continue;
+    const file = fs.openSync(source, 'r');
+    try {
+      const buffer = Buffer.alloc(Math.min(stat.size, MAX_README_BYTES));
+      const count = fs.readSync(file, buffer, 0, buffer.length, 0);
+      return { source, text: buffer.toString('utf8', 0, count) };
+    } finally { fs.closeSync(file); }
+  }
 }
 
 export function pluginDirectoryName(name: string): string {

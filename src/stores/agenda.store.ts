@@ -54,6 +54,7 @@ function getCacheKey(rootPath: string, locale?: string): string {
 interface AgendaStore {
   scan: WorkspaceScan | null;
   tasks: SuggestedTask[];
+  tasksRoot: string | null;
   generatedAt: number | null;
   scanning: boolean;
   suggesting: boolean;
@@ -72,13 +73,14 @@ interface AgendaStore {
 export const useAgendaStore = create<AgendaStore>((set, get) => ({
   scan: null,
   tasks: [],
+  tasksRoot: null,
   generatedAt: null,
   scanning: false,
   suggesting: false,
   error: null,
   resume: [],
 
-  reset: () => set({ scan: null, tasks: [], generatedAt: null, error: null }),
+  reset: () => set({ scan: null, tasks: [], tasksRoot: null, generatedAt: null, error: null }),
 
   /**
    * Read the real state of the workspace. Everything here is cheap and local —
@@ -159,7 +161,7 @@ export const useAgendaStore = create<AgendaStore>((set, get) => ({
     const key = getCacheKey(rootPath, locale);
     const cached = cache[key] || cache[rootPath];
     if (cached?.tasks?.length && Date.now() - cached.generatedAt < CACHE_TTL) {
-      set({ tasks: rankTasks(cached.tasks), generatedAt: cached.generatedAt, error: null });
+      set({ tasks: rankTasks(cached.tasks), tasksRoot: rootPath, generatedAt: cached.generatedAt, error: null });
     }
   },
 
@@ -172,7 +174,7 @@ export const useAgendaStore = create<AgendaStore>((set, get) => ({
     if (!force) {
       const cached = readCache()[key];
       if (cached && Date.now() - cached.generatedAt < CACHE_TTL && cached.tasks.length) {
-        set({ tasks: rankTasks(cached.tasks), generatedAt: cached.generatedAt, error: null });
+        set({ tasks: rankTasks(cached.tasks), tasksRoot: rootPath, generatedAt: cached.generatedAt, error: null });
         // Still refresh the local facts so the header is accurate.
         void get().scanWorkspace();
         return;
@@ -221,7 +223,7 @@ export const useAgendaStore = create<AgendaStore>((set, get) => ({
         return;
       }
       const generatedAt = Date.now();
-      set({ tasks, generatedAt, suggesting: false, error: null });
+      set({ tasks, tasksRoot: rootPath, generatedAt, suggesting: false, error: null });
       writeCache(key, tasks, generatedAt);
     } catch (e: any) {
       set({ suggesting: false, error: e?.message || String(e) });

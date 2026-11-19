@@ -95,4 +95,16 @@ describe('market state persistence', () => {
     store.createProfile('work');
     expect(() => store.updatePlugin('work', plugin('default'))).toThrow('profile mismatch');
   });
+
+  it('recovers an invalid active profile without losing other stored installations', async () => {
+    const root = tempDir();
+    const store = new MarketStateStore(root);
+    store.updatePlugin('default', plugin('default'));
+    await store.flush();
+    const data = store.snapshot();
+    fs.writeFileSync(store.stateFile, JSON.stringify({ ...data, activeProfile: 'broken/profile', profiles: { ...data.profiles, broken: null } }));
+    const reopened = new MarketStateStore(root);
+    expect(reopened.activeProfileId()).toBe('default');
+    expect(reopened.installed().map((item) => item.name)).toEqual(['demo']);
+  });
 });

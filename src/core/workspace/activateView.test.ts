@@ -34,10 +34,19 @@ describe('shared Chat / Work / RSI destination navigation', () => {
     expect(states.chat.setActiveConversation).toHaveBeenCalledWith('work');
     expect(states.chat.newConversation).not.toHaveBeenCalled();
   });
-  it('uses the desktop folder flow when Work has no project', async () => {
+  it('keeps the active Chat visible while choosing a Work folder and after cancellation', async () => {
     states.root = null;
+    states.chat.conversations = [{ id: 'chat', rootPath: null, isChatMode: true }];
+    states.chat.activeConversationId = 'chat';
+    states.chat.ensureWorkFolder.mockImplementation(async () => {
+      expect(states.ui.setViewMode).not.toHaveBeenCalledWith('work');
+      return null;
+    });
+
     await activateWorkspaceView('work');
     expect(states.chat.ensureWorkFolder).toHaveBeenCalledOnce();
+    expect(states.ui.setViewMode).not.toHaveBeenCalledWith('work');
+    expect(states.chat.activeConversationId).toBe('chat');
     expect(states.chat.newConversation).not.toHaveBeenCalled();
   });
   it('enters RSI through its existing mode and exits through the selected view', async () => {

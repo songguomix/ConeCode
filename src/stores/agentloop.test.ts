@@ -132,6 +132,54 @@ describe('runAgentLoop with native tool calling', () => {
     useComputerStore.setState({ enabled: false, target: null, targetRevision: 0, frameId: null, lastShot: null, activity: [] });
   });
 
+  it('sends the original request on a restored GPT selection without inheriting legacy chat consent', async () => {
+    const confirm = vi.fn<typeof window.electronAPI.app.confirmGptConstraints>().mockResolvedValue('enable');
+    window.electronAPI.app.confirmGptConstraints = confirm;
+    const restored = { ...model, id: 'gpt-4o' };
+    useModelStore.setState({ models: new Map([['p1', [restored]]]) });
+    useModelStore.getState().selectModel(restored.id, 'p1', false);
+    useChatStore.setState(({ conversations }) => ({
+      conversations: conversations.map((chat) => ({ ...chat, modelId: restored.id, gptConstraintState: 'ENABLED' })),
+    }));
+
+    await useChatStore.getState().sendMessage('Review the change', 'p1', restored.id);
+    expect(streamCalls).toHaveLength(1);
+    expect(streamCalls[0].messages).toContainEqual(expect.objectContaining({ role: 'user', content: 'Review the change' }));
+    expect(JSON.stringify(streamCalls[0].messages)).not.toContain('GPT_MODEL_DETECTED');
+    expect(created.some((message) => message.isQuestion)).toBe(false);
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it('learns a selected alias from the IPC response and stops applying its choice after a switch', async () => {
+    const confirm = vi.fn<typeof window.electronAPI.app.confirmGptConstraints>().mockResolvedValue('enable');
+    window.electronAPI.app.confirmGptConstraints = confirm;
+    const alias = { ...model, id: 'team-reasoning-test' };
+    const other = { ...model, id: 'other-model-test' };
+    useModelStore.setState({ models: new Map([['p1', [alias, other]]]) });
+    useModelStore.getState().selectModel(alias.id, 'p1');
+    expect(confirm).not.toHaveBeenCalled();
+    queued = [{
+      ...textResponse('Ready'),
+      _gptProbe: { isGpt: true, rawModel: alias.id, normalizedModel: 'o3-mini', source: 'response_header', isReasoningSeries: true },
+    }];
+
+    await useChatStore.getState().sendMessage('First request', 'p1', alias.id);
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(streamCalls[0].messages)).not.toContain('GPT_MODEL_DETECTED');
+    await useChatStore.getState().sendMessage('Second request', 'p1', alias.id);
+    expect(streamCalls[1].messages).toContainEqual(expect.objectContaining({
+      role: 'developer', content: expect.stringContaining('GPT_MODEL_DETECTED'),
+    }));
+
+    useModelStore.getState().selectModel(other.id, 'p1');
+    const reply = '```js\n// TODO: follow up\n```';
+    queued = [textResponse(reply)];
+    await useChatStore.getState().sendMessage('Third request', 'p1', other.id);
+    expect(JSON.stringify(streamCalls[2].messages)).not.toContain('GPT_MODEL_DETECTED');
+    expect(created[created.length - 1]?.content).toBe(reply);
+    expect(confirm).toHaveBeenCalledTimes(1);
+  });
+
   it.each(['native', 'prompt'] as const)('records %s child turns under the parent message without exposing its reads to the parent model', async (mode) => {
     useSettingsStore.setState({ toolCallMode: mode });
     const record = vi.fn<typeof window.electronAPI.message.recordSubAgent>().mockResolvedValue(true);

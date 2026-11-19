@@ -25,6 +25,12 @@ Every displayed download/star number is a point-in-time observation fetched from
 the npm and GitHub APIs and stamped with provenance. There are no invented ratings,
 certification badges, download counts or ratings.
 
+## Official DSH Web
+
+Choose **Install in DSH Web** on an npm version's detail page to run a theme, client module, or plugin that needs the full Web profile. **Sources & runtime → Open DSH Web** reopens it. ConeCode verifies the selected npm archive and installs it through the local official `dsh` command. Install DeepSeek Harness Desktop or a compatible CLI with its package manager. Each ConeCode profile gets its own `official-web` home. The browser connects to a loopback listener, and DSH Web manages the plugins in that home. Host-side checks and badges below refer to the embedded ConeCode worker. The official runtime enforces its own package compatibility rules.
+
+The Chinese authoring guide walks through local installation, configuration, publishing and both runtime choices. [开放插件开发指南](plugin-authoring.zh-CN.md)
+
 ## Run
 
 ```sh
@@ -54,7 +60,7 @@ Discover.
 | DSH version | `0.2.2-rc.1` |
 | Git tag | `dsh-v0.2.2-rc.1` |
 | Commit | `66491b05e3f05ad35bcdd4f6cd7ed26041d9e3db` |
-| Compatibility adapter | `1.0.0` |
+| Compatibility adapter | `1.1.0` |
 | Host runtime | Electron `42.11.3`, Node `24.19.0` (Electron embedded), macOS arm64 |
 
 Source and docs used to derive the layer:
@@ -116,7 +122,7 @@ the official Web client exist. The four required layers are:
 4. **Actual function** — real tools/commands/skills executed and asserted; see
    the compatibility matrix and evidence below.
 
-## What works, what is partial, what is not claimed
+## Embedded worker capabilities
 
 | Capability | Status |
 |---|---|
@@ -127,10 +133,11 @@ the official Web client exist. The four required layers are:
 | Cordis config validation via exported `Config` | Implemented; invalid values keep the previous working instance |
 | `engines.dsh`, DSH peer ranges, `engines.node`, bundle platforms | Implemented; prereleases included as DSH does |
 | Exact-version compatibility exemptions | Implemented; persisted per profile; explicit risk acknowledgement |
-| DSH Web client halves (`dsh.client`) | **Not mounted.** Detected and reported as `web-client` missing; host half may still be verified |
+| DSH Web client halves (`dsh.client`) | Use **Install in DSH Web** for browser modules. The worker reports `web-client` for its embedded installation. |
 | `cordis:include`, Cordis groups, dynamic `!!js` patch rows | Explicitly rejected with a named error; not guessed |
-| DSH host services other than tools/commands/skills/credentials/storage/domain | Missing capabilities are a hard load error, never empty stubs |
-| HTTP routes, sessions, LLM adapters, model providers | Not provided by this layer; packages requiring them are shown as partial/incompatible |
+| Additional host services beyond tools/commands/skills/credentials/llm/storage/domain | Missing capabilities are a hard load error, never empty stubs |
+| LLM providers | The embedded worker mounts the official DSH LLM registry when available. Use DSH Web for its model selector and settings. |
+| HTTP routes and sessions | Use the official Web profile. |
 | Native binaries / platform-specific prebuilt addons | Not claimed; platform mismatch is reported |
 
 The plugin **detail page** shows two different facts side by side:
@@ -167,7 +174,7 @@ today.
 |---|---|
 | Install/update/disable a host-side tool, command or skill | Unload and reload the Cordis scope immediately |
 | Edit a row config | Validate, restart that plugin instance, keep the old instance on rejection |
-| DSH Web client half | Not mounted; changing or restarting ConeCode will not add the DSH Web UI |
+| DSH Web client half | Open the official DSH Web profile in the browser |
 | Worker crash or startup load failure | The plugin is reported as `restart-required`; use **Restart runtime** after fixing the cause |
 
 Only the host-side types listed above are hot. The market never claims that a
@@ -279,8 +286,7 @@ transport):
 
 ## Deliberate limits
 
-- This is a **host-side compatibility layer**, not the official DSH Web runtime.
-  Browser/UI plugin code is not executed.
+- Browser/UI plugins run in the separate official DSH Web profile. The embedded worker executes Node plugins.
 - Git packages that require a build `prepare` script cannot be installed unless
   scripts are explicitly allowed; prebuilt npm packages are the recommended path.
 - The shared runtime resolves one pinned set of DSH peer packages

@@ -32,7 +32,7 @@ async function handle(request: Request): Promise<unknown> {
     case 'init': {
       if (payload.dshHome) process.env.DSH_HOME = String(payload.dshHome);
       await host.start({ dshHome: payload.dshHome ? String(payload.dshHome) : undefined, profileId: payload.profileId ? String(payload.profileId) : undefined });
-      return { ok: true, pid: process.pid, node: process.versions.node, storage: host.storageInfo() };
+      return { ok: true, pid: process.pid, node: process.versions.node, storage: host.storageInfo(), llmReady: host.llmReady };
     }
     case 'load':
       return host.load(payload.spec);
@@ -48,13 +48,13 @@ async function handle(request: Request): Promise<unknown> {
     case 'listSkills':
       return host.listSkills();
     case 'getSkill':
-      return host.getSkill(String(payload.pluginId), String(payload.name));
+      return host.getSkill(String(payload.pluginId), String(payload.name), payload.rowId ?? undefined);
     case 'invokeTool':
       return host.invokeTool(String(payload.pluginId), payload.rowId ?? null, String(payload.name), payload.args ?? {});
     case 'invokeCommand':
       return host.invokeCommand(String(payload.pluginId), payload.rowId ?? null, String(payload.name), String(payload.rawInput ?? ''));
     case 'info':
-      return { plugins: host.runtimeInfo(), storage: host.storageInfo() };
+      return { plugins: host.runtimeInfo(), storage: host.storageInfo(), llmReady: host.llmReady };
     case 'shutdown':
       await host.dispose();
       return { ok: true };

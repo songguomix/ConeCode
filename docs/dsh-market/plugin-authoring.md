@@ -1,6 +1,8 @@
 # Plugin Authoring and Compatibility Extension
 
-ConeCode loads two formats through the same lifecycle:
+For an installable DSH command and a walkthrough covering development, packaging and catalog distribution, see the [Chinese developer guide](plugin-authoring.zh-CN.md) and the [sample package](../../examples/dsh-plugins/hello-dsh).
+
+ConeCode loads two formats through the embedded worker:
 
 - **DSH bundle** — a real `package.json` with `dsh.bundle.patch` (the DSH format).
 - **ConeCode-native** — `conecode.plugin.json` with `conecode.plugin === true`
@@ -161,17 +163,14 @@ Supported DSH semantics in this release:
 - Exported `Config` (Schemastery/standard-schema) is validated by Cordis before
   activation. A rejected config keeps the previous running instance.
 
-Explicitly unsupported in this release:
+Use the official DSH Web profile for capabilities outside the embedded worker:
 
 - `cordis:include`, native Cordis groups, `!!js` dynamic rows.
-- Any injected service other than `tools`, `commands`, `skills`, `credentials` and
-  the built-in Cordis services.
-- DSH Web client halves (`dsh.client`): detected and reported, never mounted.
-- HTTP routes, model provider adapters, sessions, agents, LLM adapters, filesystem
-  services and native binaries.
+- Additional services required by a plugin beyond those active in **Sources & runtime**.
+- DSH Web client halves (`dsh.client`), including themes and settings panels.
+- HTTP routes, sessions, browser model selection, and plugins that depend on the full Web composition.
 
-A plugin that needs those capabilities should be listed as **Partial** or
-**Incompatible** in its verification record, with the missing item named.
+For published npm packages, **Install in DSH Web** installs the selected version in the official host. Use **Sources & runtime → Open DSH Web** to manage it. Record verification for the runtime you actually tested.
 
 ## Adding a host capability (developer checklist)
 
@@ -195,6 +194,4 @@ A plugin that needs those capabilities should be listed as **Partial** or
   directory do not affect the installed copy.
 - Keep `dsh.bundle.patch` rows referencing the package name, not a relative path,
   so Node resolves the installed package.
-- Do not put credentials in a patch config; configure them in the market UI and
-  use the plugin's secret mechanism. The local market stores ordinary config as
-  visible JSON.
+- Use the host's credentials service for secrets. The local market stores ordinary config as visible JSON.

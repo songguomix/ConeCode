@@ -82,10 +82,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   fs: {
     readFile: (filePath: string) => ipcRenderer.invoke('fs:readFile', filePath),
     readFileBase64: (filePath: string) => ipcRenderer.invoke('fs:readFileBase64', filePath),
-    writeFile: (filePath: string, content: string) => ipcRenderer.invoke('fs:writeFile', filePath, content),
+    writeFile: (filePath: string, content: string, options?: { expected?: string; exclusive?: boolean }) =>
+      ipcRenderer.invoke('fs:writeFile', filePath, content, options),
     writeFileBase64: (filePath: string, base64: string) => ipcRenderer.invoke('fs:writeFileBase64', filePath, base64),
     readDir: (dirPath: string) => ipcRenderer.invoke('fs:readDir', dirPath),
     exists: (filePath: string) => ipcRenderer.invoke('fs:exists', filePath),
+    realpath: (filePath: string) => ipcRenderer.invoke('fs:realpath', filePath),
     createDir: (dirPath: string) => ipcRenderer.invoke('fs:createDir', dirPath),
     deleteFile: (filePath: string) => ipcRenderer.invoke('fs:deleteFile', filePath),
     deleteDir: (dirPath: string) => ipcRenderer.invoke('fs:deleteDir', dirPath),
@@ -101,6 +103,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     spawn: (command: string, args: string[], cwd?: string) => ipcRenderer.invoke('exec:spawn', command, args, cwd),
   },
   app: {
+    confirmGptConstraints: (modelName: string) => ipcRenderer.invoke('app:confirmGptConstraints', modelName),
     open: (appName: string) => ipcRenderer.invoke('app:open', appName),
     openPath: (path: string) => ipcRenderer.invoke('app:openPath', path),
     getPath: (name: string) => ipcRenderer.invoke('app:getPath', name),
@@ -188,6 +191,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     deleteTenantData: (tenantId: string) => ipcRenderer.invoke('memory-drive:deleteTenantData', tenantId),
   },
   dshMarket: {
+    openDshWeb: (profileId: string, pluginId?: string, version?: string) => ipcRenderer.invoke('dsh-market:open-web', profileId, pluginId, version),
     snapshot: (query?: any) => ipcRenderer.invoke('dsh-market:snapshot', query),
     detail: (pluginId: string, version?: string) => ipcRenderer.invoke('dsh-market:detail', pluginId, version),
     versions: (pluginId: string) => ipcRenderer.invoke('dsh-market:versions', pluginId),
@@ -210,7 +214,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     invokeTool: (profileId: string, pluginId: string, tool: string, args: unknown, rowId?: string) => ipcRenderer.invoke('dsh-market:invoke-tool', profileId, pluginId, tool, args, rowId),
     invokeCommand: (profileId: string, pluginId: string, command: string, rawInput: string, rowId?: string) => ipcRenderer.invoke('dsh-market:invoke-command', profileId, pluginId, command, rawInput, rowId),
     skills: () => ipcRenderer.invoke('dsh-market:skills'),
-    skillContent: (pluginId: string, name: string) => ipcRenderer.invoke('dsh-market:skill-content', pluginId, name),
+    skillContent: (pluginId: string, name: string, rowId?: string) => ipcRenderer.invoke('dsh-market:skill-content', pluginId, name, rowId),
     switchProfile: (profileId: string) => ipcRenderer.invoke('dsh-market:switch-profile', profileId),
     createProfile: (profileId: string, name?: string) => ipcRenderer.invoke('dsh-market:create-profile', profileId, name),
     restartRuntime: () => ipcRenderer.invoke('dsh-market:restart-runtime'),

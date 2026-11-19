@@ -50,6 +50,7 @@ describe('catalog parsing', () => {
       title: 'Test',
       plugins: [{
         name: 'demo',
+        sourceId: 'some-other-catalog',
         versions: [
           { version: '1.0.0', publishedAt: '2026-01-01', source: { type: 'npm' } },
           { version: '2.0.0', publishedAt: '2026-02-01', source: { type: 'npm' } },
@@ -57,6 +58,7 @@ describe('catalog parsing', () => {
       }],
     }, 'test');
     expect(catalog.plugins[0].versions.map((version) => version.version)).toEqual(['2.0.0', '1.0.0']);
+    expect(catalog.plugins[0].sourceId).toBe('test');
   });
 
   it('adapts a DSH official format-1 index without inventing missing data', () => {
@@ -71,7 +73,7 @@ describe('catalog parsing', () => {
         versions: [{
           version: '1.2.3',
           publishTimestamp: 1_760_000_000,
-          source: { type: 'npm' },
+          source: { type: 'git', url: 'https://example.test/plugins', commit: 'a'.repeat(40), path: 'packages/demo' },
           engines: { dsh: '>=0.2.2-0 <0.3.0' },
         }],
       }],
@@ -80,6 +82,7 @@ describe('catalog parsing', () => {
     expect(catalog.plugins[0].name).toBe('dsh-demo');
     expect(catalog.plugins[0].category).toBe('tools');
     expect(catalog.plugins[0].versions[0].engines.dsh).toBe('>=0.2.2-0 <0.3.0');
+    expect(catalog.plugins[0].versions[0].source.subdir).toBe('packages/demo');
     expect(catalog.plugins[0].license).toBeUndefined();
     expect(catalog.plugins[0].declared.peerDependencies).toEqual({});
   });
@@ -127,5 +130,8 @@ describe('catalog query', () => {
     expect(page.items).toHaveLength(1);
     expect(page.categories.find((item) => item.id === 'tools')?.count).toBe(2);
     expect(page.labels.find((item) => item.id === 'diagnostics')?.count).toBe(2);
+    const last = queryCatalog(plugins, { page: 10, pageSize: 1 }, compatibility, () => null);
+    expect(last.page).toBe(3);
+    expect(last.items).toHaveLength(1);
   });
 });

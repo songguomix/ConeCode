@@ -3,7 +3,6 @@ import path from 'node:path';
 import { BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import type {
   CatalogQuery,
-  MarketEvent,
 } from '../../src/core/dsh-market/types';
 import { DshMarketService } from './market-service';
 
@@ -12,21 +11,12 @@ export interface DshMarketIpcOptions {
   getWindow: () => BrowserWindow | null;
 }
 
-function broadcast(event: MarketEvent, getWindow: () => BrowserWindow | null): void {
-  const bind = () => {
-    const window = getWindow();
-    if (window && !window.isDestroyed()) window.webContents.send('dsh-market:event', event);
-  };
-  bind();
-  for (const window of BrowserWindow.getAllWindows()) {
-    if (!window.isDestroyed()) window.webContents.send('dsh-market:event', event);
-  }
-}
-
 export function registerDshMarketIpc(options: DshMarketIpcOptions): void {
   const { service, getWindow } = options;
-  service.runtime.onEvent((event) => broadcast(event, getWindow));
 
+  ipcMain.handle('dsh-market:open-web', async (_, profileId: string, pluginId?: string, version?: string) => {
+    await shell.openExternal(await service.openDshWeb(profileId, pluginId, version));
+  });
   ipcMain.handle('dsh-market:snapshot', (_, query?: CatalogQuery) => service.snapshot(query || {}));
   ipcMain.handle('dsh-market:detail', (_, pluginId: string, version?: string) => service.detail(pluginId, version));
   ipcMain.handle('dsh-market:versions', (_, pluginId: string) => service.versions(pluginId));
@@ -81,7 +71,7 @@ export function registerDshMarketIpc(options: DshMarketIpcOptions): void {
   ipcMain.handle('dsh-market:invoke-command', (_, profileId: string, pluginId: string, command: string, rawInput: string, rowId?: string) =>
     service.invokeCommand(profileId, pluginId, command, rawInput, rowId));
   ipcMain.handle('dsh-market:skills', () => service.listSkills());
-  ipcMain.handle('dsh-market:skill-content', (_, pluginId: string, name: string) => service.getSkill(pluginId, name));
+  ipcMain.handle('dsh-market:skill-content', (_, pluginId: string, name: string, rowId?: string) => service.getSkill(pluginId, name, rowId));
   ipcMain.handle('dsh-market:switch-profile', (_, profileId: string) => service.switchProfile(profileId));
   ipcMain.handle('dsh-market:create-profile', (_, profileId: string, name?: string) => service.createProfile(profileId, name));
   ipcMain.handle('dsh-market:restart-runtime', () => service.restartRuntime());

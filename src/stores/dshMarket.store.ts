@@ -2,13 +2,11 @@ import { create } from 'zustand';
 import type {
   CatalogQuery,
   MarketEvent,
-  MarketPlugin,
   MarketSnapshot,
-  MarketSource,
-  MarketVersion,
   PluginDetail,
   RepositoryInspection,
 } from '../core/dsh-market/types';
+import type { ElectronAPI } from '../types/ipc.types';
 
 type Tab = 'discover' | 'installed' | 'sources';
 
@@ -30,8 +28,9 @@ interface DshMarketStore {
   selectedPluginId: string | null;
   operationLog: string | null;
   logs: { path: string; text: string; truncated: boolean } | null;
-  localPreview: { plugin: MarketPlugin; version: MarketVersion; warnings: string[] } | null;
+  localPreview: Awaited<ReturnType<ElectronAPI['dshMarket']['inspectLocal']>>;
   sourceBusy: string | null;
+  webBusy: boolean;
   subscribed: boolean;
 
   initialize: () => Promise<void>;
@@ -60,16 +59,17 @@ interface DshMarketStore {
   addLocalSource: () => Promise<void>;
   removeSource: (sourceId: string) => Promise<void>;
   inspectLocal: () => Promise<void>;
-  installLocal: (acceptRisk?: boolean) => Promise<void>;
+  installLocal: (acceptRisk?: boolean, allowScripts?: boolean) => Promise<void>;
   installRepository: (inspection: RepositoryInspection, acceptRisk?: boolean, allowScripts?: boolean) => Promise<void>;
   clearLocalPreview: () => void;
   switchProfile: (profileId: string) => Promise<void>;
   createProfile: (profileId: string, name?: string) => Promise<void>;
   restartRuntime: () => Promise<void>;
-  invokeTool: (pluginId: string, toolName: string, args: unknown) => Promise<string>;
-  invokeCommand: (pluginId: string, commandName: string, rawInput: string) => Promise<string>;
+  invokeTool: (pluginId: string, toolName: string, args: unknown, rowId?: string) => Promise<string>;
+  invokeCommand: (pluginId: string, commandName: string, rawInput: string, rowId?: string) => Promise<string>;
   revealPath: (target: string) => Promise<void>;
   openExternal: (url: string) => Promise<void>;
+  openDshWeb: (pluginName?: string, version?: string) => Promise<void>;
   pushNotice: (message: string | null) => void;
   clearError: () => void;
 }
@@ -78,7 +78,7 @@ let subscribed = false;
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 
 function api() {
-  const bridge = (window as any).electronAPI?.dshMarket;
+  const bridge = window.electronAPI?.dshMarket;
   if (!bridge) throw new Error('DSH plugin market requires the Electron desktop runtime.');
   return bridge;
 }
@@ -86,8 +86,7 @@ function api() {
 async function refreshWorkspaceTools(): Promise<void> {
   try {
     const { useWorkspaceStore } = await import('./workspace.store');
-    const rootPath = useWorkspaceStore.getState().rootPath || undefined;
-    const tools = await (window as any).electronAPI?.mcp?.reload?.(rootPath);
+    const tools = await window.electronAPI?.mcp?.list?.();
     if (Array.isArray(tools)) useWorkspaceStore.setState({ mcpTools: tools });
   } catch {
     // A closed workspace is not an error.
@@ -101,8 +100,11 @@ function messageOf(error: unknown): string {
 
 export const useDshMarketStore = create<DshMarketStore>((set, get) => {
   let detailRequest = 0;
+  let snapshotRequest = 0;
+  let logsRequest = 0;
   const clearSelection = () => {
     detailRequest++;
+    logsRequest++;
     set({ selectedPluginId: null, detail: null, detailLoading: false, logs: null });
   };
   const refreshSelected = async (request: number, pluginId: string, version?: string) => {
@@ -118,17 +120,29 @@ export const useDshMarketStore = create<DshMarketStore>((set, get) => {
     compatibleOnly: get().compatibleOnly,
   });
 
-  const scheduleRefresh = () => {
+  const refreshSnapshot = async () => {
+    const request = ++snapshotRequest;
+    set({ loading: true });
+    try {
+      const snapshot = await api().snapshot(query());
+      if (request === snapshotRequest) set({ snapshot, page: snapshot.catalog.page, loading: false });
+    } catch (error) {
+      if (request === snapshotRequest) set({ error: messageOf(error), loading: false });
+    }
+  };
+
+  const scheduleRefresh = (queryChanged = false) => {
+    if (queryChanged) snapshotRequest++;
     if (refreshTimer) clearTimeout(refreshTimer);
     refreshTimer = setTimeout(() => {
       refreshTimer = null;
-      void get().refresh();
+      void refreshSnapshot();
     }, 180);
   };
 
   const subscribe = () => {
     if (subscribed) return;
-    const bridge = (window as any).electronAPI?.dshMarket;
+    const bridge = window.electronAPI?.dshMarket;
     if (!bridge?.onEvent) return;
     subscribed = true;
     bridge.onEvent((event: MarketEvent) => {
@@ -182,23 +196,19 @@ export const useDshMarketStore = create<DshMarketStore>((set, get) => {
     logs: null,
     localPreview: null,
     sourceBusy: null,
+    webBusy: false,
     subscribed: false,
 
     initialize: async () => {
       subscribe();
-      set({ loading: true, error: null });
-      try {
-        const snapshot = await api().snapshot(query());
-        set({ snapshot, loading: false, subscribed: true });
-        void refreshWorkspaceTools();
-      } catch (error) {
-        set({ error: messageOf(error), loading: false });
-      }
+      set({ subscribed, error: null });
+      await refreshSnapshot();
+      if (get().snapshot) void refreshWorkspaceTools();
     },
 
     openPanel: async () => {
       set({ open: true });
-      if (!get().snapshot) await get().initialize();
+      await get().initialize();
     },
 
     closePanel: () => {
@@ -214,47 +224,42 @@ export const useDshMarketStore = create<DshMarketStore>((set, get) => {
 
     setQuery: (value) => {
       set({ query: value, page: 1 });
-      scheduleRefresh();
+      scheduleRefresh(true);
     },
 
     setCategory: (category) => {
       set({ category, label: null, page: 1 });
-      scheduleRefresh();
+      scheduleRefresh(true);
     },
 
     setLabel: (label) => {
       set((state) => ({ label: state.label === label ? null : label, page: 1 }));
-      scheduleRefresh();
+      scheduleRefresh(true);
     },
 
     setSort: (sort) => {
       set({ sort, page: 1 });
-      scheduleRefresh();
+      scheduleRefresh(true);
     },
 
     setPage: (page) => {
       set({ page });
-      scheduleRefresh();
+      scheduleRefresh(true);
     },
 
     setCompatibleOnly: (value) => {
       set({ compatibleOnly: value, page: 1 });
-      scheduleRefresh();
+      scheduleRefresh(true);
     },
 
     refresh: async () => {
-      set({ loading: true });
-      try {
-        const snapshot = await api().snapshot(query());
-        set({ snapshot, loading: false, error: null });
-      } catch (error) {
-        set({ error: messageOf(error), loading: false });
-      }
+      set({ error: null });
+      await refreshSnapshot();
     },
 
     selectPlugin: async (pluginId, version) => {
       const request = ++detailRequest;
-      set({ selectedPluginId: pluginId, detail: null, detailLoading: true, logs: null, operationLog: null });
+      set({ selectedPluginId: pluginId, detail: null, detailLoading: true, logs: null, operationLog: null, error: null });
       try {
         const detail = await api().detail(pluginId, version);
         if (request === detailRequest) set({ detail, detailLoading: false });
@@ -325,20 +330,22 @@ export const useDshMarketStore = create<DshMarketStore>((set, get) => {
     loadLogs: async (pluginId) => {
       const profileId = get().snapshot?.profile.id;
       if (!profileId) return;
+      const request = ++logsRequest;
+      set({ logs: null });
       try {
         const logs = await api().logs(profileId, pluginId);
-        set({ logs });
+        if (request === logsRequest) set({ logs });
       } catch (error) {
-        set({ error: messageOf(error) });
+        if (request === logsRequest) set({ error: messageOf(error) });
       }
     },
 
     refreshSources: async (sourceId) => {
       set({ sourceBusy: sourceId || 'all' });
       try {
-        const sources = await api().refreshSources(sourceId);
-        set({ snapshot: get().snapshot ? { ...get().snapshot!, sources } : null, sourceBusy: null });
+        await api().refreshSources(sourceId);
         await get().refresh();
+        set({ sourceBusy: null });
       } catch (error) {
         set({ error: messageOf(error), sourceBusy: null });
       }
@@ -347,11 +354,12 @@ export const useDshMarketStore = create<DshMarketStore>((set, get) => {
     addRemoteSource: async (url, title) => {
       set({ sourceBusy: 'add' });
       try {
-        const source: MarketSource = await api().addRemoteSource(url, title);
+        const source = await api().addRemoteSource(url, title);
         await get().refresh();
         set({ sourceBusy: null, notice: `Added catalog: ${source.title}` });
       } catch (error) {
         set({ error: messageOf(error), sourceBusy: null });
+        throw error;
       }
     },
 
@@ -390,16 +398,16 @@ export const useDshMarketStore = create<DshMarketStore>((set, get) => {
       set({ tab: 'installed' });
     },
 
-    installLocal: async (acceptRisk) => {
+    installLocal: async (acceptRisk, allowScripts) => {
       const profileId = get().snapshot?.profile.id;
       const preview = get().localPreview;
       if (!profileId || !preview) throw new Error('No local plugin selected');
       const directory = preview.version.source.path;
       if (!directory) throw new Error('Local source path is missing');
-      await run(() => api().installLocal(profileId, directory, { acceptRisk }), {
+      await run(() => api().installLocal(profileId, directory, { acceptRisk, allowScripts }), {
         notice: `Installed local plugin ${preview.plugin.name}`,
       });
-      set({ localPreview: null });
+      set({ localPreview: null, tab: 'installed' });
     },
 
     clearLocalPreview: () => set({ localPreview: null }),
@@ -418,20 +426,20 @@ export const useDshMarketStore = create<DshMarketStore>((set, get) => {
       await run(() => api().restartRuntime(), { notice: 'DSH runtime restarted' });
     },
 
-    invokeTool: async (pluginId, toolName, args) => {
+    invokeTool: async (pluginId, toolName, args, rowId) => {
       const profileId = get().snapshot?.profile.id;
       if (!profileId) throw new Error('No active profile');
-      const result = await api().invokeTool(profileId, pluginId, toolName, args);
+      const result = await api().invokeTool(profileId, pluginId, toolName, args, rowId);
       if (!result.ok) throw new Error(result.error || 'Tool execution failed');
-      return result.rendered || JSON.stringify(result.value, null, 2);
+      return result.rendered ?? JSON.stringify(result.value, null, 2) ?? '';
     },
 
-    invokeCommand: async (pluginId, commandName, rawInput) => {
+    invokeCommand: async (pluginId, commandName, rawInput, rowId) => {
       const profileId = get().snapshot?.profile.id;
       if (!profileId) throw new Error('No active profile');
-      const result = await api().invokeCommand(profileId, pluginId, commandName, rawInput);
+      const result = await api().invokeCommand(profileId, pluginId, commandName, rawInput, rowId);
       if (!result.ok) throw new Error(result.error || 'Command execution failed');
-      return result.rendered || JSON.stringify(result.value, null, 2);
+      return result.rendered ?? JSON.stringify(result.value, null, 2) ?? '';
     },
 
     revealPath: async (target) => {
@@ -440,6 +448,19 @@ export const useDshMarketStore = create<DshMarketStore>((set, get) => {
 
     openExternal: async (url) => {
       try { await api().openExternal(url); } catch (error) { set({ error: messageOf(error) }); }
+    },
+
+    openDshWeb: async (pluginName, version) => {
+      const profileId = get().snapshot?.profile.id;
+      if (!profileId || get().webBusy) return;
+      set({ webBusy: true, error: null });
+      try {
+        await api().openDshWeb(profileId, pluginName, version);
+      } catch (error) {
+        set({ error: messageOf(error) });
+      } finally {
+        set({ webBusy: false });
+      }
     },
 
     pushNotice: (message) => set({ notice: message }),

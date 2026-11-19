@@ -1,16 +1,17 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { FiSquare, FiPaperclip, FiX, FiFile, FiArrowUp, FiPlus, FiTool, FiChevronRight, FiCamera, FiClock, FiPlay } from 'react-icons/fi';
-import { AGENT_MODES, type AgentMode } from '../../core/agents/modePrompts';
-import { useMemoryStore, useChatStore, useModelStore, useLanguageStore, useWorkspaceStore, useSettingsStore, useUIStore, useGoalStore, useSkillsStore, useImageGenStore } from '../../stores';
+import { type AgentMode } from '../../core/agents/modePrompts';
+import { useChatStore, useModelStore, useLanguageStore, useWorkspaceStore, useSettingsStore, useUIStore, useSkillsStore } from '../../stores';
 import { useMemoryV2Store, isMemoryV2Active } from '../../stores/memoryV2.store';
 import { useScreenshotStore } from '../../stores/screenshot.store';
 import { useBackgroundStore } from '../../stores/background.store';
 import { prettyShortcut } from '../../core/screenshot/shortcut';
 import { useInstallGateStore, isHolding } from '../../stores/installGate.store';
 import {
-  BUILTIN_COMMANDS, parseSlashInput, matchCommands, findCommand, expandTemplate,
+  parseSlashInput, matchCommands, findCommand,
   type SlashCommand,
 } from '../../core/commands';
+import { conversationCommandMode, conversationCommandNeedsModel, runConversationCommand } from '../../core/conversationCommands';
 import ModelSelector from '../model/ModelSelector';
 import QueuedMessages from './QueuedMessages';
 import { parseQuickCapture, captureMemory } from '../../core/memory/quickCapture';
@@ -38,12 +39,9 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
   const isSavingEdit = useChatStore((s) => activeConversationId ? !!s.messageEdits[activeConversationId] : false);
   const continuableConvId = useChatStore((s) => s.continuableConvId);
   const continueGeneration = useChatStore((s) => s.continueGeneration);
-  const compactConversation = useChatStore((s) => s.compactConversation);
   const pushNotice = useChatStore((s) => s.pushNotice);
-  const newConversation = useChatStore((s) => s.newConversation);
   const planMode = useChatStore((s) => s.planMode);
   const installHolding = useInstallGateStore((s) => isHolding(s.jobs));
-  const togglePlanMode = useChatStore((s) => s.togglePlanMode);
   const [plusOpen, setPlusOpen] = useState(false);
   /** Skill picker popup inside the + menu (one row → full list). */
   const [skillPickerOpen, setSkillPickerOpen] = useState(false);
@@ -60,14 +58,12 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
   const composingRef = useRef(false);
   const compositionEndAtRef = useRef(0);
   const {
-    selectedFile, contextFiles, customCommands, agentsMdPath, rootPath, memoryFiles, fileList,
-    selectFile, addContextFile, addPastedImage, removeContextFile, ensureFileList, reloadProjectConfig,
-    addRoot, addRootFromDialog, allRoots,
+    selectedFile, contextFiles, customCommands, rootPath, memoryFiles, fileList,
+    addContextFile, addPastedImage, removeContextFile, ensureFileList, reloadProjectConfig,
+    allRoots,
   } = useWorkspaceStore();
   const { autoIncludeFileContext, sendWithEnter } = useSettingsStore();
   const toggleModelSelector = useUIStore((s) => s.toggleModelSelector);
-  const toggleReview = useUIStore((s) => s.toggleReview);
-  const toggleWorktrees = useUIStore((s) => s.toggleWorktrees);
   const inputContent = useUIStore((s) => s.inputContent);
   const setInputContent = useUIStore((s) => s.setInputContent);
   const startScreenshot = useScreenshotStore((s) => s.start);
@@ -151,125 +147,22 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
     textareaRef.current?.focus();
   };
 
-  const runCommand = async (cmd: SlashCommand, args: string) => {
+  const runCommand = async (command: SlashCommand, args: string) => {
     if (isSavingEdit || installHolding) return;
-    const needsModel = cmd.kind === 'prompt' || ['clear', 'compact', 'goal'].includes(cmd.name);
-    if (needsModel && !selectedModel) {
+    if (conversationCommandNeedsModel(command) && !selectedModel) {
       if (!useUIStore.getState().modelSelectorOpen) toggleModelSelector();
       return;
     }
     setInput('');
     setSlashDismissed(false);
     resetHeight();
-    const pid = selectedModel?.providerId;
-    const mid = selectedModel?.id;
-
-    if (cmd.kind === 'prompt') {
-      if (!selectedModel) return;
-      await sendMessage(expandTemplate(cmd.template || '', args), pid!, mid!);
+    if ((command.name === 'mode' && !conversationCommandMode(args)) ||
+        (command.name === 'goal' && !args.trim())) {
+      setInput('/' + command.name + ' ');
+      requestAnimationFrame(() => textareaRef.current?.focus());
       return;
     }
-
-    switch (cmd.name) {
-      case 'help': {
-        const lines = BUILTIN_COMMANDS.map((c) => `- \`/${c.name}\` — ${t(c.description)}`);
-        let md = `### ${t('helpTitle')}\n${lines.join('\n')}`;
-        if (customCommands.length) {
-          md += `\n\n**${t('helpProjectCommands')}**\n` +
-            customCommands.map((c) => `- \`/${c.name}\` — ${c.description}`).join('\n');
-        }
-        await pushNotice(md, pid, mid);
-        break;
-      }
-      case 'clear':
-        if (selectedModel) await newConversation(pid!, mid!);
-        break;
-      case 'compact':
-        if (selectedModel) await compactConversation(pid!, mid!);
-        break;
-      case 'plan':
-        togglePlanMode();
-        break;
-      case 'mode': {
-        const wanted = args.trim().toLowerCase() as AgentMode;
-        if (!wanted || !AGENT_MODES.includes(wanted)) {
-          setInput('/mode ');
-          requestAnimationFrame(() => textareaRef.current?.focus());
-          break;
-        }
-        setAgentMode(wanted);
-        break;
-      }
-      case 'goal': {
-        const goalText = args.trim();
-        if (!goalText) {
-          setInput('/goal ');
-          requestAnimationFrame(() => textareaRef.current?.focus());
-          break;
-        }
-        if (!selectedModel) break;
-        const conversationId = activeConversationId || await newConversation(pid!, mid!);
-        useGoalStore.getState().setGoal(conversationId, goalText);
-        await sendMessage(goalText, pid!, mid!);
-        break;
-      }
-      case 'review':
-        toggleReview();
-        break;
-      case 'worktree':
-        toggleWorktrees();
-        break;
-      case 'model':
-        toggleModelSelector();
-        break;
-      case 'image':
-      case 'imagine':
-        useImageGenStore.getState().openModal(args.trim());
-        break;
-      case 'memory': {
-        // Two things are called memory here and they behave differently, so the
-        // command shows both: files the user wrote (editable, and the argument
-        // opens one) and what the assistant inferred on its own.
-        const target = args.trim().toLowerCase();
-        if (target) {
-          const match = memoryFiles.find((f) => f.path.toLowerCase().includes(target) || f.scope === target);
-          if (match) { await selectFile(match.path); break; }
-          await pushNotice(t('memoryNoSuchFile'), pid, mid);
-          break;
-        }
-
-        const fileLines = memoryFiles.length
-          ? memoryFiles.map((f) => `- \`${f.path}\` — ${t(`memoryScope_${f.scope}`)}`).join('\n')
-          : `_${t('memoryNoFiles')}_`;
-        const entries = useMemoryStore.getState().relevant(rootPath);
-        const learned = entries.length
-          ? entries.map((e) => `- ${e.text}`).join('\n')
-          : `_${t('memoryNone')}_`;
-        await pushNotice(
-          `### ${t('memoryFilesTitle')}\n${fileLines}\n\n_${t('memoryOpenHint')}_\n\n### ${t('memoryTitle')}\n${learned}`,
-          pid, mid,
-        );
-        break;
-      }
-      case 'agents':
-        if (agentsMdPath) await selectFile(agentsMdPath);
-        else await pushNotice(t('noAgentsMd'), pid, mid);
-        break;
-      case 'add-dir': {
-        // With a path, add it; without one, open the picker — same command
-        // either way, which is how Claude Code's /add-dir behaves.
-        const result = args.trim()
-          ? await addRoot(args.trim())
-          : await addRootFromDialog();
-        if (result.ok) {
-          await pushNotice(`📁 ${t('addedFolder')}: \`${result.path}\``, pid, mid);
-        } else if (result.reason && result.reason !== 'empty') {
-          const detail = result.covered?.length ? ` (${result.covered.join(', ')})` : '';
-          await pushNotice(`⚠️ ${t(`addFolder_${result.reason}`)}${detail}`, pid, mid);
-        }
-        break;
-      }
-    }
+    await runConversationCommand(command, args);
   };
 
   // Write a captured line to the chosen memory file, then reload the workspace

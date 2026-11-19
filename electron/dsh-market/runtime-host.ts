@@ -3,11 +3,9 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Context, Inject } from '@deepseek-ai/cordis';
 import {
-  type CommandContribution,
   type InvokeResult,
   type PluginContributions,
   type SkillContribution,
-  type ToolContribution,
 } from '../../src/core/dsh-market/types';
 import { chatServerName } from '../../src/core/dsh-market/naming';
 import { CORDIS_BUILTIN_SERVICES, SUPPORTED_HOST_SERVICES } from './constants';
@@ -67,8 +65,10 @@ interface RowRuntime {
   hostFiber: any;
   fiber: any;
   contributions: PluginContributions;
-  providers: Array<() => any>;
-  skillCandidates: Map<string, { provider: any; candidate: any }>;
+  rawTools: any[];
+  rawCommands: any[];
+  rawSkills: any[];
+  providers: Map<string, { provider: any; lifecycle: AbortController }>;
   nativeDispose?: () => void | Promise<void>;
   requiredServices: string[];
 }
@@ -127,6 +127,11 @@ export class RuntimeHost {
   private plugins = new Map<string, PluginRuntime>();
   private logSink: ((message: string, level?: 'info' | 'warn' | 'error') => void) | null = null;
   private generation = 0;
+  private llmPlugin: Parameters<Context['plugin']>[0] | null = null;
+
+  get llmReady(): boolean {
+    return !!this.llmPlugin;
+  }
 
   setLogSink(sink: (message: string, level?: 'info' | 'warn' | 'error') => void): void {
     this.logSink = sink;
@@ -140,7 +145,20 @@ export class RuntimeHost {
     if (this.root) return;
     this.root = new Context();
     this.log('Cordis root context created');
-    if (options?.dshHome && options.profileId) await this.mountStorage(options.dshHome, options.profileId);
+    if (options?.dshHome && options.profileId) {
+      const profileDir = path.join(options.dshHome, 'profiles', options.profileId);
+      const llmDir = path.join(profileDir, 'node_modules', '@deepseek-ai', 'dsh-llm');
+      try {
+        const { default: LlmRuntime } = await import(pathToFileURL(resolvePackageEntry(llmDir)).href);
+        const registry = this.root.plugin(LlmRuntime);
+        await registry;
+        if (registry.state !== ACTIVE || !this.root.get('llm')) throw new Error('llm service did not activate');
+        this.llmPlugin = LlmRuntime;
+      } catch (error) {
+        this.log(`LLM registry unavailable: ${errorText(error)}`, 'warn');
+      }
+      await this.mountStorage(options.dshHome, options.profileId);
+    }
   }
 
   storageInfo(): RuntimeStorageInfo {
@@ -194,7 +212,7 @@ export class RuntimeHost {
     return this.root;
   }
 
-  async load(spec: RuntimePluginSpec): Promise<RuntimePluginState> {
+  async load(spec: RuntimePluginSpec, parent?: Context): Promise<RuntimePluginState> {
     await this.start();
     const existing = this.plugins.get(spec.id);
     if (existing) await this.unload(spec.id);
@@ -208,12 +226,18 @@ export class RuntimeHost {
       plugin.state = { id: spec.id, status: 'disabled', contributions: emptyContributions() };
       return plugin.state;
     }
-    if (spec.format === 'native') return this.loadNative(plugin);
+    if (spec.format === 'native') {
+      if (spec.rows.find((row) => row.id === 'native')?.disabled) {
+        plugin.state = { id: spec.id, status: 'disabled', contributions: emptyContributions() };
+        return plugin.state;
+      }
+      return this.loadNative(plugin);
+    }
 
     try {
       const activeRows = spec.rows.filter((row) => !row.disabled);
       if (!activeRows.length) {
-        plugin.state = { id: spec.id, status: 'disabled', contributions: emptyContributions() };
+        plugin.state = { id: spec.id, status: spec.rows.length ? 'disabled' : 'loaded', contributions: emptyContributions() };
         return plugin.state;
       }
       // Resolve dependencies before creating fibers so a bundle can use a
@@ -221,7 +245,7 @@ export class RuntimeHost {
       // another installed plugin.
       const rows = [];
       const shared = new Set<string>([...SUPPORTED_HOST_SERVICES, ...CORDIS_BUILTIN_SERVICES]);
-      let bundleScope = this.ensureRoot().extend();
+      let bundleScope = (parent ?? this.ensureRoot()).extend();
       const privateServices = new Set<string>();
       for (const row of activeRows) {
         const module = await import(pathToFileURL(row.entryPath).href);
@@ -230,14 +254,30 @@ export class RuntimeHost {
         if (typeof entry !== 'function' && typeof entry.apply !== 'function') {
           throw new Error(`${row.name} has no Cordis plugin export`);
         }
-        const inject = Object.keys(Inject.resolve(entry.inject));
+        const declared = Inject.resolve(entry.inject);
+        const inject = [...new Set([...Object.keys(declared), ...(row.inject ?? [])])];
         for (const name of inject) {
           if (!shared.has(name) && !name.startsWith('storage.backend.')) privateServices.add(name);
         }
-        rows.push({ row, entry, inject });
+        // Cordis also checks the fiber's injection map on each service access.
+        // Keep the actual callback/class so config validation and construction
+        // retain their original semantics.
+        const plugin = row.inject?.length ? {
+          name: entry.name,
+          Config: entry.Config,
+          apply: typeof entry === 'function' ? entry : entry.apply,
+          inject: { ...Object.fromEntries(row.inject.map((key) => [key, null])), ...declared },
+        } : entry;
+        rows.push({ row, entry: plugin, inject });
       }
       for (const name of privateServices) bundleScope = bundleScope.isolate(name);
-      for (const { row, entry, inject } of rows) {
+      const availableInHost = new Set<string>(['tools', 'commands', 'skills', 'credentials', ...CORDIS_BUILTIN_SERVICES]);
+      while (rows.length) {
+        // A bundle may declare its consumer before the row providing a private service.
+        const ready = rows.findIndex(({ inject }) => inject.every((key) => availableInHost.has(key) || bundleScope.get(key) !== undefined));
+        if (ready < 0) throw new HostCapabilityError([...new Set(rows.flatMap(({ inject }) => inject.filter((key) =>
+          !availableInHost.has(key) && bundleScope.get(key) === undefined)))]);
+        const [{ row, entry, inject }] = rows.splice(ready, 1);
         plugin.rows.push(await this.mountRow(spec, row, bundleScope, entry, inject));
       }
     } catch (error) {
@@ -278,8 +318,10 @@ export class RuntimeHost {
       hostFiber: null,
       fiber: null,
       contributions: emptyContributions(spec.id, row.id),
-      providers: [],
-      skillCandidates: new Map(),
+      rawTools: [],
+      rawCommands: [],
+      rawSkills: [],
+      providers: new Map(),
       requiredServices: [],
     };
     const host = {
@@ -289,6 +331,7 @@ export class RuntimeHost {
         ctx.provide('tools', owner.tools);
         ctx.provide('commands', owner.commands);
         ctx.provide('skills', owner.skills);
+        ctx.effect(() => () => { for (const item of rowRuntime.providers.values()) item.lifecycle.abort(); });
         ctx.provide('credentials', {
           async resolve(ref: string) {
             const value = process.env[ref];
@@ -340,7 +383,7 @@ export class RuntimeHost {
       id: 'native',
       name: spec.name,
       entryPath: spec.nativeEntryPath,
-      config: {},
+      config: spec.rows.find((item) => item.id === 'native')?.config ?? {},
       disabled: false,
     };
     const rowRuntime: RowRuntime = {
@@ -349,8 +392,10 @@ export class RuntimeHost {
       hostFiber: null,
       fiber: null,
       contributions: emptyContributions(spec.id, 'native'),
-      providers: [],
-      skillCandidates: new Map(),
+      rawTools: [],
+      rawCommands: [],
+      rawSkills: [],
+      providers: new Map(),
       requiredServices: [],
     };
     const owner = makeFacade(spec, row, rowRuntime);
@@ -360,6 +405,7 @@ export class RuntimeHost {
         ctx.provide('tools', owner.tools);
         ctx.provide('commands', owner.commands);
         ctx.provide('skills', owner.skills);
+        ctx.effect(() => () => { for (const item of rowRuntime.providers.values()) item.lifecycle.abort(); });
       },
     };
     rowRuntime.hostFiber = scope.plugin(host);
@@ -375,7 +421,7 @@ export class RuntimeHost {
         logger: console,
         plugin: { id: spec.id, name: spec.name },
       };
-      const dispose = await withTimeout(Promise.resolve(activate(api, {})), 15_000, `activating ${spec.name}`);
+      const dispose = await withTimeout(Promise.resolve(activate(api, row.config)), 15_000, `activating ${spec.name}`);
       if (typeof dispose === 'function') rowRuntime.nativeDispose = dispose;
       plugin.rows.push(rowRuntime);
       plugin.state = { id: spec.id, status: 'loaded', contributions: collect(plugin.rows), requiredServices: [...new Set(plugin.rows.flatMap((row) => row.requiredServices))] };
@@ -423,14 +469,23 @@ export class RuntimeHost {
 
   async probe(spec: RuntimePluginSpec): Promise<{ ok: boolean; state: RuntimePluginState | null; error?: string }> {
     const temp = { ...spec, id: `__probe__:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`, enabled: true };
+    let registry: ReturnType<Context['plugin']> | undefined;
     try {
-      const state = await this.load(temp);
-      const ok = state.status === 'loaded';
+      let scope: Context | undefined;
+      if (this.llmPlugin && spec.format === 'dsh') {
+        scope = this.ensureRoot().isolate('llm');
+        registry = scope.plugin(this.llmPlugin);
+        await registry;
+      }
+      const state = await this.load(temp, scope);
+      const ok = state.status === 'loaded' || state.status === 'disabled';
       await this.unload(temp.id);
       return { ok, state, ...(ok ? {} : { error: state.error }) };
     } catch (error) {
       await this.unload(temp.id).catch(() => {});
       return { ok: false, state: null, error: errorText(error) };
+    } finally {
+      await registry?.dispose();
     }
   }
 
@@ -443,19 +498,9 @@ export class RuntimeHost {
     const started = Date.now();
     const plugin = this.plugins.get(pluginId);
     if (!plugin) return { ok: false, error: `Plugin ${pluginId} is not loaded`, durationMs: 0 };
-    const row = plugin.rows.find((item) => !rowId || item.row.id === rowId);
-    const tool = row?.contributions.tools.find((item) => item.name === name);
-    if (!tool) return { ok: false, error: `Tool ${name} is not registered by ${pluginId}`, durationMs: 0 };
-    const definition = (row as any).toolDefinitions?.get?.(name);
-    const execute = definition?.execute;
-    if (typeof execute !== 'function') {
-      // definitions live beside the contribution to keep the public shape JSON-safe
-      const raw = (row as any).rawTools?.find?.((item: any) => item.name === name);
-      if (!raw || typeof raw.execute !== 'function') {
-        return { ok: false, error: `Tool ${name} has no execute function`, durationMs: Date.now() - started };
-      }
-      return runTool(raw, args, started);
-    }
+    const definition = plugin.rows.filter((item) => !rowId || item.row.id === rowId)
+      .flatMap((row) => row.rawTools).find((tool) => tool.name === name);
+    if (!definition) return { ok: false, error: `Tool ${name} is not registered by ${pluginId}`, durationMs: 0 };
     return runTool(definition, args, started);
   }
 
@@ -463,8 +508,8 @@ export class RuntimeHost {
     const started = Date.now();
     const plugin = this.plugins.get(pluginId);
     if (!plugin) return { ok: false, error: `Plugin ${pluginId} is not loaded`, durationMs: 0 };
-    const row = plugin.rows.find((item) => !rowId || item.row.id === rowId);
-    const raw = (row as any)?.rawCommands?.find?.((item: any) => item.name === name);
+    const raw = plugin.rows.filter((item) => !rowId || item.row.id === rowId)
+      .flatMap((row) => row.rawCommands).find((command) => command.name === name);
     if (!raw || typeof raw.handler !== 'function') {
       return { ok: false, error: `Command ${name} is not registered by ${pluginId}`, durationMs: 0 };
     }
@@ -485,70 +530,33 @@ export class RuntimeHost {
     const result: SkillContribution[] = [];
     for (const plugin of this.plugins.values()) {
       for (const row of plugin.rows) {
-        for (const skill of row.contributions.skills) result.push({ ...skill });
-        for (const factory of row.providers) {
-          try {
-            const provider = factory();
-            const listed = await withTimeout(Promise.resolve(provider.list()), 20_000, 'listing skills');
-            for (const candidate of Array.isArray(listed) ? listed : []) {
-              const name = String(candidate?.name || '').trim();
-              if (!name) continue;
-              row.skillCandidates.set(name, { provider, candidate });
-              result.push({
-                pluginId: plugin.spec.id,
-                rowId: row.row.id,
-                name,
-                description: String(candidate?.description || ''),
-                provider: String(candidate?.provider || provider?.name || ''),
-                source: String(candidate?.source || ''),
-                hasContent: true,
-                candidateId: name,
-              });
-            }
-          } catch (error) {
-            this.log(`[${plugin.spec.name}] skills provider failed: ${errorText(error)}`, 'warn');
-          }
+        const candidates = await discoverSkills(row, {}, (error) => this.log(`[${plugin.spec.name}] skills provider failed: ${errorText(error)}`, 'warn'));
+        for (const { candidate, provider } of candidates.values()) {
+          result.push({
+            pluginId: plugin.spec.id, rowId: row.row.id, name: candidate.name,
+            description: String(candidate.description || ''), provider: candidate.provider || provider?.name,
+            source: candidate.source, hasContent: !!provider || typeof candidate.content === 'string' || !!candidate.locator,
+            ...(provider ? { candidateId: candidate.name } : {}),
+          });
         }
       }
     }
-    const seen = new Set<string>();
-    return result.filter((skill) => {
-      const key = `${skill.pluginId}\0${skill.name}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
+    return result;
   }
 
-  async getSkill(pluginId: string, name: string): Promise<RuntimeSkillContent | null> {
+  async getSkill(pluginId: string, name: string, rowId?: string): Promise<RuntimeSkillContent | null> {
     const plugin = this.plugins.get(pluginId);
     if (!plugin) return null;
     for (const row of plugin.rows) {
-      const direct = (row as any).rawSkills?.find?.((item: any) => item.name === name);
-      if (direct) {
-        return {
-          name: direct.name,
-          description: String(direct.description || ''),
-          provider: direct.provider,
-          content: String(direct.content || readSkillContent(direct) || ''),
-          resourceBase: direct.resourceBase,
+      if (rowId !== undefined && row.row.id !== rowId) continue;
+      try {
+        const found = await getRowSkill(row, name, {}, (error) => this.log(`[${plugin.spec.name}] skills provider failed: ${errorText(error)}`, 'warn'));
+        if (found) return {
+          name, description: String(found.description || ''), provider: found.provider,
+          content: String(found.content ?? readSkillContent(found) ?? ''), resourceBase: found.resourceBase,
         };
-      }
-      const candidate = row.skillCandidates.get(name);
-      if (candidate) {
-        try {
-          const value = await withTimeout(Promise.resolve(candidate.provider.get(candidate.candidate)), 20_000, `loading skill ${name}`);
-          return {
-            name,
-            description: String(value?.description || candidate.candidate?.description || ''),
-            provider: String(value?.provider || candidate.provider?.name || ''),
-            content: String(value?.content || ''),
-            resourceBase: value?.resourceBase,
-          };
-        } catch (error) {
-          this.log(`[${plugin.spec.name}] skill ${name} failed: ${errorText(error)}`, 'warn');
-          return null;
-        }
+      } catch (error) {
+        this.log(`[${plugin.spec.name}] skill ${name} failed: ${errorText(error)}`, 'warn');
       }
     }
     return null;
@@ -562,6 +570,8 @@ export class RuntimeHost {
     for (const id of [...this.plugins.keys()]) await this.unload(id).catch(() => {});
     if (this.root) await this.root.fiber.dispose().catch(() => {});
     this.root = null;
+    this.llmPlugin = null;
+    this.storage = { ready: false, backend: null, root: null, error: null };
   }
 }
 
@@ -592,15 +602,39 @@ function readSkillContent(spec: any): string | undefined {
   return undefined;
 }
 
+async function discoverSkills(row: RowRuntime, options: object, warn?: (error: unknown) => void) {
+  const found = new Map<string, { candidate: any; provider?: any; rank: number }>();
+  for (const candidate of row.rawSkills) {
+    if (!found.has(candidate.name)) found.set(candidate.name, { candidate, rank: 250 });
+  }
+  for (const { provider, lifecycle } of row.providers.values()) {
+    try {
+      const observed = await withTimeout(Promise.resolve(provider.list(options)), 20_000, 'listing skills');
+      const candidates = Array.isArray(observed) ? observed : observed?.candidates;
+      if (!Array.isArray(candidates) || lifecycle.signal.aborted) continue;
+      for (const candidate of candidates) {
+        if (typeof candidate?.name !== 'string' || !candidate.name) continue;
+        const rank = Number.isFinite(candidate.rank) ? candidate.rank : Infinity;
+        const previous = found.get(candidate.name);
+        if (!previous || rank < previous.rank) found.set(candidate.name, { candidate, provider, rank });
+      }
+    } catch (error) {
+      warn?.(error);
+    }
+  }
+  return found;
+}
+
+async function getRowSkill(row: RowRuntime, name: string, options: object, warn?: (error: unknown) => void) {
+  const match = (await discoverSkills(row, options, warn)).get(name);
+  if (!match?.provider) return match?.candidate;
+  return withTimeout(Promise.resolve(match.provider.get(match.candidate, options)), 20_000, `loading skill ${name}`);
+}
+
 function makeFacade(spec: RuntimePluginSpec, row: RuntimeRowSpec, runtime: RowRuntime) {
   const toolServer = chatServerName(spec.id, 'tool');
   const commandServer = chatServerName(spec.id, 'command');
-  const rawTools: any[] = [];
-  const rawCommands: any[] = [];
-  const rawSkills: any[] = [];
-  (runtime as any).rawTools = rawTools;
-  (runtime as any).rawCommands = rawCommands;
-  (runtime as any).rawSkills = rawSkills;
+  const { rawTools, rawCommands, rawSkills } = runtime;
 
   const tools = {
     register(definition: any) {
@@ -669,26 +703,31 @@ function makeFacade(spec: RuntimePluginSpec, row: RuntimeRowSpec, runtime: RowRu
         runtime.contributions.skills = runtime.contributions.skills.filter((item) => item.name !== definition.name);
       };
     },
-    registerProvider(factory: () => any) {
+    registerProvider(factory: (control: { signal: AbortSignal; invalidate: () => void }) => any) {
       if (typeof factory !== 'function') throw new Error('skills.registerProvider requires a factory');
-      runtime.providers.push(factory);
-      return () => {
-        runtime.providers = runtime.providers.filter((item) => item !== factory);
-      };
-    },
-    async list() {
-      const direct = rawSkills.map((item) => ({ ...item }));
-      for (const factory of runtime.providers) {
-        const provider = factory();
-        const listed = await provider?.list?.();
-        if (Array.isArray(listed)) direct.push(...listed);
+      const lifecycle = new AbortController();
+      try {
+        // Every lookup observes a fresh catalog, including after invalidate().
+        const provider = factory({ signal: lifecycle.signal, invalidate() {} });
+        if (!provider?.name || typeof provider.list !== 'function' || typeof provider.get !== 'function') {
+          throw new Error('A skill provider must have a name, list() and get()');
+        }
+        if (runtime.providers.has(provider.name)) throw new Error(`Duplicate skill provider: ${provider.name}`);
+        runtime.providers.set(provider.name, { provider, lifecycle });
+        return () => {
+          if (runtime.providers.get(provider.name)?.provider === provider) runtime.providers.delete(provider.name);
+          lifecycle.abort();
+        };
+      } catch (error) {
+        lifecycle.abort();
+        throw error;
       }
-      return direct;
     },
-    async get(candidate: any) {
-      const direct = rawSkills.find((item) => item.name === candidate?.name);
-      if (direct) return direct;
-      return candidate;
+    async list(options = {}) {
+      return [...(await discoverSkills(runtime, options)).values()].map(({ candidate }) => candidate);
+    },
+    async get(name: string, options = {}) {
+      return getRowSkill(runtime, name, options);
     },
   };
 

@@ -7,20 +7,13 @@ export function isUnarchivedConversation(conv: Conversation): boolean {
   return conv.archivedAt == null;
 }
 
-/**
- * Chat conversation: dialogue-only, unbound from any project workspace,
- * and never an RSI session.
- */
+/** Older records without a mode use their folder binding to choose a view. */
 export function isChatConversation(conv: Conversation): boolean {
-  return !isRsiConversation(conv) && conv.agentMode !== 'rsi' && (Boolean(conv.isChatMode) || !conv.rootPath);
+  return conv.agentMode !== 'rsi' && (conv.isChatMode ?? !conv.rootPath);
 }
 
-/**
- * Work conversation: bound to a project workspace directory,
- * not flagged as chat-only, and never an RSI session.
- */
 export function isWorkConversation(conv: Conversation): boolean {
-  return !isRsiConversation(conv) && conv.agentMode !== 'rsi' && !conv.isChatMode && Boolean(conv.rootPath);
+  return conv.agentMode !== 'rsi' && !isChatConversation(conv);
 }
 
 /**
@@ -75,7 +68,7 @@ export function groupOpenProjectConversations(
   const closed = new Map<string, Conversation[]>();
   for (const conversation of conversations) {
     if (!isWorkConversation(conversation)) continue;
-    const key = conversation.rootPath!;
+    const key = conversation.rootPath || '';
     const open = groups.get(key);
     if (open) {
       open.push(conversation);
@@ -88,7 +81,11 @@ export function groupOpenProjectConversations(
   const latest = (items: Conversation[]) => items.reduce((m, c) => Math.max(m, c.updatedAt), 0);
   return [
     ...groups.entries(),
-    ...Array.from(closed.entries()).sort((a, b) => latest(b[1]) - latest(a[1])),
+    ...Array.from(closed.entries()).sort((a, b) => {
+      if (!a[0]) return 1;
+      if (!b[0]) return -1;
+      return latest(b[1]) - latest(a[1]);
+    }),
   ];
 }
 

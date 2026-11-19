@@ -19,16 +19,12 @@ export default function DshMarketPanel() {
   const setTab = useDshMarketStore((s) => s.setTab);
   const closePanel = useDshMarketStore((s) => s.closePanel);
   const clearSelection = useDshMarketStore((s) => s.clearSelection);
-  const refresh = useDshMarketStore((s) => s.refresh);
-  const initialize = useDshMarketStore((s) => s.initialize);
+  const refreshSources = useDshMarketStore((s) => s.refreshSources);
+  const sourceBusy = useDshMarketStore((s) => s.sourceBusy);
   const clearError = useDshMarketStore((s) => s.clearError);
   const pushNotice = useDshMarketStore((s) => s.pushNotice);
   const locale = useLanguageStore((s) => s.locale);
   const t = (key: string) => marketText(locale, key);
-
-  useEffect(() => {
-    if (open) void initialize();
-  }, [open, initialize]);
 
   useEffect(() => {
     if (!open) return;
@@ -75,7 +71,7 @@ export default function DshMarketPanel() {
               <p className="text-[10.5px] text-[var(--text-muted)] truncate">{t('subtitle')}</p>
             </div>
             <div className="flex items-center gap-1.5 shrink-0">
-              <button onClick={() => void refresh()} title={t('sync')}
+              <button disabled={sourceBusy !== null} onClick={() => void refreshSources()} title={t('sync')}
                 className="w-8 h-8 rounded-xl border border-[var(--border)] text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-1)] flex items-center justify-center">
                 <FiRefreshCw size={13} />
               </button>
@@ -88,7 +84,7 @@ export default function DshMarketPanel() {
           <div className="mt-3 flex items-center gap-1">
             {tabs.map((item) => (
               <button key={item.id}
-                onClick={() => { clearSelection(); setTab(item.id); }}
+                onClick={() => setTab(item.id)}
                 className={`px-3 py-1.5 rounded-lg text-[11px] inline-flex items-center gap-1.5 border transition-colors ${tab === item.id && !selectedPluginId ? 'bg-[var(--accent-soft)] text-[var(--accent)] border-[var(--accent-border)] font-medium' : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-1)]'}`}>
                 {item.icon}{item.label}
                 {item.count !== undefined && <span className="text-[9px] opacity-60 font-mono">{item.count}</span>}

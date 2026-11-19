@@ -10,7 +10,7 @@ import {
   resolvePackageEntry,
   type RawPackageManifest,
 } from './manifest';
-import { DSH_BASELINE } from '../../src/core/dsh-market/types';
+import { DSH_BASELINE, DSH_COMPAT_LAYER_VERSION } from '../../src/core/dsh-market/types';
 
 const dirs: string[] = [];
 function tempDir(): string {
@@ -107,6 +107,24 @@ describe('bundle patch loading', () => {
     expect(() => loadBundlePatches(root, readPackageManifest(root))).toThrow('escapes the package');
   });
 
+  it('reports an unsupported YAML tag before mounting a dynamically disabled row', () => {
+    const root = tempDir();
+    writePackage(root, { name: 'demo', version: '1.0.0', dsh: { bundle: { patch: './rows.yml' } } }, {
+      'rows.yml': '- insert:\n    - id: demo\n      name: demo\n      disabled: !!js sample.flag\n',
+    });
+    expect(() => loadBundlePatches(root, readPackageManifest(root))).toThrow(/unresolved tag|Unresolved tag/);
+  });
+
+  it('checks the resolved file for both patch and main entries', () => {
+    const root = tempDir();
+    const external = path.join(tempDir(), 'outside.yml');
+    fs.writeFileSync(external, '[]');
+    writePackage(root, { name: 'demo', version: '1.0.0', main: 'link', dsh: { bundle: { patch: 'link' } } }, {});
+    fs.symlinkSync(external, path.join(root, 'link'));
+    expect(() => loadBundlePatches(root, readPackageManifest(root))).toThrow('escapes the package directory');
+    expect(() => resolvePackageEntry(root)).toThrow('escapes the package directory');
+  });
+
   it('rejects packages without a dsh.bundle declaration', () => {
     const root = tempDir();
     writePackage(root, { name: 'lib', version: '1.0.0' }, { 'index.js': '' });
@@ -189,7 +207,7 @@ describe('compatibility matrix', () => {
           version: '0.4.5',
           baseline: DSH_BASELINE.version,
           baselineCommit: DSH_BASELINE.commit,
-          layerVersion: '1.0.0',
+          layerVersion: DSH_COMPAT_LAYER_VERSION,
           environment,
           state: 'verified',
           verifiedCapabilities: ['skill:register', 'skill:get'],

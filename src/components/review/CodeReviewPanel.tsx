@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { FiGitBranch, FiSearch, FiShield, FiX } from 'react-icons/fi';
 import { useChatStore, useLanguageStore, useModelStore, useUIStore, useWorkspaceStore } from '../../stores';
+import { reviewPrompt } from '../../core/workspace/review';
 
 type ReviewScope = 'uncommitted' | 'base' | 'commit';
 
@@ -70,31 +71,12 @@ export default function CodeReviewPanel() {
       if (!result.ok) throw new Error(result.error || t('reviewReadFailed'));
       if (!(result.diff || '').trim() && !(result.status || '').trim()) throw new Error(t('reviewNoChanges'));
 
-      const maxDiff = 80_000;
-      const diff = (result.diff || '').slice(0, maxDiff);
-      const truncated = (result.diff || '').length > maxDiff;
-      const prompt = `Review the following Git change set in read-only mode.
-
-Scope: ${scope}${result.target ? ` (${result.target})` : ''}
-
-Git status:
-\`\`\`text
-${result.status || '(clean status)'}
-\`\`\`
-
-Diff:
-\`\`\`diff
-${diff || '(No tracked diff. Inspect untracked paths from Git status with read-only tools.)'}
-\`\`\`${truncated ? '\n\nThe diff was truncated. Use read-only Git/file tools to inspect the remaining changes.' : ''}
-
-Return prioritized, actionable findings with exact file and line references. Do not modify the working tree.`;
-
       const previousReviewMode = useChatStore.getState().reviewMode;
       setReviewMode(true);
       dispatched = true;
       closeReview();
       try {
-        await sendMessage(prompt, selectedModel.providerId, selectedModel.id);
+        await sendMessage(reviewPrompt(scope, result), selectedModel.providerId, selectedModel.id);
       } finally {
         useChatStore.getState().setReviewMode(previousReviewMode);
       }

@@ -1,0 +1,5 @@
+- insert:
+    - id: hello-dsh
+      name: conecode-hello-dsh
+      config:
+        greeting: 你好

@@ -59,7 +59,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   useChatStore.setState({ conversations: [], activeConversationId: null, messages: [] });
   useWorkspaceStore.setState({ rootPath: null, extraRoots: [] });
-  useUIStore.setState({ viewMode: 'work' });
+  useUIStore.setState({ viewMode: 'chat' });
 });
 
 describe('ensureWorkFolder', () => {
@@ -89,6 +89,7 @@ describe('ensureWorkFolder', () => {
     expect(created).toHaveLength(0);
     expect(useChatStore.getState().activeConversationId).toBe('conv-1');
     expect(useChatStore.getState().conversations[0]).toMatchObject({ rootPath: '/picked', isChatMode: false });
+    expect(useUIStore.getState().viewMode).toBe('work');
   });
 
   it('creates a bound conversation only after a folder is chosen when none is active', async () => {
@@ -118,5 +119,6 @@ describe('ensureWorkFolder', () => {
     expect(useWorkspaceStore.getState().rootPath).toBeNull();
     expect(useChatStore.getState().activeConversationId).toBe('conv-1');
     expect(useChatStore.getState().conversations[0]).toMatchObject({ rootPath: null, isChatMode: true });
+    expect(useUIStore.getState().viewMode).toBe('chat');
   });
 });

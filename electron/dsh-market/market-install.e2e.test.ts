@@ -82,6 +82,7 @@ describe.skipIf(process.env.DSH_MARKET_INSTALL_E2E !== '1')('market installation
       return git('rev-parse', 'HEAD');
     }
     const firstCommit = commit('1.0.0');
+    git('tag', '-a', 'stable', '-m', 'Annotated release');
     vi.stubEnv('GIT_CONFIG_COUNT', '3');
     vi.stubEnv('GIT_CONFIG_KEY_0', `url.${pathToFileURL(repo).href}.insteadOf`);
     vi.stubEnv('GIT_CONFIG_VALUE_0', url);
@@ -92,10 +93,54 @@ describe.skipIf(process.env.DSH_MARKET_INSTALL_E2E !== '1')('market installation
     const service = market();
     const preview = await service.inspectRepository(url, 'main', subdir);
     expect(preview.commit).toBe(firstCommit);
+    expect((await service.inspectRepository(url, 'stable', subdir)).commit).toBe(firstCommit);
     expect(commit('1.1.0')).not.toBe(firstCommit);
     await expect(service.installRepository('default', url, 'main', subdir)).rejects.toThrow('exact lowercase 40-character commit');
     const installed = await service.installRepository('default', preview.url, preview.commit, preview.subdir);
     expect(installed).toMatchObject({ version: '1.0.0', status: 'loaded', source: { commit: firstCommit, subdir } });
+  }, 120_000);
+
+  it('applies a patch-only layer to a subpath-only bundle across enable, rollback and uninstall', async () => {
+    const service = market();
+    const source = temp();
+    const example = path.resolve('examples/dsh-plugins/hello-dsh');
+    const manifest = JSON.parse(fs.readFileSync(path.join(example, 'package.json'), 'utf8'));
+    fs.writeFileSync(path.join(source, 'package.json'), JSON.stringify({ ...manifest, exports: { './host': './host.mjs' } }));
+    const code = fs.readFileSync(path.join(example, 'index.mjs'), 'utf8').replace(
+      '  ctx.commands.register', "  if (config.greeting === 'invalid') throw new Error('invalid greeting');\n  ctx.commands.register",
+    );
+    fs.writeFileSync(path.join(source, 'host.mjs'), code);
+    fs.writeFileSync(path.join(source, 'cordis.patch.yml'), JSON.stringify([
+      { insert: [{ id: 'hello', name: manifest.name + '/host', config: { greeting: 'Original' } }] },
+    ]));
+    const base = await service.installLocal('default', source);
+    const run = async () => (await service.invokeCommand('default', base.id, 'hello_dsh', 'DSH')).rendered;
+    expect(await run()).toContain('Original');
+    const layer = temp();
+    function writeLayer(version: string, greeting: string) {
+      fs.writeFileSync(path.join(layer, 'package.json'), JSON.stringify({
+        name: 'greeting-override', version, dsh: { bundle: { patch: './patch.json' } },
+      }));
+      fs.writeFileSync(path.join(layer, 'patch.json'), JSON.stringify([{ id: 'hello', config: { greeting } }]));
+    }
+    writeLayer('1.0.0', 'First');
+    const override = await service.installLocal('default', layer);
+    expect(override.rows).toHaveLength(0);
+    expect(await run()).toContain('First');
+    await service.setEnabled('default', override.id, false);
+    expect(await run()).toContain('Original');
+    await service.setEnabled('default', override.id, true);
+    expect(await run()).toContain('First');
+    writeLayer('1.1.0', 'invalid');
+    await expect(service.installLocal('default', layer)).rejects.toThrow('invalid greeting');
+    expect(await run()).toContain('First');
+    writeLayer('1.2.0', 'Second');
+    await service.installLocal('default', layer);
+    expect(await run()).toContain('Second');
+    await service.rollback('default', override.id, '1.0.0');
+    expect(await run()).toContain('First');
+    await service.uninstall('default', override.id);
+    expect(await run()).toContain('Original');
   }, 120_000);
 
   it('updates and rolls back a DSH plugin installed from checksum-verified archives', async () => {

@@ -21,7 +21,7 @@ export interface DshBaseline {
 }
 
 /** Version of ConeCode's own adapter, independent from the DSH baseline. */
-export const DSH_COMPAT_LAYER_VERSION = '1.0.0';
+export const DSH_COMPAT_LAYER_VERSION = '1.1.0';
 
 export const DSH_BASELINE: DshBaseline = {
   version: '0.2.2-rc.1',

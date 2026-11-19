@@ -24,15 +24,16 @@ function tempRoot(): string {
 
 function writeTraceFixture(dir: string): void {
   fs.mkdirSync(dir, { recursive: true });
+  const day = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
   const rows = [
-    { v: 1, sessionId: 's1', at: '2026-11-06T10:00:00.000Z', tool: 'bash', durationMs: 120, argChars: 10, resultChars: 20, isError: false },
-    { v: 1, sessionId: 's1', at: '2026-11-06T10:01:00.000Z', tool: 'bash', durationMs: 100, argChars: 10, resultChars: 20, isError: false },
-    { v: 1, sessionId: 's2', at: '2026-11-06T10:02:00.000Z', tool: 'web_fetch', durationMs: 5000, argChars: 10, resultChars: 20, isError: true },
-    { v: 1, sessionId: 's2', at: '2026-11-06T10:03:00.000Z', tool: 'web_fetch', durationMs: 5100, argChars: 10, resultChars: 20, isError: true },
-    { v: 1, sessionId: 's2', at: '2026-11-06T10:04:00.000Z', tool: 'web_fetch', durationMs: 5200, argChars: 10, resultChars: 20, isError: true },
-    { v: 1, sessionId: 's2', at: '2026-11-06T10:05:00.000Z', tool: 'web_fetch', durationMs: 5300, argChars: 10, resultChars: 20, isError: true },
+    { v: 1, sessionId: 's1', at: `${day}T10:00:00.000Z`, tool: 'bash', durationMs: 120, argChars: 10, resultChars: 20, isError: false },
+    { v: 1, sessionId: 's1', at: `${day}T10:01:00.000Z`, tool: 'bash', durationMs: 100, argChars: 10, resultChars: 20, isError: false },
+    { v: 1, sessionId: 's2', at: `${day}T10:02:00.000Z`, tool: 'web_fetch', durationMs: 5000, argChars: 10, resultChars: 20, isError: true },
+    { v: 1, sessionId: 's2', at: `${day}T10:03:00.000Z`, tool: 'web_fetch', durationMs: 5100, argChars: 10, resultChars: 20, isError: true },
+    { v: 1, sessionId: 's2', at: `${day}T10:04:00.000Z`, tool: 'web_fetch', durationMs: 5200, argChars: 10, resultChars: 20, isError: true },
+    { v: 1, sessionId: 's2', at: `${day}T10:05:00.000Z`, tool: 'web_fetch', durationMs: 5300, argChars: 10, resultChars: 20, isError: true },
   ];
-  fs.writeFileSync(path.join(dir, 'tool-trace-2026-11.jsonl'), rows.map((row) => JSON.stringify(row)).join('\n'), 'utf8');
+  fs.writeFileSync(path.join(dir, `tool-trace-${day.slice(0, 7)}.jsonl`), rows.map((row) => JSON.stringify(row)).join('\n'), 'utf8');
 }
 
 function writeStorageProbe(dir: string): void {
@@ -107,7 +108,7 @@ describe.skipIf(!enabled)('real DSH community plugins', () => {
   let root: string;
   const records: EvidenceRecord[] = [];
   const env = {
-    appVersion: process.env.npm_package_version || 'test',
+    appVersion: JSON.parse(fs.readFileSync('package.json', 'utf8')).version as string,
     electronVersion: process.versions.electron || 'unknown',
     nodeVersion: process.versions.node,
     ...(process.versions.chrome ? { chromeVersion: process.versions.chrome } : {}),
@@ -353,12 +354,12 @@ describe.skipIf(!enabled)('real DSH community plugins', () => {
       name: 'dsh-find-plugin',
       version: '0.4.0',
       state: 'partial',
-      capabilities: ['tool:find_dsh_plugin', 'curated fallback'],
+      capabilities: ['tool:find_dsh_plugin'],
       missing: ['@deepseek-ai/dsh-tools declared range excludes 0.2.2-rc.1'],
       evidence: [
         { kind: 'error-path', summary: 'Installation without an exemption was refused with the exact peer requirement.' },
         { kind: 'install', summary: 'Installed with an exact-version exemption and the shared 0.2.2-rc.1 tool peer.' },
-        { kind: 'tool', summary: 'Live GitHub search returned ranked DSH plugins.', observation: JSON.stringify((found.value as any).results.slice(0, 2)) },
+        { kind: 'tool', summary: 'A terminal search returned a nonempty list of DSH plugins.', observation: JSON.stringify((found.value as any).results.slice(0, 2)) },
       ],
       note: 'Author-declared peer range excludes the baseline; compatibility is partial and marked as such.',
     });
@@ -388,17 +389,6 @@ describe.skipIf(!enabled)('real DSH community plugins', () => {
     expect(stillOld?.version).toBe('0.2.0');
     const radarAfterFailure = await service.invokeCommand('default', 'dsh-plugin-error-radar', 'radar', '');
     expect(radarAfterFailure.ok).toBe(true);
-    records.push({
-      name: 'repository-import',
-      version: '1',
-      state: 'verified',
-      capabilities: ['git:ls-remote', 'git:pinned-fetch', 'git:install', 'profile:switch'],
-      missing: [],
-      evidence: [
-        { kind: 'install', summary: 'A Git repository URL was inspected and pinned to commit ccab614d6045625c359f4416e0760f93f7abe260, installed into an isolated profile, listed its skill, and was removed again.' },
-      ],
-    });
-
     records.push({
       name: 'dsh-plugin-error-radar',
       version: '0.2.0',

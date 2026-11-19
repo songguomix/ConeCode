@@ -1,0 +1,11 @@
+{
+  "name": "conecode-hello-dsh",
+  "version": "1.0.0",
+  "description": "A configurable DSH greeting command",
+  "license": "MIT",
+  "type": "module",
+  "exports": "./index.mjs",
+  "files": ["index.mjs", "cordis.patch.yml"],
+  "engines": { "dsh": ">=0.2.2-0 <0.3.0" },
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+}

@@ -33,9 +33,10 @@ import { RsiExecutionMonitor, type RsiToolEvidence } from '../core/agents/rsiRun
 import { useInstallGateStore, isHolding } from './installGate.store';
 import { usePluginStore } from './plugin.store';
 import { useProviderStore } from './provider.store';
+import { getGptConstraintStatus, learnGptConstraintAlias } from './gptConstraintChoice';
 import { useImageGenStore } from './imageGen.store';
 import { useAutoScreenshotStore } from './autoScreenshot.store';
-import { isUnarchivedConversation, pickReusableConversation } from '../core/workspace/conversations';
+import { isChatConversation, isWorkConversation, isUnarchivedConversation, pickReusableConversation } from '../core/workspace/conversations';
 import { usePromptStore } from './prompt.store';
 import { resolveImageGenCredentials, requestImageGeneration } from '../core/image/imageGen';
 import { ASPECT_RATIOS, resolveArtStyleId } from '../core/image/prompts';
@@ -66,12 +67,9 @@ import { normalizeWebUrl, isLocalUrl, parseResultRef } from '../core/browser/pol
 import { toSample, checkBreaches, describeBreach, formatBytes, DEFAULT_THRESHOLDS } from '../core/monitor/perf';
 import { useMonitorStore } from './monitor.store';
 import {
-  gptConstraintSessionState,
   gptDetector,
   hardConstraintInjector,
   postGenerationGuard,
-  UserConfirmationGate,
-  type ConstraintSessionStatus,
 } from '../core/constraints';
 
 /** The headless built-in browser (main process), if this session has one. */
@@ -148,6 +146,8 @@ export interface SendMessageOptions {
    * not ride along with—or be consumed by—this turn.
    */
   keepComposerImages?: boolean;
+  /** Attachments supplied by a remote composer belong only to this turn. */
+  images?: string[];
   /** Internal task context captured when retrieval completes. */
   taskMemory?: TaskMemoryContext;
   /** Synthetic continuation uses the current task memory. */
@@ -859,6 +859,7 @@ export interface QueuedMessage {
   /** The user asked this message to guide the current run at a safe boundary. */
   steer: boolean;
   steerError: string | null;
+  images?: string[];
 }
 
 /** Re-entrancy guard: endRun fires on every run end, flush chains from it. */
@@ -871,33 +872,6 @@ const persistingSteers = new Map<string, string>();
  * flushQueue (background view) share it; live-array writes only touch the
  * conversation on screen.
  */
-const chatConfirmationGate = new UserConfirmationGate<{
-  providerId: string;
-  modelId: string;
-  options: SendMessageOptions;
-}>({
-  detector: gptDetector,
-  sessionState: gptConstraintSessionState,
-  isTTY: () => false,
-});
-
-function syncGptConstraintState(convId: string, conv?: Conversation): void {
-  if (conv?.gptConstraintState) {
-    gptConstraintSessionState.hydrateSession(convId, conv.gptConstraintState, {
-      detectedModel: conv.modelId,
-    });
-  }
-}
-
-async function persistGptConstraintState(convId: string, status: ConstraintSessionStatus): Promise<void> {
-  useChatStore.setState((s) => ({
-    conversations: s.conversations.map((c) => (c.id === convId ? { ...c, gptConstraintState: status } : c)),
-  }));
-  await window.electronAPI?.conversation?.update?.(convId, { gptConstraintState: status })?.catch(() => {});
-}
-
-export { chatConfirmationGate };
-
 async function deliverToConversation(convId: string, content: string, providerId: string, modelId: string, options: SendMessageOptions = {}): Promise<void> {
   const set = useChatStore.setState;
   if (providerId === FREE_PROVIDER_ID && useFreeStore.getState().weeklyUsed >= FREE_WEEKLY_TOKEN_LIMIT) {
@@ -905,24 +879,6 @@ async function deliverToConversation(convId: string, content: string, providerId
     return;
   }
   const get = useChatStore.getState;
-  if (chatConfirmationGate.hasPendingConfirmation(convId) && content.trim()) {
-    const resolved = chatConfirmationGate.resolveFromReply(convId, content);
-    if (resolved.handled && resolved.decision && resolved.pendingRequest) {
-      const replyMsg: Message = {
-        id: uuidv4(),
-        conversationId: convId,
-        role: 'user',
-        content,
-        createdAt: Date.now(),
-      };
-      await window.electronAPI.message.create(replyMsg);
-      set((s) => (s.activeConversationId === convId ? { messages: [...s.messages, replyMsg] } : {}));
-      await persistGptConstraintState(convId, resolved.decision);
-      const pendingPayload = resolved.pendingRequest.payload;
-      await runAgentLoop(convId, pendingPayload.providerId, pendingPayload.modelId, pendingPayload.options);
-      return;
-    }
-  }
   const transcript = get().activeConversationId === convId ? get().messages : [];
   const last = transcript[transcript.length - 1];
   if (options.rsiExecution === undefined && last?.isQuestion && resumeRsiExecution(convId)
@@ -935,12 +891,13 @@ async function deliverToConversation(convId: string, content: string, providerId
   // Queued/continue deliveries opt out: an image sitting in the box when the
   // queue flushes is the user's next message, never this replay's attachment.
   const wsState = useWorkspaceStore.getState();
-  const attachedImages = options.keepComposerImages
+  const composerImages = options.keepComposerImages || options.images
     ? []
     : wsState.contextFiles
       .filter((f) => f.isImage && f.dataUrl)
       .map((f) => f.dataUrl as string);
-  if (attachedImages.length) {
+  const attachedImages = options.images ?? composerImages;
+  if (composerImages.length) {
     useWorkspaceStore.setState((s) => ({
       contextFiles: s.contextFiles.filter((f) => !(f.isImage && f.dataUrl)),
     }));
@@ -2606,6 +2563,7 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
         conversationId: convId,
         role: 'user',
         content: next.content,
+        ...(next.images?.length ? { images: next.images } : {}),
         createdAt: Date.now(),
       };
       await persistMessage(message);
@@ -2786,6 +2744,7 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
       let turnFinishReason: string | null = null;
       const finishReason = () => turnFinishReason ?? runFinishReasons.get(convId) ?? null;
       let streamResult: any;
+      let requestUsedGptConstraints = false;
       let fallbackToPrompt = false;
       let observedFrame: ComputerFrame | null = null;
       let observedAppList: { targets: ComputerTarget[]; targetRevision: number } | null = null;
@@ -2804,41 +2763,15 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
           if (abortController.signal.aborted || !ownsRun()) break;
           observedFrame = computerFrame;
           observedAppList = appList;
-          syncGptConstraintState(convId, convRecord);
-          const activeProvider = useProviderStore.getState().providers.find((p) => p.id === providerId);
-          const providerBaseUrl = activeProvider?.baseUrl;
-          if (iteration === 0 && streamAttempt === 0) {
-            const gateOutcome = await chatConfirmationGate.evaluate({
-              sessionId: convId,
-              modelName: modelId,
-              baseUrl: providerBaseUrl,
-              payload: { providerId, modelId, options },
-            });
-            if (gateOutcome.action === 'awaiting_confirmation') {
-              const confirmMsg: Message = {
-                id: uuidv4(),
-                conversationId: convId,
-                role: 'assistant',
-                content: gateOutcome.event.promptText,
-                modelId,
-                providerId,
-                createdAt: Date.now(),
-                isQuestion: true,
-                questionOptions: gateOutcome.event.options,
-              };
-              await window.electronAPI.message.create(confirmMsg);
-              set((s) => (s.activeConversationId === convId ? { messages: [...s.messages, confirmMsg] } : {}));
-              waitingForUser = true;
-              return;
-            }
-          }
           const rawRequest = requestMessages(observedFrame);
-          const sessionConstraintState = gptConstraintSessionState.getStatus(convId);
-          const request = sessionConstraintState === 'ENABLED'
+          const baseUrl = useProviderStore.getState().providers.find((provider) => provider.id === providerId)?.baseUrl;
+          const gptModel = gptDetector.detect(modelId, baseUrl);
+          requestUsedGptConstraints = gptModel.isGpt && getGptConstraintStatus(providerId, modelId) === 'ENABLED';
+          const request = requestUsedGptConstraints
             ? hardConstraintInjector.inject({
                 messages: rawRequest,
-                sessionState: sessionConstraintState,
-                modelName: modelId,
+                sessionState: 'ENABLED',
+                modelName: gptModel.normalizedModel,
               })
             : rawRequest;
           // Disk transcripts omit transient pixels. A conversation switch or
@@ -2870,6 +2803,12 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
             // field would break every turn, so prompt mode omits it entirely.
             ...(useNativeTools ? { tools: toolset, toolChoice: 'auto' as const } : {}),
           });
+          // The OpenAI adapter probes in the Electron main process. Its alias table
+          // is separate from the renderer table used for the next model choice.
+          const probe = streamResult?._gptProbe;
+          if (probe?.isGpt === true && probe.rawModel === modelId && typeof probe.normalizedModel === 'string') {
+            learnGptConstraintAlias(providerId, modelId, probe);
+          }
           if (screenshotForReview && !abortController.signal.aborted && ownsRun()) {
             rsiMonitor.confirmScreenshotReview(screenshotForReview.ticket);
             delete rsiSession.pendingScreenshot;
@@ -3013,9 +2952,8 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
         .filter((s) => s && s.trim())
         .join('\n');
 
-      const activeConstraintStatus = gptConstraintSessionState.getStatus(convId);
-      if (activeConstraintStatus === 'ENABLED' && finalContent.trim()) {
-        postGenerationGuard.enforce(finalContent, activeConstraintStatus);
+      if (requestUsedGptConstraints && getGptConstraintStatus(providerId, modelId) === 'ENABLED' && finalContent.trim()) {
+        postGenerationGuard.enforce(finalContent, 'ENABLED');
       }
 
       // Some models (e.g. Xiaomi mimo-v2.5-pro) put their ENTIRE reply — including
@@ -4308,7 +4246,7 @@ interface ChatStore {
    * conversation instead of blocking. Returns 'sent' when the run already
    * ended (delivered straight away), 'queued' normally, 'dropped' on garbage.
    */
-  enqueueMessage: (conversationId: string, content: string, providerId: string, modelId: string) => 'queued' | 'sent' | 'dropped';
+  enqueueMessage: (conversationId: string, content: string, providerId: string, modelId: string, images?: string[]) => 'queued' | 'sent' | 'dropped';
   steerQueuedMessage: (conversationId: string, id: string) => void;
   dequeueMessage: (conversationId: string, id: string) => void;
   /** Send the head of the queue, unless the run is live, held, or waiting. */
@@ -4351,7 +4289,7 @@ interface ChatStore {
   compactConversation: (providerId: string, modelId: string) => Promise<void>;
   pushNotice: (markdown: string, providerId?: string, modelId?: string) => Promise<void>;
   /** Delete `messageId` and every message after it (checkpoint rollback). */
-  truncateFrom: (messageId: string) => Promise<void>;
+  truncateFrom: (messageId: string, transcript?: Message[]) => Promise<void>;
 }
 
 export const useChatStore = create<ChatStore>((set, get) => ({
@@ -4415,10 +4353,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     // session orphaned in Chat or Work view.
     if (conv && isRsiConversation(conv) && mode !== 'rsi') {
       const vm = useUIStore.getState().viewMode;
+      const matchesView = vm === 'chat' ? isChatConversation : isWorkConversation;
       const targetConv = get().conversations.find((c) =>
-        isUnarchivedConversation(c) && (vm === 'chat'
-          ? (!isRsiConversation(c) && (Boolean(c.isChatMode) || !c.rootPath))
-          : (!isRsiConversation(c) && !c.isChatMode && Boolean(c.rootPath))),
+        isUnarchivedConversation(c) && matchesView(c),
       );
       if (targetConv) {
         void get().setActiveConversation(targetConv.id);
@@ -4488,8 +4425,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       // layer only keeps what it is told about).
       isChatMode: isChat,
     });
-    conv.isChatMode = isChat;
     useTodosStore.getState().clearTodos();
+    useUIStore.getState().setViewMode(isChat ? 'chat' : 'work');
     set((s) => ({ conversations: [conv, ...s.conversations], activeConversationId: conv.id, messages: [] }));
     return conv.id;
   },
@@ -4532,6 +4469,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       }
       if (get().activeConversationId !== reusable.id) {
         await get().setActiveConversation(reusable.id);
+      } else {
+        useUIStore.getState().setViewMode(isChat ? 'chat' : 'work');
       }
       return reusable.id;
     });
@@ -4616,15 +4555,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     // switching to any other conversation cannot inherit it.
     const restoredAgentMode = conversation?.agentMode ?? 'standard';
     set({ agentMode: restoredAgentMode });
-    if (restoredAgentMode === 'rsi') {
-      useUIStore.getState().setViewMode('work');
-    } else if (conversation) {
-      if (conversation.isChatMode || !conversation.rootPath) {
-        useUIStore.getState().setViewMode('chat');
-      } else {
-        useUIStore.getState().setViewMode('work');
-      }
-    }
+    useUIStore.getState().setViewMode(isChatConversation(conversation) ? 'chat' : 'work');
     if (conversation?.providerId && conversation.modelId) {
       const { useModelStore } = await import('./model.store');
       if (request !== conversationLoadRequest || get().activeConversationId !== id) return;
@@ -4684,6 +4615,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     set((s) => ({
       conversations: s.conversations.map((c) => c.id === convId ? { ...c, rootPath, isChatMode: false } : c),
     }));
+    if (get().activeConversationId === convId) useUIStore.getState().setViewMode('work');
   },
 
   ensureWorkFolder: async () => {
@@ -4926,12 +4858,12 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
   },
 
-  enqueueMessage: (conversationId, content, providerId, modelId) => {
-    if (!content.trim() || !providerId || !modelId) return 'dropped';
+  enqueueMessage: (conversationId, content, providerId, modelId, images) => {
+    if ((!content.trim() && !images?.length) || !providerId || !modelId) return 'dropped';
     if (!get().conversations.some((c) => c.id === conversationId)) return 'dropped';
     if (!get().streamingRuns[conversationId]) {
       // Race: the run ended between render and Enter — deliver straight away.
-      void deliverToConversation(conversationId, content, providerId, modelId);
+      void deliverToConversation(conversationId, content, providerId, modelId, { images });
       return 'sent';
     }
     const item: QueuedMessage = {
@@ -4942,6 +4874,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       createdAt: Date.now(),
       steer: false,
       steerError: null,
+      ...(images?.length ? { images } : {}),
     };
     set((s) => ({
       queuedMessages: {
@@ -5019,7 +4952,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           [conversationId]: (s.queuedMessages[conversationId] || []).filter((item) => item.id !== head.id),
         },
       }));
-      await deliverToConversation(conversationId, head.content, head.providerId, head.modelId, { keepComposerImages: true });
+      await deliverToConversation(conversationId, head.content, head.providerId, head.modelId, { keepComposerImages: true, images: head.images });
     } finally {
       flushingQueues.delete(conversationId);
     }
@@ -5072,7 +5005,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     const index = messages.findIndex((m) => m.id === messageId && m.conversationId === convId);
     const original = messages[index];
     if (!convId || !original || original.role !== 'user' || original.isToolResult || original.isLocalNotice ||
-        !content.trim() || !providerId || !modelId || get().messageEdits[convId]) return;
+        (!content.trim() && !original.images?.length) || !providerId || !modelId || get().messageEdits[convId]) return;
 
     set((s) => ({ messageEdits: { ...s.messageEdits, [convId]: true }, error: null }));
     // Invalidate the old run before replacing history; late chunks cannot own
@@ -5206,10 +5139,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   // Drop the tail of the transcript, in storage as well as in memory, so a
   // rolled-back turn doesn't come back on reload — and so the model is never
   // re-sent messages describing changes that no longer exist on disk.
-  truncateFrom: async (messageId) => {
-    const snapshot = get().messages;
+  truncateFrom: async (messageId, snapshot = get().messages) => {
     const idx = snapshot.findIndex((m) => m.id === messageId);
     if (idx === -1) return;
+    const conversationId = snapshot[idx].conversationId;
     const doomed = new Set(snapshot.slice(idx).map((m) => m.id));
     for (const id of doomed) {
       try { await window.electronAPI.message.delete(id); } catch {}
@@ -5217,7 +5150,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     // Remove exactly the doomed ids rather than slicing the snapshot: a stream
     // that was still unwinding can append while those deletes are in flight, and
     // restoring the sliced array would silently drop whatever arrived.
-    set((s) => ({ messages: s.messages.filter((m) => !doomed.has(m.id)), error: null }));
+    set((s) => s.activeConversationId === conversationId
+      ? { messages: s.messages.filter((m) => !doomed.has(m.id)), error: null }
+      : {});
   },
 
   // Append a UI-only notice to the transcript (e.g. /help output). Not sent back

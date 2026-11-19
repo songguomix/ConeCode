@@ -4,12 +4,11 @@ import {
 } from 'react-icons/fi';
 import type { RepositoryInspection } from '../../core/dsh-market/types';
 import { useDshMarketStore } from '../../stores/dshMarket.store';
-import { CompatBadge, PluginIcon } from './MarketCommon';
+import { CompatBadge, PluginIcon, useMarketDialogEscape } from './MarketCommon';
 
-export default function RepositoryImportDialog({ t, onClose, onInstalled }: {
+export default function RepositoryImportDialog({ t, onClose }: {
   t: (key: string) => string;
   onClose: () => void;
-  onInstalled: () => void;
 }) {
   const installRepository = useDshMarketStore((s) => s.installRepository);
   const [input, setInput] = useState('');
@@ -22,13 +21,16 @@ export default function RepositoryImportDialog({ t, onClose, onInstalled }: {
   const [installing, setInstalling] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  useMarketDialogEscape(onClose);
+
   const inspect = async () => {
     setError(null);
     setInspection(null);
     setAcceptRisk(false);
+    setAllowScripts(false);
     setInspecting(true);
     try {
-      const bridge = (window as any).electronAPI?.dshMarket;
+      const bridge = window.electronAPI?.dshMarket;
       if (!bridge?.inspectRepository) throw new Error('Electron runtime is unavailable.');
       const result = await bridge.inspectRepository(input.trim(), ref.trim() || undefined, subdir.trim() || undefined);
       setInspection(result);
@@ -45,7 +47,6 @@ export default function RepositoryImportDialog({ t, onClose, onInstalled }: {
     setInstalling(true);
     try {
       await installRepository(inspection, acceptRisk, allowScripts);
-      onInstalled();
       onClose();
     } catch (installError) {
       setError(`${t('repoInstallFailed')}: ${installError instanceof Error ? installError.message : String(installError)}`);
@@ -116,10 +117,6 @@ export default function RepositoryImportDialog({ t, onClose, onInstalled }: {
               className="h-9 px-3 rounded-xl bg-[var(--accent)] text-white text-[11px] font-medium inline-flex items-center gap-1.5 disabled:opacity-40">
               <FiSearch size={12} />{inspecting ? t('inspectingRepo') : t('inspectRepo')}
             </button>
-            <label className="inline-flex items-center gap-1.5 text-[10px] text-[var(--text-secondary)] cursor-pointer">
-              <input type="checkbox" checked={allowScripts} onChange={(event) => setAllowScripts(event.target.checked)} className="accent-[var(--accent)]" />
-              {t('allowScripts')}
-            </label>
             <span className="text-[9.5px] text-[var(--text-muted)]">{t('repoPublicOnly')}</span>
           </div>
 
@@ -156,6 +153,12 @@ export default function RepositoryImportDialog({ t, onClose, onInstalled }: {
                   )}
                 </div>
               </div>
+              {inspection.plugin.format === 'dsh' && (
+                <label title={t('scriptsHint')} className="mt-2 inline-flex items-center gap-1.5 text-[10px] text-[var(--text-secondary)] cursor-pointer">
+                  <input type="checkbox" checked={allowScripts} onChange={(event) => setAllowScripts(event.target.checked)} className="accent-[var(--accent)]" />
+                  {t('allowScripts')}
+                </label>
+              )}
               {incompatible && (
                 <label className="mt-3 flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 p-2.5 text-[10.5px] text-[var(--text-secondary)]">
                   <input type="checkbox" checked={acceptRisk} onChange={(event) => setAcceptRisk(event.target.checked)} className="mt-0.5 accent-amber-500" />

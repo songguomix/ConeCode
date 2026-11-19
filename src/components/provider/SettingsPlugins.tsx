@@ -97,6 +97,14 @@ export default function SettingsPlugins({ t }: { t: (k: string) => string }) {
     if (!dshSnapshot) void initializeDsh();
   }, [dshSnapshot, initializeDsh]);
 
+  const showMarket = (tab: 'discover' | 'installed', pluginName?: string, version?: string) => {
+    const market = useDshMarketStore.getState();
+    market.setTab(tab);
+    void openDshMarket();
+    if (pluginName) void market.selectPlugin(pluginName, version);
+    useUIStore.getState().toggleSettings();
+  };
+
   const plugins = useMemo(() => selectPlugins(), [custom, disabled, installedSkills]);
   const q = query.trim().toLowerCase();
   const matches = (p: PluginEntry) =>
@@ -124,7 +132,7 @@ export default function SettingsPlugins({ t }: { t: (k: string) => string }) {
             </div>
             <div className="flex items-center gap-2 shrink-0">
               <button
-                onClick={() => void useMarketStore.getState().refresh()}
+                onClick={() => { void useMarketStore.getState().refresh(); void useDshMarketStore.getState().refreshSources(); }}
                 title={t('pluginRefresh')}
                 className="w-8 h-8 rounded-xl flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-1)] border border-[var(--border)] transition-all shadow-2xs cursor-pointer"
               >
@@ -142,7 +150,7 @@ export default function SettingsPlugins({ t }: { t: (k: string) => string }) {
                     <div className="fixed inset-0 z-40" onClick={() => setAddOpen(false)} />
                     <div className="absolute right-0 top-full mt-1.5 w-44 rounded-2xl border border-[var(--border)] bg-[var(--bg-2)] shadow-2xl z-50 py-1.5 anim-menu ring-1 ring-black/5 dark:ring-white/10">
                       <button
-                        onClick={() => { setAddOpen(false); void openDshMarket(); useUIStore.getState().toggleSettings(); }}
+                        onClick={() => { setAddOpen(false); showMarket('discover'); }}
                         className="w-full flex items-center gap-2.5 px-3.5 py-2 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-3)] transition-colors cursor-pointer"
                       >
                         <FiBox size={13} />{t('pluginMarket')}
@@ -172,14 +180,14 @@ export default function SettingsPlugins({ t }: { t: (k: string) => string }) {
               <h4 className="text-xs font-semibold text-[var(--text-secondary)] uppercase tracking-wider">{td('title')}</h4>
               <span className="text-[10px] text-[var(--text-muted)]">{dshSnapshot?.installed.length ?? 0}</span>
               <button
-                onClick={() => { void openDshMarket(); useUIStore.getState().toggleSettings(); }}
+                onClick={() => { showMarket('discover'); }}
                 className="ml-auto text-[10.5px] text-[var(--accent)] hover:underline"
               >
                 {td('discover')} →
               </button>
             </div>
             <div className="h-[520px] rounded-2xl border border-[var(--border)] bg-[var(--bg-2)]/60 overflow-hidden flex flex-col">
-              <InstalledView t={td} />
+              <InstalledView t={td} onOpenDetails={(name, version) => showMarket('installed', name, version)} />
             </div>
           </div>
 

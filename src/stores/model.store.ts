@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { AIModel } from '../types';
 import { FREE_PROVIDER_ID } from '../core/providers/free.adapter';
+import { confirmPickedGptModel, resetGptConstraintChoice } from './gptConstraintChoice';
 
 // Models that the user manually flagged as reasoning-capable (the 🧠 toggle).
 // Persisted to localStorage and re-applied after every fetch, because each
@@ -140,7 +141,8 @@ interface ModelStore {
   fetchModels: (providerId: string) => Promise<boolean>;
   fetchAllModels: () => Promise<void>;
   replaceProviderModels: (providerId: string, models: AIModel[]) => void;
-  selectModel: (modelId: string, providerId?: string, recordRecent?: boolean) => void;
+  /** Restoring a saved selection passes false to skip recent history and the interactive GPT prompt. */
+  selectModel: (modelId: string, providerId?: string, interactive?: boolean) => void;
   getSelectedModel: () => AIModel | null;
   toggleFavorite: (modelId: string) => Promise<void>;
   toggleReasoning: (providerId: string, modelId: string) => void;
@@ -247,13 +249,16 @@ export const useModelStore = create<ModelStore>((set, get) => ({
     }
   },
 
-  selectModel: (modelId, providerId, recordRecent = true) => {
+  selectModel: (modelId, providerId, interactive = true) => {
     const resolvedProviderId = providerId ?? Array.from(get().models.entries())
       .find(([, list]) => list.some((m) => m.id === modelId))?.[0] ?? null;
     if (!resolvedProviderId || !get().models.get(resolvedProviderId)?.some((model) => model.id === modelId)) return;
     set({ selectedModelId: modelId, selectedProviderId: resolvedProviderId });
     saveLastModel(resolvedProviderId, modelId);
-    if (recordRecent) void get().addToRecent(modelId).catch(() => {});
+    if (interactive) {
+      confirmPickedGptModel(resolvedProviderId, modelId);
+      void get().addToRecent(modelId).catch(() => {});
+    }
   },
 
   getSelectedModel: () => {
@@ -385,3 +390,9 @@ export const useModelStore = create<ModelStore>((set, get) => ({
     });
   },
 }));
+
+useModelStore.subscribe((current, previous) => {
+  if (previous.selectedModelId !== current.selectedModelId || previous.selectedProviderId !== current.selectedProviderId) {
+    resetGptConstraintChoice(current.selectedProviderId, current.selectedModelId);
+  }
+});

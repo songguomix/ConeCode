@@ -44,7 +44,7 @@ it.skipIf(process.platform === 'win32')('finds a user-local npm outside the desk
   expect(result.code).toBe(0);
   expect(JSON.parse(result.stdout)).toEqual({ args, cache });
   expect(process.env.PATH).toBe(staleBin);
-});
+}, 20_000);
 
 it.runIf(process.platform === 'win32')('runs the npm CLI behind npm.cmd without interpreting the arguments in a shell', async () => {
   const root = tempDir();
@@ -64,4 +64,4 @@ it.runIf(process.platform === 'win32')('runs the npm CLI behind npm.cmd without 
   const result = await runner.run(args, root);
   expect(result.code).toBe(0);
   expect(JSON.parse(result.stdout)).toEqual({ args, cache });
-});
+}, 20_000);

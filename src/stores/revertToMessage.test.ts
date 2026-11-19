@@ -133,6 +133,28 @@ describe('revertToMessage (checkpoint rollback)', () => {
     expect(files.get('/a.ts')).toBe('v1\n');
   });
 
+  it('removes the rolled-back messages from storage if another client switches conversations mid-restore', async () => {
+    files.set('/a.ts', 'v2\n');
+    useChatStore.setState({ messages: [message('prompt', 'user'), message('reply')] });
+    useCodeChangesStore.setState({
+      changes: [change({ messageId: 'reply', originalCode: 'v1\n', newCode: 'v2\n' })],
+    });
+    const newTranscript = [{ ...message('other'), conversationId: 'conv2' }];
+    window.electronAPI.fs.writeFile = async (path, content) => {
+      files.set(path, content);
+      useChatStore.setState({ activeConversationId: 'conv2', messages: newTranscript, error: 'conv2 error' });
+      return true;
+    };
+
+    const result = await useCodeChangesStore.getState().revertToMessage('reply');
+
+    expect(result.success).toBe(true);
+    expect(files.get('/a.ts')).toBe('v1\n');
+    expect(deletedMessageIds).toEqual(['prompt', 'reply']);
+    expect(useChatStore.getState().messages).toEqual(newTranscript);
+    expect(useChatStore.getState().error).toBe('conv2 error');
+  });
+
   it('keeps the conversation when a file could not be safely restored', async () => {
     // The user edited the file after the agent did — undoing would clobber their
     // work, so nothing is deleted and the error is reported instead.

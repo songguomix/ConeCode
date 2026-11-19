@@ -185,11 +185,11 @@ export const useImageGenStore = create<ImageGenStore>((set, get) => ({
 
     // Step animation timer for smooth delightful UI feedback
     const stepTimer1 = setTimeout(() => {
-      if (get().isGenerating) set({ progressStep: '正在通过视觉大模型渲染细节...' });
+      if (get().abortController === controller) set({ progressStep: '正在通过视觉大模型渲染细节...' });
     }, 2800);
 
     const stepTimer2 = setTimeout(() => {
-      if (get().isGenerating) set({ progressStep: '正在润色并输出超清画质...' });
+      if (get().abortController === controller) set({ progressStep: '正在润色并输出超清画质...' });
     }, 6000);
 
     try {
@@ -208,6 +208,7 @@ export const useImageGenStore = create<ImageGenStore>((set, get) => ({
 
       clearTimeout(stepTimer1);
       clearTimeout(stepTimer2);
+      if (get().abortController !== controller) return null;
 
       set((s) => {
         const nextHistory = [result, ...s.history.filter((h) => h.id !== result.id)].slice(0, 40);
@@ -233,6 +234,7 @@ export const useImageGenStore = create<ImageGenStore>((set, get) => ({
     } catch (err: any) {
       clearTimeout(stepTimer1);
       clearTimeout(stepTimer2);
+      if (get().abortController !== controller) return null;
       if (err.name === 'AbortError' || err.message?.includes('取消')) {
         set({ isGenerating: false, progressStep: '', abortController: null });
         return null;
@@ -314,9 +316,9 @@ export const useImageGenStore = create<ImageGenStore>((set, get) => ({
     }
 
     // Update messages in chatStore
-    useChatStore.setState((s) => ({
-      messages: [...s.messages, userMsg, assistantMsg],
-    }));
+    useChatStore.setState((s) => s.activeConversationId === convId
+      ? { messages: [...s.messages, userMsg, assistantMsg] }
+      : s);
 
     // Close image generator modal so user can view it in the chat
     get().closeModal();

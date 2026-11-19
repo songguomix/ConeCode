@@ -596,7 +596,7 @@ export const useCodeChangesStore = create<CodeChangesStore>((set, get) => ({
     const convId = messages[rewindIdx].conversationId;
     if (convId) batchResults.delete(convId);
 
-    await useChatStore.getState().truncateFrom(rewindMessageId);
+    await useChatStore.getState().truncateFrom(rewindMessageId, messages);
 
     return { success: true, undone: undoneIds.size, retainedEffects };
   },

@@ -33,6 +33,17 @@ describe('groupOpenProjectConversations', () => {
       ['/gone', [newer]], ['/closed', [older]], ['/app', [work]],
     ]);
   });
+
+  it('lists folderless Work conversations after all projects and keeps Chat and RSI separate', () => {
+    const unbound = conv('work', null, 10, false);
+    const older = conv('another-work', null, 4, false);
+    const project = conv('project', '/closed', 2, false);
+    const rsi = { ...conv('rsi', null, 5, false), agentMode: 'rsi' as const, rsi: defaultRsiState() };
+    expect(groupOpenProjectConversations([unbound, rsi, conv('legacy-chat', null, 8), project, older], ['/open']))
+      .toEqual([['/open', []], ['/closed', [project]], ['', [unbound, older]]]);
+    expect(isChatConversation(unbound)).toBe(false);
+    expect(isWorkConversation(unbound)).toBe(true);
+  });
 });
 
 describe('groupConversationsByFolder', () => {

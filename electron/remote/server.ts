@@ -27,7 +27,17 @@ interface RemoteDevice {
   res: http.ServerResponse;
   ip: string;
   since: number;
+  requestKey?: string;
+  replies: Map<string, { reqId: string; expires: number }>;
 }
+
+const CLIENT_HEADER = 'x-remote-client';
+const REPLY_PREFIX = 'cone-reply:';
+const REPLY_TTL = 16 * 60_000;
+const LEGACY_REQUESTS = new Set([
+  'answerQuestion', 'rsiControl', 'rsiDirection', 'changeDetail', 'listDir',
+  'readFile', 'writeFile', 'uploadFile', 'exec', 'openFolder',
+]);
 
 export class RemoteServer extends EventEmitter {
   private server: https.Server | null = null;
@@ -52,7 +62,15 @@ export class RemoteServer extends EventEmitter {
   private password: string | null = null;
 
   setPassword(pw: string | null): void {
-    this.password = pw && pw.length > 0 ? pw : null;
+    const next = pw || null;
+    if (next === this.password) return;
+    this.password = next;
+    if (this.clients.size) {
+      const clients = [...this.clients.values()];
+      this.clients.clear();
+      for (const client of clients) client.res.end();
+      this.emit('clients', 0);
+    }
   }
 
   hasPassword(): boolean {
@@ -138,17 +156,42 @@ export class RemoteServer extends EventEmitter {
 
   // Fan a frame out to every connected phone and remember it as the replay value.
   publish(frame: any): void {
+    if (frame?.type === 'reply') {
+      if (typeof frame.reqId !== 'string') return;
+      if (frame.reqId.startsWith(REPLY_PREFIX)) {
+        for (const client of this.clients.values()) {
+          const pending = client.replies.get(frame.reqId);
+          if (!pending) continue;
+          client.replies.delete(frame.reqId);
+          if (pending.expires >= Date.now()) this.writeFrame(client, { ...frame, reqId: pending.reqId });
+          return;
+        }
+        return;
+      }
+      // Older clients only receive legacy replies. Native requests use a private
+      // route, including when a legacy browser is connected at the same time.
+      for (const client of this.clients.values()) {
+        if (!client.requestKey) this.writeFrame(client, frame);
+      }
+      return;
+    }
     if (frame?.type === 'state' && frame.snapshot) {
       // Publish install metadata; Android selects bindings using its verified connection identity.
       frame = { ...frame, snapshot: { ...frame.snapshot, computerId: this.fingerprint, screenControlProvider: 'uuRemote' } };
     }
     if (frame && frame.type === 'state') this.latest = frame;
     const data = `data: ${JSON.stringify(frame)}\n\n`;
-    for (const c of this.clients.values()) {
-      // A stalled SSE reader must not retain unbounded state/file replies.
-      if (c.res.writableLength > 4_000_000) { c.res.destroy(); continue; }
-      try { c.res.write(data); } catch { c.res.destroy(); }
-    }
+    for (const client of this.clients.values()) this.writeData(client, data);
+  }
+
+  private writeFrame(client: RemoteDevice, frame: unknown): void {
+    this.writeData(client, `data: ${JSON.stringify(frame)}\n\n`);
+  }
+
+  private writeData(client: RemoteDevice, data: string): void {
+    // A stalled SSE reader must not retain unbounded state/file replies.
+    if (client.res.writableLength > 4_000_000) { client.res.destroy(); return; }
+    try { client.res.write(data); } catch { client.res.destroy(); }
   }
 
   // Bind to `preferred`, scanning upward a few ports if it is already in use.
@@ -251,6 +294,11 @@ export class RemoteServer extends EventEmitter {
   }
 
   private openStream(req: http.IncomingMessage, res: http.ServerResponse): void {
+    const requestKey = req.headers[CLIENT_HEADER];
+    if (requestKey !== undefined && (typeof requestKey !== 'string' || !/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(requestKey))) {
+      res.writeHead(400).end();
+      return;
+    }
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-cache, no-transform',
@@ -262,7 +310,7 @@ export class RemoteServer extends EventEmitter {
     try { res.write(`data: ${JSON.stringify(this.latest)}\n\n`); } catch {}
 
     const id = String(++this.clientSeq);
-    this.clients.set(id, { res, ip: clientIp(req), since: Date.now() });
+    this.clients.set(id, { res, ip: clientIp(req), since: Date.now(), requestKey, replies: new Map() });
     this.emit('clients', this.clients.size);
 
     const ping = setInterval(() => {
@@ -307,12 +355,33 @@ export class RemoteServer extends EventEmitter {
         return;
       }
       if (!authorized()) { res.writeHead(403).end(); return; }
-      try {
-        const cmd = JSON.parse(body || '{}') as RemoteCommand;
-        if (cmd && typeof cmd.type === 'string') this.emit('command', cmd);
-      } catch {
-        // Ignore malformed commands.
+      let cmd: RemoteCommand;
+      try { cmd = JSON.parse(body) as RemoteCommand; }
+      catch { res.writeHead(400).end(); return; }
+      if (!cmd || typeof cmd.type !== 'string') { res.writeHead(400).end(); return; }
+      if (cmd.reqId !== undefined) {
+        if (typeof cmd.reqId !== 'string' || !cmd.reqId || cmd.reqId.length > 100 || cmd.reqId.startsWith(REPLY_PREFIX)) {
+          res.writeHead(400).end();
+          return;
+        }
+        const requestKey = req.headers[CLIENT_HEADER];
+        if (requestKey !== undefined) {
+          const client = [...this.clients.values()].reverse().find((device) => device.requestKey === requestKey);
+          if (!client) { res.writeHead(409).end(); return; }
+          const now = Date.now();
+          for (const [id, pending] of client.replies) {
+            if (pending.expires < now) client.replies.delete(id);
+          }
+          if (client.replies.size >= 128) { res.writeHead(429).end(); return; }
+          const id = REPLY_PREFIX + crypto.randomUUID();
+          client.replies.set(id, { reqId: cmd.reqId, expires: now + REPLY_TTL });
+          cmd.reqId = id;
+        } else if (!LEGACY_REQUESTS.has(cmd.type)) {
+          res.writeHead(409).end();
+          return;
+        }
       }
+      this.emit('command', cmd);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end('{"ok":true}');
     });

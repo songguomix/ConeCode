@@ -8,6 +8,7 @@ on:
       - 'electron/preload.ts'
       - 'resources/dsh-market/**'
       - 'examples/native-plugins/**'
+      - 'examples/dsh-plugins/**'
       - 'src/components/dsh-market/**'
       - 'src/core/dsh-market/**'
       - 'src/stores/dshMarket.store*'

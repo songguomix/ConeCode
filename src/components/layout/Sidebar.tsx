@@ -143,10 +143,6 @@ export default function Sidebar() {
     [conversations],
   );
 
-  // Conversations are strictly isolated by mode:
-  // - Chat mode only shows chat-mode/unbound conversations.
-  // - Work mode only shows workspace-bound normal work conversations grouped by folder.
-  // - RSI mode shows workspace-bound RSI recursive improvement conversations grouped by folder.
   const chatConversations = useMemo(
     () => unarchivedConversations.filter(isChatConversation),
     [unarchivedConversations],
@@ -328,7 +324,7 @@ export default function Sidebar() {
     const isFailed = isRsi && conv.rsi?.status === 'failed';
     const openConversation = () => {
       if (editingId === conv.id) return;
-      if (isWork && !isRsi && !isArchived) {
+      if (isWork && conv.rootPath && !isRsi && !isArchived) {
         if (projectBusy) return;
         void handleProjectChat(async () => { await setActiveConversation(conv.id); return conv.id; });
       } else {
@@ -635,25 +631,27 @@ export default function Sidebar() {
             <div className="space-y-2.5 mt-1">
               {workGroups.map(([folderKey, items]) => {
                 const collapsed = collapsedGroups.has(folderKey);
-                const label = rootLabel(folderKey, projectPaths);
+                const label = folderKey ? rootLabel(folderKey, projectPaths) : t('sidebarNoProject');
                 const isOpen = openFolderPaths.includes(folderKey);
                 const isCurrent = folderKey === rootPath;
                 return (
                   <div key={folderKey} className="min-w-0">
                     <div className={`group flex items-center gap-0.5 px-1 py-1 rounded-lg hover:bg-[var(--glass-card)] ${
                       isCurrent ? 'bg-[var(--accent-soft)] text-[var(--accent)]' : 'text-[var(--text-secondary)]'}`}>
-                      <button onClick={() => toggleGroup(folderKey)} title={folderKey}
+                      <button onClick={() => toggleGroup(folderKey)} title={folderKey || label}
                         aria-expanded={!collapsed} aria-current={isCurrent ? 'true' : undefined}
                         className={`flex flex-1 min-w-0 items-center gap-1.5 px-1 py-1 text-left text-[12px] font-medium ${
                           isOpen ? 'hover:text-[var(--text-primary)]' : 'text-[var(--text-muted)]'}`}>
                         {collapsed ? <FiChevronRight size={12} className="shrink-0" /> : <FiChevronDown size={12} className="shrink-0" />}
                         <span className="truncate">{label}</span>
                       </button>
-                      <button onClick={() => void handleProjectChat(() => newConversation(selectedModel?.providerId || '', selectedModel?.id || '', folderKey))} disabled={projectBusy}
-                        aria-label={`${t('newChat')} · ${label}`} title={t('newChat')}
-                        className="p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-3)] disabled:opacity-50 cursor-pointer">
-                        <FiPlus size={13} />
-                      </button>
+                      {folderKey && (
+                        <button onClick={() => void handleProjectChat(() => newConversation(selectedModel?.providerId || '', selectedModel?.id || '', folderKey))} disabled={projectBusy}
+                          aria-label={`${t('newChat')} · ${label}`} title={t('newChat')}
+                          className="p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-3)] disabled:opacity-50 cursor-pointer">
+                          <FiPlus size={13} />
+                        </button>
+                      )}
                       {/* A closed project has nothing to close: opening one of its
                           chats (or the + above) reopens the folder again. */}
                       {isOpen && (

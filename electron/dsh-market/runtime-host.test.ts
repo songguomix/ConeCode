@@ -100,7 +100,7 @@ describe('Cordis runtime host', () => {
         })
       }
     `);
-    const rows = [provider, consumer].map((entryPath, index) => ({
+    const rows = [consumer, provider].map((entryPath, index) => ({
       id: String(index), name: path.basename(entryPath), entryPath, config: {}, disabled: false,
     }));
     const spec: RuntimePluginSpec = {
@@ -110,13 +110,65 @@ describe('Cordis runtime host', () => {
     try {
       expect((await host.load(spec)).status).toBe('loaded');
       expect((await host.probe(spec)).ok).toBe(true);
-      expect(await host.invokeTool('bundle', '1', 'read_bundle', {})).toMatchObject({
+      expect(await host.invokeTool('bundle', null, 'read_bundle', {})).toMatchObject({
         ok: true, value: 'from bundle',
       });
-      const unrelated = await host.load({ ...spec, id: 'unrelated', rows: [rows[1]] });
+      const unrelated = await host.load({ ...spec, id: 'unrelated', rows: [rows[0]] });
       expect(unrelated).toMatchObject({ status: 'missing-capability', missing: ['bundleState'] });
       await host.unload('bundle');
       expect(host.contributions().tools).toEqual([]);
+    } finally {
+      await host.dispose();
+    }
+  });
+
+  it('dispatches by row, discovers skill providers on direct read and honors row-declared injects', async () => {
+    const dir = tempDir();
+    const entryPath = path.join(dir, 'skills.mjs');
+    fs.writeFileSync(entryPath, `
+      export function apply(ctx, { label }) {
+        let creations = 0
+        ctx.skills.registerProvider(({ signal }) => {
+          const n = ++creations
+          return {
+            name: 'library',
+            list: (options) => ({ candidates: [{ name: 'page', rank: 42, description: label }], complete: true }),
+            get: (candidate, options) => ({ ...candidate, content: label + n + ':' + signal.aborted }),
+          }
+        })
+        ctx.commands.register({ name: label, handler: async () => (await ctx.skills.get('page')).content })
+      }
+    `);
+    const spec: RuntimePluginSpec = {
+      ...nativeSpec(), format: 'dsh', id: 'library', packageDir: dir,
+      rows: ['first', 'second'].map((label) => ({
+        id: label, name: 'library', entryPath, disabled: false, config: { label }, inject: ['skills', 'commands'],
+      })),
+    };
+    const host = new RuntimeHost();
+    try {
+      expect((await host.load(spec)).status).toBe('loaded');
+      expect(await host.getSkill('library', 'page', 'second')).toMatchObject({ content: 'second1:false' });
+      expect((await host.listSkills()).map(({ rowId, name }) => [rowId, name])).toEqual([['first', 'page'], ['second', 'page']]);
+      expect(await host.invokeCommand('library', null, 'second', '')).toMatchObject({ ok: true, value: 'second1:false' });
+      expect((await host.invokeCommand('library', 'first', 'second', '')).ok).toBe(false);
+      expect(await host.getSkill('library', 'page', 'absent')).toBe(null);
+      expect((await host.load({ ...spec, rows: [{ ...spec.rows[0], inject: ['missingService'] }] })).missing).toContain('missingService');
+    } finally {
+      await host.dispose();
+    }
+  });
+
+  it('passes the saved native row config into activate and accepts inactive bundle rows', async () => {
+    const spec = nativeSpec();
+    const nativeRow = { id: 'native', name: spec.name, entryPath: spec.nativeEntryPath!, config: { greeting: 'Bonjour' }, disabled: false };
+    const host = new RuntimeHost();
+    try {
+      expect((await host.load({ ...spec, rows: [nativeRow] })).status).toBe('loaded');
+      expect((await host.invokeTool(spec.id, null, 'hello_conecode', { name: 'Ada' })).value).toMatchObject({ message: 'Bonjour, Ada!' });
+      const disabled = await host.probe({ ...spec, format: 'dsh', rows: [{ ...nativeRow, disabled: true }] });
+      expect(disabled).toMatchObject({ ok: true, state: { status: 'disabled' } });
+      expect((await host.load({ ...spec, format: 'dsh', rows: [] })).status).toBe('loaded');
     } finally {
       await host.dispose();
     }

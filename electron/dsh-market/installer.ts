@@ -1,5 +1,4 @@
 import fs from 'node:fs';
-import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
@@ -12,9 +11,9 @@ import {
 import type { RawPackageManifest } from './manifest';
 import {
   bundlePatchFiles,
+  bundleOverrides as externalOverrides,
   loadBundlePatches,
   readPackageManifest,
-  resolvePackageEntry,
   rowsFromPatches,
 } from './manifest';
 import { assertInside, buildInstallSpec, pluginDirectoryName, safeFileSegment, validateExactVersion, validateGitUrl, validatePackageName } from './security';
@@ -187,7 +186,9 @@ export class NpmRunner {
         return;
       }
       if (!child.killed) child.kill('SIGTERM');
-      setTimeout(() => { if (!child.killed) child.kill('SIGKILL'); }, 3000).unref();
+      setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      }, 3000).unref();
     };
     options.signal?.addEventListener('abort', abort, { once: true });
     let timeout: NodeJS.Timeout | null = null;
@@ -217,9 +218,10 @@ function copyDirectory(source: string, destination: string): void {
   fs.cpSync(source, destination, {
     recursive: true,
     dereference: false,
+    verbatimSymlinks: true,
     filter: (file) => {
       const base = path.basename(file);
-      return base !== 'node_modules' && base !== '.git' && base !== 'dist' ? true : base === 'dist';
+      return base !== 'node_modules' && base !== '.git';
     },
   });
 }
@@ -267,7 +269,7 @@ export function readNativeManifest(packageDir: string): NativeManifest | null {
 
 export class PackageInstaller {
   private runner: NpmRunner;
-  private currentProfile = 'default';
+  private provisioning = new Map<string, Promise<void>>();
 
   constructor(private state: MarketStateStore) {
     this.runner = new NpmRunner(npmCacheDir(state));
@@ -286,6 +288,19 @@ export class PackageInstaller {
   }
 
   async provisionRuntime(profileId: string, onLog: (line: string) => void, signal: AbortSignal): Promise<void> {
+    // Only one npm process may write this profile's runtime. A cancelled installer
+    // releases the slot so another plugin can retry using its own AbortSignal.
+    while (this.provisioning.has(profileId)) {
+      await this.provisioning.get(profileId)!.catch(() => {});
+    }
+    if (signal.aborted) throw new InstallCancelledError();
+    const work = this.ensureRuntime(profileId, onLog, signal);
+    this.provisioning.set(profileId, work);
+    try { await work; }
+    finally { this.provisioning.delete(profileId); }
+  }
+
+  private async ensureRuntime(profileId: string, onLog: (line: string) => void, signal: AbortSignal): Promise<void> {
     this.state.ensureProfileDirs(profileId);
     const runtimeDir = this.state.runtimeDir(profileId);
     const marker = path.join(runtimeDir, 'runtime.json');
@@ -412,7 +427,7 @@ export class PackageInstaller {
       packageDir = stagingDir;
       format = 'native';
       requestedSpec = `example:${sourceDir}`;
-      await this.installNativeDependencies(stagingDir, onLog, signal);
+      await this.installNativeDependencies(stagingDir, options);
     } else if (source.type === 'local') {
       if (!source.path) throw new Error('Local plugin path is missing');
       const sourcePath = path.resolve(source.path);
@@ -425,10 +440,10 @@ export class PackageInstaller {
           packageDir = stagingDir;
           format = 'native';
           requestedSpec = `file:${sourcePath}`;
-          await this.installNativeDependencies(stagingDir, onLog, signal);
           if (!native || native.name !== name || native.version !== version) {
             throw new Error(`Local native manifest is ${native?.name || '?'}@${native?.version || '?'}, expected ${name}@${version}`);
           }
+          await this.installNativeDependencies(stagingDir, options);
         } else {
           packageDir = path.join(stagingDir, 'node_modules', ...name.split('/'));
           fs.mkdirSync(path.dirname(packageDir), { recursive: true });
@@ -439,7 +454,8 @@ export class PackageInstaller {
           }
           const result = await this.runner.run([
             'install',
-            '--ignore-scripts',
+            ...(options.allowScripts ? [] : ['--ignore-scripts']),
+            '--omit=dev',
             '--no-audit',
             '--no-fund',
             '--legacy-peer-deps',
@@ -454,7 +470,7 @@ export class PackageInstaller {
         this.writeInstallManifest(stagingDir, name, `file:${sourcePath}`);
         const result = await this.runner.run([
           'install',
-          '--ignore-scripts',
+          ...(options.allowScripts ? [] : ['--ignore-scripts']),
           '--no-audit',
           '--no-fund',
           '--legacy-peer-deps',
@@ -475,12 +491,14 @@ export class PackageInstaller {
         // npm validates its registry's digest. Verify the downloaded bytes against the
         // catalog independently before npm installs them or runs any lifecycle script.
         packSource = spec;
-      } else if (source.type === 'git' && source.subdir) {
-        // npm accepts the `path:` fragment but can still try to pack the repository root.
+      } else if (source.type === 'git') {
+        // Use the same pinned checkout for root packages and monorepo packages.
         const { url, commit } = validateGitUrl(`${source.url}#${source.commit}`);
         const checkout = await materializeRepository(url, commit, path.join(stagingDir, '.conecode-git'));
         if (signal.aborted) throw new InstallCancelledError();
-        packSource = assertInside(checkout, path.resolve(checkout, source.subdir.replace(/\\/g, '/')), 'Git package subdirectory');
+        packSource = source.subdir
+          ? assertInside(checkout, path.resolve(checkout, source.subdir.replace(/\\/g, '/')), 'Git package subdirectory')
+          : checkout;
         packIgnoresScripts = !options.allowScripts;
       }
       if (packSource) {
@@ -515,14 +533,14 @@ export class PackageInstaller {
     if (manifest.name !== name || manifest.version !== version) {
       throw new Error(`Resolved package is ${manifest.name}@${manifest.version}, expected ${name}@${version}`);
     }
-    this.assertDependencies(stagingDir, packageDir, manifest);
+    this.assertDependencies(profileId, stagingDir, packageDir, manifest);
     let rows: InstalledRow[] = [];
     let patchesWarnings: string[] = [];
     let bundleOverrides: Array<Record<string, unknown>> = [];
     if (format === 'dsh') {
       const patches = loadBundlePatches(packageDir, manifest);
       patchesWarnings = patches.warnings;
-      bundleOverrides = patches.patches.filter((patch) => !Array.isArray(patch.insert));
+      bundleOverrides = externalOverrides(patches);
       rows = rowsFromPatches(packageDir, manifest.name!, patches);
       if (platformSupported(manifest) === false) {
         throw new Error(`Bundle declares platforms ${JSON.stringify((manifest.dsh?.bundle as any)?.platforms)}; this host is ${process.platform}`);
@@ -564,7 +582,7 @@ export class PackageInstaller {
     };
   }
 
-  private async installNativeDependencies(stagingDir: string, onLog: (line: string) => void, signal: AbortSignal): Promise<void> {
+  private async installNativeDependencies(stagingDir: string, { allowScripts, onLog, signal }: PrepareOptions): Promise<void> {
     const packageFile = path.join(stagingDir, 'package.json');
     if (!fs.existsSync(packageFile)) return;
     let manifest: { dependencies?: Record<string, unknown> };
@@ -576,7 +594,8 @@ export class PackageInstaller {
     if (!manifest.dependencies || Object.keys(manifest.dependencies).length === 0) return;
     const result = await this.runner.run([
       'install',
-      '--ignore-scripts',
+      ...(allowScripts ? [] : ['--ignore-scripts']),
+      '--omit=dev',
       '--no-audit',
       '--no-fund',
       '--legacy-peer-deps',
@@ -584,13 +603,13 @@ export class PackageInstaller {
     if (result.code !== 0) throw new Error(`Installing native plugin dependencies failed (npm exit ${result.code}). ${result.stderr.slice(-600)}`);
   }
 
-  private assertDependencies(stagingDir: string, packageDir: string, manifest: RawPackageManifest): void {
+  private assertDependencies(profileId: string, stagingDir: string, packageDir: string, manifest: RawPackageManifest): void {
     const dependencies = manifest.dependencies && typeof manifest.dependencies === 'object' ? manifest.dependencies : {};
     const missing: string[] = [];
     for (const name of Object.keys(dependencies)) {
       const local = path.join(packageDir, 'node_modules', ...name.split('/'));
       const hoisted = path.join(stagingDir, 'node_modules', ...name.split('/'));
-      const shared = path.join(this.state.profileDir(this.currentProfile), 'node_modules', ...name.split('/'));
+      const shared = path.join(this.state.profileDir(profileId), 'node_modules', ...name.split('/'));
       try {
         if (fs.existsSync(path.join(local, 'package.json')) || fs.existsSync(path.join(hoisted, 'package.json')) || fs.existsSync(path.join(shared, 'package.json'))) continue;
       } catch {
@@ -723,7 +742,7 @@ export function nativeManifestToPackage(native: NativeManifest): RawPackageManif
   };
 }
 
-async function verifyArchiveIntegrity(file: string, expected: string, spec: string): Promise<string> {
+export async function verifyArchiveIntegrity(file: string, expected: string, spec: string): Promise<string> {
   const candidates = expected.trim().split(/\s+/);
   for (const algorithm of ['sha512', 'sha384', 'sha256', 'sha1']) {
     const digests = candidates.filter((item) => item.startsWith(`${algorithm}-`));
@@ -739,7 +758,7 @@ async function verifyArchiveIntegrity(file: string, expected: string, spec: stri
 
 export function packageEntryPath(prepared: PreparedPackage): string {
   if (prepared.format === 'native') return resolveNativeEntry(prepared.packageDir, prepared.native!);
-  return resolvePackageEntry(prepared.packageDir, '.');
+  return prepared.rows[0]?.entryPath || path.join(prepared.packageDir, 'package.json');
 }
 
 export { bundlePatchFiles };

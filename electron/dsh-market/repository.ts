@@ -5,13 +5,13 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import type { MarketPlugin, MarketVersion } from '../../src/core/dsh-market/types';
 import {
+  bundleOverrides,
   loadBundlePatches,
   manifestAuthor,
   manifestRepository,
   readPackageManifest,
-  rowsFromPatches,
 } from './manifest';
-import { assertInside } from './security';
+import { assertInside, packageReadme } from './security';
 
 export interface RepositoryInspectionData {
   input: string;
@@ -108,7 +108,7 @@ export async function resolveRepositoryCommit(url: string, ref: string): Promise
   if (FULL_SHA.test(ref)) return ref;
   let output = '';
   try {
-    output = await git.run(['ls-remote', url, ref], undefined, 25_000);
+    output = await git.run(['ls-remote', url, ref, `${ref}^{}`], undefined, 25_000);
   } catch (error) {
     throw new Error(`Could not reach repository: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -189,8 +189,9 @@ export async function inspectRepositoryDirectory(
     throw new Error('The package does not declare dsh.bundle; this is not an installable DSH plugin.');
   }
   const patches = loadBundlePatches(packageDir, manifest);
-  const rows = rowsFromPatches(packageDir, manifest.name!, patches);
-  if (!rows.length) throw new Error('The bundle patch inserts no mountable plugin rows.');
+  // Checkout previews do not contain npm dependencies. Resolve row modules only
+  // after the install has materialized the declared dependencies in staging.
+  if (!patches.rows.length && !bundleOverrides(patches).length) throw new Error('The bundle patch has no mountable rows or overrides.');
   const version: MarketVersion = {
     version: manifest.version!,
     publishedAt: new Date().toISOString(),
@@ -203,8 +204,7 @@ export async function inspectRepositoryDirectory(
     dependencies: Object.fromEntries(Object.entries(manifest.dependencies || {}).filter(([, value]) => typeof value === 'string')) as Record<string, string>,
     license: typeof manifest.license === 'string' ? manifest.license : undefined,
   };
-  const readmeFile = ['README.md', 'readme.md', 'Readme.md'].map((name) => path.join(packageDir, name)).find((file) => fs.existsSync(file));
-  const readme = readmeFile ? fs.readFileSync(readmeFile, 'utf8').slice(0, 512 * 1024) : undefined;
+  const readme = packageReadme(packageDir)?.text;
   const plugin: MarketPlugin = {
     id: manifest.name!,
     name: manifest.name!,

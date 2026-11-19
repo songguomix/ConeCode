@@ -65,14 +65,22 @@ export class MarketStateStore {
     const state: MarketStateFile = {
       format: 'conecode-dsh-market-state',
       formatVersion: 1,
-      activeProfile: typeof parsed?.activeProfile === 'string' && validateProfileId(parsed.activeProfile) ? parsed.activeProfile : 'default',
+      activeProfile: typeof parsed?.activeProfile === 'string' ? parsed.activeProfile : 'default',
       profiles: parsed?.profiles && typeof parsed.profiles === 'object' ? parsed.profiles : {},
       sources: Array.isArray(parsed?.sources) ? parsed.sources : [],
       operations: parsed?.operations && typeof parsed.operations === 'object' ? parsed.operations : {},
       updatedAt: typeof parsed?.updatedAt === 'string' ? parsed.updatedAt : now(),
     };
-    if (!state.profiles.default) state.profiles.default = defaultProfile('default');
-    if (!state.profiles[state.activeProfile]) state.activeProfile = 'default';
+    for (const [key, profile] of Object.entries(state.profiles)) {
+      try {
+        if (!profile || profile.id !== key) throw new Error('Profile id mismatch');
+        validateProfileId(key);
+      } catch {
+        delete state.profiles[key];
+      }
+    }
+    if (!Object.prototype.hasOwnProperty.call(state.profiles, 'default')) state.profiles.default = defaultProfile('default');
+    if (!Object.prototype.hasOwnProperty.call(state.profiles, state.activeProfile)) state.activeProfile = 'default';
     for (const profile of Object.values(state.profiles)) {
       if (!Array.isArray(profile.pluginOrder)) profile.pluginOrder = Object.keys(profile.plugins || {});
       if (!profile.plugins || typeof profile.plugins !== 'object') profile.plugins = {};
@@ -119,9 +127,8 @@ export class MarketStateStore {
 
   profile(id = this.state.activeProfile): ProfileState {
     validateProfileId(id);
-    const profile = this.state.profiles[id];
-    if (!profile) throw new Error(`Unknown profile: ${id}`);
-    return profile;
+    if (!Object.prototype.hasOwnProperty.call(this.state.profiles, id)) throw new Error(`Unknown profile: ${id}`);
+    return this.state.profiles[id];
   }
 
   profiles(): ProfileState[] {
@@ -130,7 +137,7 @@ export class MarketStateStore {
 
   createProfile(id: string, name?: string): ProfileState {
     validateProfileId(id);
-    if (this.state.profiles[id]) return this.state.profiles[id];
+    if (Object.prototype.hasOwnProperty.call(this.state.profiles, id)) return this.state.profiles[id];
     this.state.profiles[id] = { ...defaultProfile(id), name: name?.trim() || id };
     this.ensureProfileDirs(id);
     this.persist();
@@ -139,7 +146,7 @@ export class MarketStateStore {
 
   setActiveProfile(id: string): ProfileState {
     validateProfileId(id);
-    if (!this.state.profiles[id]) throw new Error(`Unknown profile: ${id}`);
+    this.profile(id);
     this.state.activeProfile = id;
     this.persist();
     return this.state.profiles[id];
@@ -169,7 +176,7 @@ export class MarketStateStore {
   updatePlugin(profileId: string, plugin: InstalledPlugin): void {
     const profile = this.profile(profileId);
     if (plugin.profileId !== profileId) throw new Error('Plugin profile mismatch');
-    if (!profile.plugins[plugin.id]) profile.pluginOrder.push(plugin.id);
+    if (!Object.prototype.hasOwnProperty.call(profile.plugins, plugin.id)) profile.pluginOrder.push(plugin.id);
     profile.plugins[plugin.id] = structuredClone(plugin);
     this.persist();
   }

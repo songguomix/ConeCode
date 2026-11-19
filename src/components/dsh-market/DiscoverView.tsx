@@ -3,7 +3,7 @@ import { useState } from 'react';
 import semver from 'semver';
 import { useDshMarketStore } from '../../stores/dshMarket.store';
 import { useLanguageStore } from '../../stores';
-import type { MarketPlugin } from '../../core/dsh-market/types';
+import type { CatalogPage } from '../../core/dsh-market/types';
 import { CompatBadge, PluginIcon, SourceBadge, formatNumber } from './MarketCommon';
 import RepositoryImportDialog from './RepositoryImportDialog';
 
@@ -23,7 +23,8 @@ export default function DiscoverView({ t }: { t: (key: string) => string }) {
   const setSort = useDshMarketStore((s) => s.setSort);
   const setPage = useDshMarketStore((s) => s.setPage);
   const setCompatibleOnly = useDshMarketStore((s) => s.setCompatibleOnly);
-  const refresh = useDshMarketStore((s) => s.refresh);
+  const refreshSources = useDshMarketStore((s) => s.refreshSources);
+  const sourceBusy = useDshMarketStore((s) => s.sourceBusy);
   const selectPlugin = useDshMarketStore((s) => s.selectPlugin);
   const install = useDshMarketStore((s) => s.install);
   const installLocal = useDshMarketStore((s) => s.installLocal);
@@ -35,7 +36,10 @@ export default function DiscoverView({ t }: { t: (key: string) => string }) {
   const totalPages = catalog ? Math.max(1, Math.ceil(catalog.total / catalog.pageSize)) : 1;
   const categories = (catalog?.categories || []).filter((item) => item.count > 0 || item.id === category);
   const labels = (catalog?.labels || []).slice(0, 12);
-  const showLocal = query.trim() === '' && (category === 'all' || category === 'native');
+  const [allowScripts, setAllowScripts] = useState(false);
+  const [acceptRisk, setAcceptRisk] = useState(false);
+  const [installingLocal, setInstallingLocal] = useState(false);
+  const requiresRisk = localPreview?.compatibility.state === 'incompatible';
 
   if (!snapshot && loading) {
     return <div className="flex-1 flex items-center justify-center text-sm text-[var(--text-muted)]">{t('loading')}</div>;
@@ -84,14 +88,14 @@ export default function DiscoverView({ t }: { t: (key: string) => string }) {
             className="h-9 px-2.5 rounded-xl border border-[var(--border)] bg-[var(--bg-1)] text-[var(--text-secondary)] hover:text-[var(--accent)] inline-flex items-center gap-1.5 text-[11px]">
             <FiGitBranch size={12} />{t('importRepo')}
           </button>
-          <button onClick={() => void refresh().catch(() => {})} title={t('sync')} className="w-9 h-9 rounded-xl border border-[var(--border)] bg-[var(--bg-1)] text-[var(--text-muted)] hover:text-[var(--text-primary)] flex items-center justify-center">
-            <FiRefreshCw size={13} className={loading ? 'animate-spin' : ''} />
+          <button disabled={sourceBusy !== null} onClick={() => void refreshSources()} title={t('sync')} className="w-9 h-9 rounded-xl border border-[var(--border)] bg-[var(--bg-1)] text-[var(--text-muted)] hover:text-[var(--text-primary)] flex items-center justify-center">
+            <FiRefreshCw size={13} className={sourceBusy !== null ? 'animate-spin' : ''} />
           </button>
         </div>
         <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
           <button onClick={() => setCategory('all')}
             className={`shrink-0 px-2.5 py-1 rounded-lg text-[11px] border transition-colors ${category === 'all' ? 'bg-[var(--accent-soft)] text-[var(--accent)] border-[var(--accent-border)] font-medium' : 'bg-[var(--bg-1)] text-[var(--text-muted)] border-[var(--border)] hover:text-[var(--text-primary)]'}`}>
-            {t('all')} <span className="opacity-60">{catalog?.total ?? 0}</span>
+            {t('all')} <span className="opacity-60">{categories.reduce((total, item) => total + item.count, 0)}</span>
           </button>
           {categories.map((item) => (
             <button key={item.id} onClick={() => setCategory(item.id)}
@@ -119,7 +123,7 @@ export default function DiscoverView({ t }: { t: (key: string) => string }) {
       </div>
 
       <div className="px-5 py-4 space-y-3">
-        {localPreview && showLocal && (
+        {localPreview && (
           <div className="rounded-2xl border border-[var(--accent-border)] bg-[var(--accent-soft)]/40 p-3.5">
             <div className="flex items-start gap-3">
               <PluginIcon plugin={localPreview.plugin} />
@@ -127,10 +131,22 @@ export default function DiscoverView({ t }: { t: (key: string) => string }) {
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-sm font-semibold text-[var(--text-primary)]">{localPreview.plugin.title}</span>
                   <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-[var(--bg-3)] text-[var(--text-muted)] font-mono">local · {localPreview.plugin.name}@{localPreview.version.version}</span>
-                  <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-[var(--bg-3)] text-[var(--text-muted)]">{t('localImport')}</span>
+                  <CompatBadge state={localPreview.compatibility.state}>{t(localPreview.compatibility.state)}</CompatBadge>
                 </div>
                 <p className="mt-1 text-[11px] text-[var(--text-secondary)] whitespace-pre-wrap">{localPreview.plugin.description || t('noDescription')}</p>
                 <p className="mt-1 text-[10px] text-[var(--text-muted)]">{t('localImportHint')}</p>
+                {requiresRisk && (
+                  <label className="mt-2 flex items-start gap-1.5 text-[10.5px] text-[var(--warning)]">
+                    <input type="checkbox" checked={acceptRisk} onChange={(event) => setAcceptRisk(event.target.checked)} />
+                    <span>{localPreview.compatibility.reasons.map((reason) => reason.message).join(' · ')} {t('riskBody')}</span>
+                  </label>
+                )}
+                {localPreview.plugin.format === 'dsh' && (
+                  <label title={t('scriptsHint')} className="mt-2 flex items-center gap-1.5 text-[10.5px] text-[var(--text-muted)]">
+                    <input type="checkbox" checked={allowScripts} onChange={(event) => setAllowScripts(event.target.checked)} />
+                    {t('allowScripts')}
+                  </label>
+                )}
                 {localPreview.warnings.length > 0 && (
                   <div className="mt-1.5 text-[10px] text-[var(--warning)] whitespace-pre-wrap">
                     <span className="font-medium">{t('localWarnings')}: </span>{localPreview.warnings.join(' · ')}
@@ -138,10 +154,13 @@ export default function DiscoverView({ t }: { t: (key: string) => string }) {
                 )}
               </div>
               <div className="flex flex-col gap-1.5 shrink-0">
-                <button onClick={() => void installLocal(false).catch(() => {})} className="px-3 py-1.5 rounded-lg bg-[var(--accent)] text-white text-[11px] font-medium hover:bg-[var(--accent-hover)]">
-                  {t('localInstall')}
+                <button disabled={installingLocal || (requiresRisk && !acceptRisk)} onClick={() => {
+                  setInstallingLocal(true);
+                  void installLocal(acceptRisk, allowScripts).catch(() => {}).finally(() => setInstallingLocal(false));
+                }} className="px-3 py-1.5 rounded-lg bg-[var(--accent)] text-white text-[11px] font-medium hover:bg-[var(--accent-hover)]">
+                  {installingLocal ? t('installing') : t('localInstall')}
                 </button>
-                <button onClick={clearLocalPreview} className="px-3 py-1.5 rounded-lg border border-[var(--border)] text-[11px] text-[var(--text-muted)] hover:text-[var(--text-primary)]">
+                <button disabled={installingLocal} onClick={clearLocalPreview} className="px-3 py-1.5 rounded-lg border border-[var(--border)] text-[11px] text-[var(--text-muted)] hover:text-[var(--text-primary)]">
                   {t('cancel')}
                 </button>
               </div>
@@ -160,13 +179,10 @@ export default function DiscoverView({ t }: { t: (key: string) => string }) {
           {catalog?.items.map((plugin) => (
             <PluginCard key={plugin.name} plugin={plugin} t={t}
               onOpen={() => void selectPlugin(plugin.name).catch(() => {})}
-              onInstall={() => void install(plugin.name, plugin.versions[0].version).catch(() => {})}
-              onUpdate={() => {
-                const installed = plugin.installed;
-                if (installed) {
-                  const newer = plugin.versions.find((version) => semver.gt(version.version, installed.version));
-                  if (newer) void install(plugin.name, newer.version).catch(() => {});
-                }
+              onInstall={() => {
+                const version = plugin.versions[0].version;
+                if (plugin.compatibility.state === 'incompatible') void selectPlugin(plugin.name, version);
+                else void install(plugin.name, version).catch(() => {});
               }} />
           ))}
         </div>
@@ -182,17 +198,16 @@ export default function DiscoverView({ t }: { t: (key: string) => string }) {
           </div>
         )}
       </div>
-      {repoOpen && <RepositoryImportDialog t={t} onClose={() => setRepoOpen(false)} onInstalled={() => setRepoOpen(false)} />}
+      {repoOpen && <RepositoryImportDialog t={t} onClose={() => setRepoOpen(false)} />}
     </div>
   );
 }
 
-function PluginCard({ plugin, t, onOpen, onInstall, onUpdate }: {
-  plugin: MarketPlugin & { compatibility: any; installed: any };
+function PluginCard({ plugin, t, onOpen, onInstall }: {
+  plugin: CatalogPage['items'][number];
   t: (key: string) => string;
   onOpen: () => void;
   onInstall: () => void;
-  onUpdate: () => void;
 }) {
   const installed = plugin.installed;
   const latest = plugin.versions[0];
@@ -203,7 +218,7 @@ function PluginCard({ plugin, t, onOpen, onInstall, onUpdate }: {
       tabIndex={0}
       onClick={onOpen}
       onKeyDown={(event) => {
-        if (event.key === 'Enter' || event.key === ' ') {
+        if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
           event.preventDefault();
           onOpen();
         }
@@ -242,7 +257,7 @@ function PluginCard({ plugin, t, onOpen, onInstall, onUpdate }: {
         </span>
         {installed ? (
           canUpdate ? (
-            <button onClick={(event) => { event.stopPropagation(); onUpdate(); }}
+            <button onClick={(event) => { event.stopPropagation(); onInstall(); }}
               className="px-2.5 py-1 rounded-lg bg-[var(--accent)] text-white text-[10.5px] font-medium hover:bg-[var(--accent-hover)]">
               {t('update')}
             </button>

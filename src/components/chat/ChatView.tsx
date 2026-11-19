@@ -22,7 +22,7 @@ import { responseHealth } from '../../core/model/responseHealth';
 
 export default function ChatView() {
   const viewMode = useUIStore((s) => s.viewMode);
-  const setViewMode = useUIStore((s) => s.setViewMode);
+  const ensureWorkFolder = useChatStore((s) => s.ensureWorkFolder);
   const rawMessages = useChatStore((s) => s.messages);
   const activeConversationId = useChatStore((s) => s.activeConversationId);
   // This conversation's own live run — other conversations may be streaming
@@ -160,15 +160,6 @@ export default function ChatView() {
       /(建议|推薦|建議|推荐|是否|可以|切換|切り替え).*(切换|切換|使用|切り替え).*(Work|工作模式|工作區|Workモード)|switch to Work mode|switch to work|Work mode is recommended/i.test(content)
     );
   }, [viewMode, lastAssistantMessage, dismissedSuggestionId]);
-
-  const handleSwitchToWorkMode = useCallback(async () => {
-    setViewMode('work');
-    if (activeConversationId) {
-      // Reuse the open folder, or let the user choose one; switching modes
-      // must never create a project directory on its own.
-      await useChatStore.getState().ensureWorkFolder();
-    }
-  }, [activeConversationId, setViewMode]);
 
   // Auto-open only when the pending queue changes. Closing a still-pending
   // dialog leaves it closed until the user clicks its compact transcript row.
@@ -501,7 +492,7 @@ export default function ChatView() {
       {showWorkModeSuggestion && (
         <div className="max-w-[900px] mx-auto w-full px-4 mb-2">
           <WorkModeSuggestionCard
-            onSwitch={handleSwitchToWorkMode}
+            onSwitch={ensureWorkFolder}
             onDismiss={() => lastAssistantMessage && setDismissedSuggestionId(lastAssistantMessage.id)}
           />
         </div>

@@ -22,12 +22,15 @@ interface Pending {
 export class DshRuntimeManager {
   private worker: Worker | null = null;
   private pending = new Map<number, Pending>();
+  private lifecycle: Promise<void> = Promise.resolve();
+  private terminating: Promise<void> = Promise.resolve();
   private nextId = 1;
   private profileId: string | null = null;
   private dshHome: string | null = null;
   private startedAt: string | null = null;
   private lastError: string | null = null;
   private eventSink: ((event: MarketEvent) => void) | null = null;
+  private llmReady = false;
   private workerPath: string | null = null;
   private storageInfo: { ready: boolean; backend: string | null; root: string | null; error: string | null } = { ready: false, backend: null, root: null, error: null };
 
@@ -56,9 +59,10 @@ export class DshRuntimeManager {
     return found;
   }
 
-  getInfo(): { available: boolean; profileId: string | null; startedAt: string | null; lastError: string | null; threadId: number | null; storage: { ready: boolean; backend: string | null; root: string | null; error: string | null } } {
+  getInfo(): { available: boolean; llmReady: boolean; profileId: string | null; startedAt: string | null; lastError: string | null; threadId: number | null; storage: { ready: boolean; backend: string | null; root: string | null; error: string | null } } {
     return {
       available: !!this.worker,
+      llmReady: !!this.worker && this.llmReady,
       profileId: this.profileId,
       startedAt: this.startedAt,
       lastError: this.lastError,
@@ -67,12 +71,22 @@ export class DshRuntimeManager {
     };
   }
 
-  async ensureStarted(profileId: string, dshHome: string, requireStorage = false): Promise<void> {
+  private serializeLifecycle(action: () => Promise<void>): Promise<void> {
+    const operation = this.lifecycle.then(action);
+    this.lifecycle = operation.catch(() => {});
+    return operation;
+  }
+
+  ensureStarted(profileId: string, dshHome: string, requireStorage = false): Promise<void> {
+    return this.serializeLifecycle(() => this.startWorker(profileId, dshHome, requireStorage));
+  }
+
+  private async startWorker(profileId: string, dshHome: string, requireStorage: boolean): Promise<void> {
     if (this.worker && this.profileId === profileId && this.dshHome === dshHome) {
       if (!requireStorage || this.storageInfo.ready) return;
-      await this.shutdown();
     }
-    if (this.worker) await this.shutdown();
+    if (this.worker) await this.stopWorker();
+    await this.terminating;
     const workerPath = this.locateWorker();
     const worker = new Worker(workerPath, {
       env: { ...process.env, DSH_HOME: dshHome, ELECTRON_RUN_AS_NODE: '1' },
@@ -80,11 +94,13 @@ export class DshRuntimeManager {
       name: `conecode-dsh-runtime:${profileId}`,
     });
     this.worker = worker;
+    this.llmReady = false;
     this.profileId = profileId;
     this.dshHome = dshHome;
     this.startedAt = new Date().toISOString();
     this.lastError = null;
     worker.on('message', (message: any) => {
+      if (this.worker !== worker) return;
       if (message?.id) {
         const pending = this.pending.get(message.id);
         if (!pending) return;
@@ -104,38 +120,55 @@ export class DshRuntimeManager {
         return;
       }
       if (message?.event === 'fatal') {
-        this.lastError = message.error?.message || 'DSH runtime worker crashed';
-        this.emit({ type: 'runtime', message: this.lastError || 'DSH runtime worker crashed', level: 'error' });
+        this.retire(worker, new Error(message.error?.message || 'DSH runtime worker crashed'));
       }
     });
-    worker.on('error', (error: Error) => {
-      this.lastError = error.message;
-      this.failAll(error);
-      this.emit({ type: 'runtime', message: error.message, level: 'error' });
-    });
+    worker.on('error', (error: Error) => this.retire(worker, error));
     worker.on('exit', (code) => {
-      if (this.worker === worker) {
-        this.worker = null;
-        this.startedAt = null;
-      }
-      const message = code === 0 ? 'DSH runtime worker exited' : `DSH runtime worker exited with code ${code}`;
-      this.lastError = code === 0 ? this.lastError : message;
-      this.failAll(new Error(message));
+      this.retire(worker, new Error(`DSH runtime worker exited with code ${code}`), true, false);
     });
-    const initialized = await this.request('init', { dshHome, profileId }, 30_000);
-    this.storageInfo = initialized?.storage || { ready: false, backend: null, root: null, error: 'Storage stack unavailable' };
+    try {
+      const initialized = await this.request('init', { dshHome, profileId }, 30_000);
+      this.llmReady = initialized?.llmReady === true;
+      this.storageInfo = initialized?.storage || { ready: false, backend: null, root: null, error: 'Storage stack unavailable' };
+    } catch (error) {
+      this.retire(worker, error instanceof Error ? error : new Error(String(error)));
+      throw error;
+    }
+  }
+
+  private retire(worker: Worker, error: Error, unexpected = true, terminate = true): void {
+    if (worker !== this.worker) return;
+    this.worker = null;
+    this.profileId = null;
+    this.dshHome = null;
+    this.startedAt = null;
+    this.llmReady = false;
+    this.storageInfo = { ready: false, backend: null, root: null, error: null };
+    this.failAll(error);
+    if (terminate) this.terminating = worker.terminate().then(() => {}, () => {});
+    if (unexpected) {
+      this.lastError = error.message;
+      this.emit({ type: 'runtime', message: error.message, level: 'error' });
+    }
   }
 
   private request(type: string, payload: unknown, timeoutMs = 120_000): Promise<any> {
-    if (!this.worker) return Promise.reject(new Error('DSH runtime worker is not running'));
+    const worker = this.worker;
+    if (!worker) return Promise.reject(new Error('DSH runtime worker is not running'));
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`DSH runtime request "${type}" timed out after ${timeoutMs}ms`));
+        this.retire(worker, new Error(`DSH runtime request "${type}" timed out after ${timeoutMs}ms`));
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
-      this.worker!.postMessage({ id, type, payload });
+      try {
+        worker.postMessage({ id, type, payload });
+      } catch (error) {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        reject(error);
+      }
     });
   }
 
@@ -171,8 +204,8 @@ export class DshRuntimeManager {
     return this.request('listSkills', {}, 60_000);
   }
 
-  async getSkill(pluginId: string, name: string): Promise<RuntimeSkillContent | null> {
-    return this.request('getSkill', { pluginId, name }, 30_000);
+  async getSkill(pluginId: string, name: string, rowId?: string): Promise<RuntimeSkillContent | null> {
+    return this.request('getSkill', { pluginId, name, rowId }, 30_000);
   }
 
   async invokeTool(pluginId: string, rowId: string | null, name: string, args: unknown): Promise<InvokeResult> {
@@ -183,18 +216,20 @@ export class DshRuntimeManager {
     return this.request('invokeCommand', { pluginId, rowId, name, rawInput }, 180_000);
   }
 
-  async shutdown(): Promise<void> {
-    if (!this.worker) return;
-    try {
-      await this.request('shutdown', {}, 10_000);
-    } catch {
-      // A dead worker cannot answer; terminate below.
-    }
+  shutdown(): Promise<void> {
+    return this.serializeLifecycle(() => this.stopWorker());
+  }
+
+  private async stopWorker(): Promise<void> {
     const worker = this.worker;
-    this.worker = null;
-    this.profileId = null;
-    this.startedAt = null;
-    this.failAll(new Error('DSH runtime worker shut down'));
-    await worker.terminate().catch(() => {});
+    if (worker) {
+      try {
+        await this.request('shutdown', {}, 10_000);
+      } catch {
+        // A failed or timed-out worker can already be terminating.
+      }
+      this.retire(worker, new Error('DSH runtime worker shut down'), false);
+    }
+    await this.terminating;
   }
 }

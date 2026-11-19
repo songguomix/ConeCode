@@ -12,16 +12,25 @@ export function activateWorkspaceView(view: WorkspaceView): Promise<void> {
   const next = navigation.catch(() => undefined).then(async () => {
     const chat = useChatStore.getState();
     if (view === 'rsi') { chat.setAgentMode('rsi'); return; }
-    useUIStore.getState().setViewMode(view);
-    if (chat.agentMode === 'rsi') { chat.setAgentMode('standard'); return; }
+    const setViewMode = useUIStore.getState().setViewMode;
+    if (chat.agentMode === 'rsi') {
+      setViewMode(view);
+      chat.setAgentMode('standard');
+      return;
+    }
     const matches = view === 'chat' ? isChatConversation : isWorkConversation;
     const current = chat.conversations.find((c) => c.id === chat.activeConversationId);
-    if (current && matches(current)) return;
+    if (current && matches(current)) { setViewMode(view); return; }
     const existing = chat.conversations.find((c) => isUnarchivedConversation(c) && matches(c));
     if (existing) { await chat.setActiveConversation(existing.id); return; }
-    const model = useModelStore.getState().getSelectedModel();
     const root = useWorkspaceStore.getState().rootPath;
-    if (view === 'work' && !root) { await chat.ensureWorkFolder(); return; }
+    if (view === 'work' && !root) {
+      // Binding the selected folder activates Work. Cancellation keeps Chat visible.
+      await chat.ensureWorkFolder();
+      return;
+    }
+    const model = useModelStore.getState().getSelectedModel();
+    if (view === 'chat') setViewMode('chat');
     await chat.newConversation(model?.providerId || '', model?.id || '', view === 'chat' ? null : root);
   });
   navigation = next;

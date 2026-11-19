@@ -20,6 +20,7 @@ import type {
 } from '../core/memory/v2/types';
 import type {
   CatalogQuery,
+  CompatibilityResult,
   InstalledPlugin,
   InvokeResult,
   LogsResult,
@@ -277,10 +278,11 @@ export interface ElectronAPI {
   fs: {
     readFile: (filePath: string) => Promise<string | null>;
     readFileBase64: (filePath: string) => Promise<string | null>;
-    writeFile: (filePath: string, content: string) => Promise<boolean>;
+    writeFile: (filePath: string, content: string, options?: { expected?: string; exclusive?: boolean }) => Promise<boolean>;
     writeFileBase64: (filePath: string, base64: string) => Promise<boolean>;
     readDir: (dirPath: string) => Promise<DirEntry[]>;
     exists: (filePath: string) => Promise<boolean>;
+    realpath: (filePath: string) => Promise<string | null>;
     createDir: (dirPath: string) => Promise<boolean>;
     deleteFile: (filePath: string) => Promise<boolean>;
     deleteDir: (dirPath: string) => Promise<boolean>;
@@ -296,6 +298,7 @@ export interface ElectronAPI {
     spawn: (command: string, args: string[], cwd?: string) => Promise<ExecResult>;
   };
   app: {
+    confirmGptConstraints: (modelName: string) => Promise<'enable' | 'decline' | 'cancel'>;
     open: (appName: string) => Promise<boolean>;
     openPath: (path: string) => Promise<boolean>;
     getSystemInfo: () => Promise<Record<string, any>>;
@@ -399,6 +402,7 @@ export interface ElectronAPI {
     deleteTenantData: (tenantId: string) => Promise<boolean>;
   };
   dshMarket: {
+    openDshWeb: (profileId: string, pluginId?: string, version?: string) => Promise<void>;
     snapshot: (query?: CatalogQuery) => Promise<MarketSnapshot>;
     detail: (pluginId: string, version?: string) => Promise<PluginDetail>;
     versions: (pluginId: string) => Promise<{ latest: string | null; versions: string[] }>;
@@ -408,7 +412,7 @@ export interface ElectronAPI {
     addRemoteSource: (url: string, title?: string) => Promise<MarketSource>;
     addLocalSource: () => Promise<MarketSource | null>;
     removeSource: (sourceId: string) => Promise<boolean>;
-    inspectLocal: () => Promise<{ plugin: MarketPlugin; version: MarketVersion; warnings: string[] } | null>;
+    inspectLocal: () => Promise<{ plugin: MarketPlugin; version: MarketVersion; warnings: string[]; compatibility: CompatibilityResult } | null>;
     installLocal: (profileId: string, directory: string, opts?: { acceptRisk?: boolean; allowScripts?: boolean }) => Promise<InstalledPlugin>;
     install: (profileId: string, pluginId: string, version?: string, opts?: { acceptRisk?: boolean; allowScripts?: boolean }) => Promise<InstalledPlugin>;
     rollback: (profileId: string, pluginId: string, version?: string) => Promise<InstalledPlugin>;
@@ -421,7 +425,7 @@ export interface ElectronAPI {
     invokeTool: (profileId: string, pluginId: string, tool: string, args: unknown, rowId?: string) => Promise<InvokeResult>;
     invokeCommand: (profileId: string, pluginId: string, command: string, rawInput: string, rowId?: string) => Promise<InvokeResult>;
     skills: () => Promise<SkillContribution[]>;
-    skillContent: (pluginId: string, name: string) => Promise<string | null>;
+    skillContent: (pluginId: string, name: string, rowId?: string) => Promise<string | null>;
     switchProfile: (profileId: string) => Promise<void>;
     createProfile: (profileId: string, name?: string) => Promise<MarketProfile>;
     restartRuntime: () => Promise<void>;

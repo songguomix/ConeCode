@@ -958,6 +958,7 @@ app.on('window-all-closed', () => {
 });
 app.on('before-quit', () => {
   void dshMarketService?.runtime.shutdown();
+  dshMarketService?.web.stop();
 });
 
 app.on('activate', () => {
@@ -1293,9 +1294,11 @@ function registerIPC() {
     }
   });
 
-  ipcMain.handle('fs:writeFile', async (_, filePath: string, content: string) => {
+  ipcMain.handle('fs:writeFile', async (_, filePath: string, content: string, options?: { expected?: string; exclusive?: boolean }) => {
     try {
-      fs.writeFileSync(filePath, content, 'utf-8');
+      if (options?.expected !== undefined && (fs.statSync(filePath).size !== Buffer.byteLength(options.expected, 'utf8') ||
+        fs.readFileSync(filePath, 'utf-8') !== options.expected)) return false;
+      fs.writeFileSync(filePath, content, { encoding: 'utf-8', flag: options?.exclusive ? 'wx' : 'w' });
       return true;
     } catch {
       return false;
@@ -1336,6 +1339,11 @@ function registerIPC() {
 
   ipcMain.handle('fs:exists', async (_, filePath: string) => {
     return fs.existsSync(filePath);
+  });
+
+  ipcMain.handle('fs:realpath', async (_, filePath: string) => {
+    try { return await fs.promises.realpath(filePath); }
+    catch { return null; }
   });
 
   // New file operations
@@ -1533,6 +1541,21 @@ function registerIPC() {
   });
 
   // App operations
+  ipcMain.handle('app:confirmGptConstraints', async (event, modelName: string) => {
+    const parent = BrowserWindow.fromWebContents(event.sender);
+    if (!parent || parent.isDestroyed()) return 'cancel';
+    const { response } = await dialog.showMessageBox(parent, {
+      type: 'question',
+      title: 'GPT 工程约束',
+      message: '为当前所选模型启用 GPT 工程约束？',
+      detail: `已识别模型 ${modelName}。启用后，各个对话使用该模型时都会加入「零容忍工程硬约束框架」。切换模型或服务商后自动关闭。`,
+      buttons: ['启用工程约束', '保持原生提示词', '取消'],
+      defaultId: 0,
+      cancelId: 2,
+    });
+    return response === 0 ? 'enable' : response === 1 ? 'decline' : 'cancel';
+  });
+
   ipcMain.handle('app:open', async (_, appName: string) => {
     try {
       await shell.openExternal(appName);

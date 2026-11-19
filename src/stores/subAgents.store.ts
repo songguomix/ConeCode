@@ -22,6 +22,30 @@ export async function recordSubAgentRun(parentMessageId: string, run: SubAgentRu
   }
 }
 
+function mergeHistory(history: SubAgentRun[], updates: ReadonlyMap<string, SubAgentRun | null>): SubAgentRun[] {
+  const merged = new Map<string, SubAgentRun>();
+  for (const run of history) {
+    // A running snapshot without a live owner survived an app restart.
+    merged.set(run.id, run.status === 'running' ? { ...run, status: 'interrupted' } : run);
+  }
+  for (const [id, run] of updates) {
+    if (run) merged.set(id, run);
+    else merged.delete(id);
+  }
+  return Array.from(merged.values());
+}
+
+export async function readSubAgentHistory(): Promise<SubAgentRun[]> {
+  const updates = new Map<string, SubAgentRun | null>(transient);
+  const capture: Listener = (id, run) => { updates.set(id, run); };
+  listeners.add(capture);
+  try {
+    return mergeHistory(await window.electronAPI.message.subAgentHistory(), updates);
+  } finally {
+    listeners.delete(capture);
+  }
+}
+
 export function useSubAgentHistory() {
   const [runs, setRuns] = useState<SubAgentRun[]>([]);
   const [loading, setLoading] = useState(true);
@@ -47,17 +71,7 @@ export function useSubAgentHistory() {
       try {
         const history = await window.electronAPI.message.subAgentHistory();
         if (!open) return;
-        const merged = new Map<string, SubAgentRun>();
-        for (const run of history) {
-          // A running snapshot without a live owner survived an app restart.
-          merged.set(run.id, run.status === 'running' ? { ...run, status: 'interrupted' } : run);
-        }
-        // Include updates that arrived after the IPC read began.
-        for (const [id, run] of changes) {
-          if (run) merged.set(id, run);
-          else merged.delete(id);
-        }
-        setRuns(Array.from(merged.values()));
+        setRuns(mergeHistory(history, changes));
       } catch {
         if (open) setError(true);
       } finally {

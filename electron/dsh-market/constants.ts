@@ -27,6 +27,7 @@ export const SUPPORTED_HOST_SERVICES = [
   'commands',
   'skills',
   'credentials',
+  'llm',
   // Available only after the profile runtime provides the official storage stack.
   'storage',
   'storageDomain',

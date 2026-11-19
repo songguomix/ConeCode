@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { useImageGenStore } from './imageGen.store';
 import { useChatStore } from './chat.store';
+import * as imageApi from '../core/image/imageGen';
+import type { GeneratedImage } from '../core/image/types';
 
 describe('useImageGenStore', () => {
   beforeEach(() => {
@@ -14,6 +16,7 @@ describe('useImageGenStore', () => {
       currentResult: null,
       history: [],
       activeTab: 'studio',
+      abortController: null,
     });
   });
 
@@ -74,6 +77,32 @@ describe('useImageGenStore', () => {
 
     expect(res).toBeNull();
     expect(useImageGenStore.getState().error).toContain('请输入画作创意提示词');
+  });
+
+  it('keeps a new generation active when an earlier cancellation settles', async () => {
+    const studio = useImageGenStore.getState();
+    studio.setConfig({ providerId: 'custom', customBaseUrl: 'https://example.test', customApiKey: 'test', model: 'dall-e-3' });
+    let rejectOld!: (error: Error) => void;
+    let finishNew!: (image: GeneratedImage) => void;
+    vi.spyOn(imageApi, 'requestImageGeneration')
+      .mockImplementationOnce(() => new Promise((_, reject) => { rejectOld = reject; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { finishNew = resolve; }));
+
+    const old = studio.generate('old');
+    studio.cancelGeneration();
+    const current = studio.generate('new');
+    const controller = useImageGenStore.getState().abortController;
+    rejectOld(new DOMException('cancelled', 'AbortError'));
+    await old;
+    expect(useImageGenStore.getState()).toMatchObject({ isGenerating: true, abortController: controller });
+
+    const result: GeneratedImage = {
+      id: 'new-art', url: 'https://example.test/art.png', prompt: 'new', model: 'dall-e-3',
+      aspectRatio: '1:1', size: '1024x1024', createdAt: 1,
+    };
+    finishNew(result);
+    expect(await current).toEqual(result);
+    expect(useImageGenStore.getState().currentResult).toEqual(result);
   });
 
   it('inserts generated artwork into chat messages', async () => {

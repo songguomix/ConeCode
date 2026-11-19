@@ -7,15 +7,15 @@
 // No agent logic lives here; it only forwards intent to the same functions the
 // desktop UI calls.
 
-import { useChatStore } from '../../stores/chat.store';
-import { useCodeChangesStore } from '../../stores/codeChanges.store';
+import { orderForDisplay, useChatStore } from '../../stores/chat.store';
+import { checkpointRewindIndex, useCodeChangesStore } from '../../stores/codeChanges.store';
 import { useTodosStore } from '../../stores/todos.store';
 import { useModelStore } from '../../stores/model.store';
 import { useThemeStore } from '../../stores/theme.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
 import { useSettingsStore } from '../../stores/settings.store';
 import type { CodeChange } from '../../stores/codeChanges.store';
-import { isHolding, useInstallGateStore } from '../../stores/installGate.store';
+import { activeInstallLabel, isHolding, useInstallGateStore } from '../../stores/installGate.store';
 import { remoteQuestion } from './questionScope';
 import { requestRsiAction } from './rsiControl';
 import { useUIStore } from '../../stores/ui.store';
@@ -23,8 +23,18 @@ import { activateWorkspaceView } from '../workspace/activateView';
 import { isChatConversation, isRsiConversation, isUnarchivedConversation } from '../workspace/conversations';
 import { rsiCanStart } from '../agents/rsiStart';
 import { useComputerStore } from '../../stores/computer.store';
+import { useGoalStore } from '../../stores/goal.store';
+import { useLanguageStore } from '../../stores/language.store';
+import { BUILTIN_COMMANDS, findCommand, parseSlashInput } from '../commands';
+import { conversationCommandMode, conversationCommandNeedsModel, runConversationCommand } from '../conversationCommands';
+import { buildHandoffMarkdown, handoffFilename, handoffMessages } from '../handoff/handoff';
+import { remoteDesktopPanel, remoteWork } from './workbench';
+import { remoteImageStudio } from './imageStudio';
+import { handleWorkspaceControl } from './workspaceControl';
+import { conversationPage, remoteImageAttachments, remoteMessageImage } from './conversation';
 
 const pendingAnswers = new Set<string>();
+const pendingSends = new Set<string | null>();
 import { bulkApprovableChanges, changesForActiveConversation } from './approvalScope';
 
 function currentChanges(): CodeChange[] {
@@ -34,6 +44,23 @@ function currentChanges(): CodeChange[] {
     chat.activeConversationId,
     new Set(chat.messages.map((message) => message.id)),
   );
+}
+
+function conversationBusy(conversationId: string | null): boolean {
+  const chat = useChatStore.getState();
+  return pendingSends.has(null) || pendingSends.has(conversationId) ||
+    !!(conversationId && (chat.streamingRuns[conversationId] || chat.messageEdits[conversationId] || pendingAnswers.has(conversationId))) ||
+    isHolding(useInstallGateStore.getState().jobs);
+}
+
+function currentPlan() {
+  const chat = useChatStore.getState();
+  if (!chat.activeConversationId || !chat.planMode || chat.streamingRuns[chat.activeConversationId]) return null;
+  const ordered = orderForDisplay(chat.messages);
+  const message = ordered[ordered.length - 1];
+  return message?.role === 'assistant' && !message.isToolResult && !message.isQuestion && !message.isLocalNotice
+    ? message
+    : null;
 }
 
 function buildSnapshot() {
@@ -67,50 +94,39 @@ function buildSnapshot() {
   const activeRun = chat.activeConversationId ? chat.streamingRuns[chat.activeConversationId] : undefined;
   const question = remoteQuestion(chat.messages, chat.activeConversationId);
   const activeConversation = chat.conversations.find((c) => c.id === chat.activeConversationId);
+  const installLabel = activeInstallLabel(useInstallGateStore.getState().jobs);
+  const { t } = useLanguageStore.getState();
+  const goal = chat.activeConversationId ? useGoalStore.getState().goals[chat.activeConversationId] : undefined;
   const computer = useComputerStore.getState();
   const rsi = activeConversation?.rsi;
+  const conversations = chat.conversations.map((conversation) => ({
+    id: conversation.id,
+    title: conversation.title,
+    viewMode: isRsiConversation(conversation) ? 'rsi' : isChatConversation(conversation) ? 'chat' : 'work',
+    archived: !isUnarchivedConversation(conversation),
+    rootPath: conversation.rootPath,
+    isRunning: runningIds.includes(conversation.id),
+    changedFiles: filesByConversation.get(conversation.id) || [],
+  }));
   return {
     // The desktop's resolved theme so the phone mirror matches light/dark live.
     theme: useThemeStore.getState().resolved,
     // Project root, so the phone's file browser starts at the open folder.
     rootPath: useWorkspaceStore.getState().rootPath,
+    workspaceRoots: useWorkspaceStore.getState().allRoots(),
     models,
     runningConversationId: runningIds[0] ?? null,
     runningConversationIds: runningIds,
-    conversations: chat.conversations.filter(isUnarchivedConversation).map((c) => ({
-      id: c.id,
-      title: c.title,
-      viewMode: isRsiConversation(c) ? 'rsi' : isChatConversation(c) ? 'chat' : 'work',
-      isRunning: runningIds.includes(c.id),
-      changedFiles: filesByConversation.get(c.id) || [],
-    })),
+    conversations: conversations.filter((conversation) => !conversation.archived),
+    archivedConversations: conversations.filter((conversation) => conversation.archived),
     activeConversationId: chat.activeConversationId,
-    // Cap history so a long conversation doesn't make every frame huge over a
-    // (possibly cross-region) tunnel — the phone is a live mirror, not an archive.
-    messages: chat.messages.slice(-50).map((m) => ({
-      id: m.id,
-      role: m.role,
-      content: m.content,
-      isToolResult: m.isToolResult,
-      isLocalNotice: m.isLocalNotice,
-      reasoningContent: m.reasoning_content,
-      toolCallId: m.toolCallId,
-      toolName: m.toolName,
-      isSummary: m.isSummary,
-      isQuestion: m.isQuestion,
-      questionOptions: m.questionOptions,
-      summaryUpToId: m.summaryUpToId,
-      // Native tool calls have no text body — send the names so a tool-only
-      // turn shows what the agent did instead of an empty bubble.
-      toolCalls: m.toolCalls?.map((tc) => ({ id: tc.id, name: tc.name })),
-      thinkingTime: m.thinkingTime,
-      tokensUsed: m.tokensUsed,
-    })),
+    ...conversationPage(orderForDisplay(chat.messages)),
     isStreaming: !!activeRun,
     streamingContent: activeRun?.content ?? '',
     streamingReasoningContent: activeRun?.reasoningContent ?? '',
     streamingStatus: activeRun?.status ?? null,
     streamingToolName: activeRun?.toolName ?? null,
+    streamingRetry: activeRun?.retry ?? null,
     todos: todos.map((t) => ({ content: t.content, status: t.status })),
     // Keep recent changes; only ship a command's text (file diffs would bloat
     // the snapshot — the phone shows file name + kind, not the diff body).
@@ -127,13 +143,22 @@ function buildSnapshot() {
     })),
     model: model ? { id: model.id, name: model.name, providerId: model.providerId } : null,
     reasoningEffort: chat.reasoningEffort,
-    capabilities: ['uuRemote', 'workModes', 'queue', 'renameConversation', 'changeDetail', 'questions', 'workspaceViews', 'rsiControls'],
+    capabilities: ['uuRemote', 'workModes', 'queue', 'renameConversation', 'changeDetail', 'questions', 'remoteSettings', 'workspaceViews', 'rsiControls', 'conversationActions', 'conversationImages', 'workspaceControl', 'remoteWork', 'remoteImageStudio', 'remoteDesktopPanel'],
     error: chat.error,
+    planMessageId: currentPlan()?.id ?? null,
+    goal,
+    slashCommands: [
+      ...BUILTIN_COMMANDS.map((command) => ({ name: command.name, description: t(command.description) })),
+      ...useWorkspaceStore.getState().customCommands.map(({ name, description }) => ({ name, description })),
+    ],
+    installLabel,
+    isEditingMessage: !!(chat.activeConversationId && chat.messageEdits[chat.activeConversationId]),
+    canContinue: !!chat.activeConversationId && chat.continuableConvId === chat.activeConversationId &&
+      !activeRun && !chat.messageEdits[chat.activeConversationId] && installLabel === null,
     question: question ? {
       id: question.id, conversationId: question.conversationId, content: question.content,
       options: question.questionOptions || [],
-      canReply: !activeRun && !chat.messageEdits[question.conversationId] &&
-        !pendingAnswers.has(question.conversationId) && !isHolding(useInstallGateStore.getState().jobs),
+      canReply: !conversationBusy(question.conversationId),
     } : null,
     viewMode: chat.agentMode === 'rsi' ? 'rsi' : useUIStore.getState().viewMode,
     rsi: rsi ? {
@@ -143,7 +168,9 @@ function buildSnapshot() {
     agentMode: chat.agentMode,
     planMode: chat.planMode,
     reviewMode: chat.reviewMode,
-    queuedMessages: (chat.activeConversationId ? chat.queuedMessages?.[chat.activeConversationId] : []) || [],
+    queuedMessages: (chat.activeConversationId ? chat.queuedMessages[chat.activeConversationId] : [])?.map(
+      ({ id, content, steer, steerError, images }) => ({ id, content, steer, steerError, imageCount: images?.length ?? 0 }),
+    ) ?? [],
   };
 }
 
@@ -169,7 +196,7 @@ function structuralSig(): string {
   return [
     chat.activeConversationId,
     Object.keys(chat.streamingRuns).join(','),
-    chat.conversations.filter(isUnarchivedConversation).map((c) => `${c.id}:${c.title}:${c.updatedAt}`).join(','),
+    chat.conversations.map((c) => `${c.id}:${c.title}:${c.updatedAt}:${c.archivedAt}:${c.rootPath}`).join(','),
     chat.messages.length,
     lastMsg ? `${lastMsg.id}:${lastMsg.content.length}:${lastMsg.reasoning_content?.length || 0}:${lastMsg.toolCalls?.length || 0}:${lastMsg.isToolResult ? 1 : 0}:${lastMsg.toolName || ''}` : '',
     (chat.activeConversationId ? chat.streamingRuns[chat.activeConversationId]?.toolName : '') || '',
@@ -183,17 +210,26 @@ function structuralSig(): string {
     JSON.stringify(chat.conversations.find((c) => c.id === chat.activeConversationId)?.rsi || null),
     useComputerStore.getState().screenRecording, useComputerStore.getState().accessibility,
     lastMsg?.isQuestion, JSON.stringify(lastMsg?.questionOptions || []),
-    isHolding(useInstallGateStore.getState().jobs),
+    activeInstallLabel(useInstallGateStore.getState().jobs),
+    chat.continuableConvId,
+    JSON.stringify(chat.activeConversationId ? useGoalStore.getState().goals[chat.activeConversationId] : null),
+    JSON.stringify(chat.activeConversationId ? chat.streamingRuns[chat.activeConversationId]?.retry : null),
     !!(chat.activeConversationId && chat.messageEdits[chat.activeConversationId]),
     !!(chat.activeConversationId && pendingAnswers.has(chat.activeConversationId)),
-    JSON.stringify(chat.activeConversationId ? chat.queuedMessages?.[chat.activeConversationId] : []),
+    pendingSends.has(null) || pendingSends.has(chat.activeConversationId),
+    JSON.stringify(chat.activeConversationId ? chat.queuedMessages[chat.activeConversationId]?.map(
+      ({ id, steer, steerError }) => [id, steer, steerError],
+    ) : []),
     useThemeStore.getState().resolved,
-    useWorkspaceStore.getState().rootPath || '',
+    JSON.stringify(useWorkspaceStore.getState().allRoots()),
+    JSON.stringify(useWorkspaceStore.getState().customCommands.map(({ name, description }) => [name, description])),
+    useLanguageStore.getState().locale,
   ].join('|');
 }
 
 let lastSig: string | null = null;
 let lastStreaming = false;
+let lastMessages: ReturnType<typeof useChatStore.getState>['messages'] | undefined;
 let publishTimer: ReturnType<typeof setTimeout> | null = null;
 function publishSoon() {
   const api = (window as any).electronAPI?.remote;
@@ -203,13 +239,14 @@ function publishSoon() {
     publishTimer = null;
     const chat = useChatStore.getState();
     const sig = structuralSig();
-    const streamingNow = chat.isStreaming;
+    const streamingNow = !!(chat.activeConversationId && chat.streamingRuns[chat.activeConversationId]);
     try {
-      if (sig !== lastSig || streamingNow !== lastStreaming) {
+      if (sig !== lastSig || streamingNow !== lastStreaming || lastMessages !== chat.messages) {
         // Something material changed (new message, approval, todo, model, theme,
         // or streaming just started/stopped) → send the full snapshot.
         lastSig = sig;
         lastStreaming = streamingNow;
+        lastMessages = chat.messages;
         api.publish({ type: 'state', snapshot: buildSnapshot() });
       } else if (streamingNow) {
         // Pure token growth → send only the streaming fields (of the active
@@ -245,18 +282,56 @@ async function handleCommand(cmd: any) {
   const changes = useCodeChangesStore.getState();
   const fs = (window as any).electronAPI?.fs;
   switch (cmd.type) {
+    case 'remoteWork':
+      if (cmd.reqId) reply(cmd.reqId, remoteWork(cmd));
+      break;
+    case 'remoteImageStudio':
+      if (cmd.reqId) reply(cmd.reqId, await remoteImageStudio(cmd));
+      break;
+    case 'remoteDesktopPanel':
+      if (cmd.reqId) reply(cmd.reqId, remoteDesktopPanel(cmd.panel));
+      break;
+    case 'remoteSettings': {
+      if (typeof cmd.reqId !== 'string') break;
+      const { handleRemoteSettings } = await import('./settings');
+      reply(cmd.reqId, await handleRemoteSettings(cmd));
+      break;
+    }
     case 'send': {
       const model = useModelStore.getState().getSelectedModel();
-      if (!model || !cmd.text) return;
-      await chat.sendMessage(String(cmd.text), model.providerId, model.id);
+      const images = remoteImageAttachments(cmd.images);
+      const conversationId = chat.activeConversationId;
+      if (typeof cmd.text !== 'string' || !images || (!cmd.text.trim() && !images.length) ||
+        (cmd.conversationId !== undefined && cmd.conversationId !== conversationId) || conversationBusy(conversationId)) {
+        reply(cmd.reqId, { ok: false });
+        break;
+      }
+      // Older clients send literal text without an explicit conversation scope.
+      const slash = cmd.conversationId === undefined ? null : parseSlashInput(cmd.text.trim());
+      const command = slash ? findCommand(slash.name, useWorkspaceStore.getState().customCommands) : undefined;
+      if ((!model && (!command || conversationCommandNeedsModel(command))) ||
+        (command?.name === 'mode' && !conversationCommandMode(slash?.args ?? '')) ||
+        (command?.name === 'goal' && !slash?.args.trim())) {
+        reply(cmd.reqId, { ok: false });
+        break;
+      }
+      pendingSends.add(conversationId);
+      try {
+        reply(cmd.reqId, { ok: true });
+        const options = { images, keepComposerImages: true };
+        if (command && slash) await runConversationCommand(command, slash.args, options);
+        else if (model) await chat.sendMessage(cmd.text, model.providerId, model.id, options);
+      } finally {
+        pendingSends.delete(conversationId);
+        publishSoon();
+      }
       break;
     }
     case 'answerQuestion': {
       const question = remoteQuestion(chat.messages, chat.activeConversationId);
       if (!question || cmd.id !== question.id || cmd.conversationId !== question.conversationId ||
         typeof cmd.text !== 'string' || !cmd.text.trim() || cmd.text.length > 16_384 ||
-        chat.streamingRuns[question.conversationId] || chat.messageEdits[question.conversationId] ||
-        pendingAnswers.has(question.conversationId) || isHolding(useInstallGateStore.getState().jobs)) {
+        conversationBusy(question.conversationId)) {
         reply(cmd.reqId, { ok: false });
         break;
       }
@@ -268,7 +343,7 @@ async function handleCommand(cmd: any) {
       publishSoon();
       reply(cmd.reqId, { ok: true });
       try {
-        await chat.sendMessage(cmd.text.trim(), providerId, modelId);
+        await chat.sendMessage(cmd.text.trim(), providerId, modelId, { keepComposerImages: true });
       } finally {
         pendingAnswers.delete(question.conversationId);
         publishSoon();
@@ -299,7 +374,7 @@ async function handleCommand(cmd: any) {
       if (cmd.value === 'chat' || cmd.value === 'work' || cmd.value === 'rsi') await activateWorkspaceView(cmd.value);
       break;
     case 'setAgentMode':
-      if (cmd.value === 'standard' || cmd.value === 'goal') chat.setAgentMode(cmd.value);
+      if (cmd.value === 'standard' || cmd.value === 'goal' || cmd.value === 'orchestrate') chat.setAgentMode(cmd.value);
       break;
     case 'setPlanMode':
       if (typeof cmd.value === 'boolean') chat.setPlanMode(cmd.value);
@@ -314,14 +389,213 @@ async function handleCommand(cmd: any) {
       break;
     case 'enqueueMessage': {
       const model = useModelStore.getState().getSelectedModel();
-      if (model && chat.activeConversationId && typeof cmd.text === 'string' && cmd.text.trim()) {
-        chat.enqueueMessage(chat.activeConversationId, cmd.text, model.providerId, model.id);
+      const images = remoteImageAttachments(cmd.images);
+      const conversationId = chat.activeConversationId;
+      if (!model || !conversationId || typeof cmd.text !== 'string' || !images || (!cmd.text.trim() && !images.length) ||
+        (cmd.conversationId !== undefined && cmd.conversationId !== conversationId) ||
+        chat.messageEdits[conversationId] || isHolding(useInstallGateStore.getState().jobs)) {
+        reply(cmd.reqId, { ok: false });
+        break;
       }
+      const accepted = chat.enqueueMessage(conversationId, cmd.text, model.providerId, model.id, images);
+      reply(cmd.reqId, { ok: accepted !== 'dropped' });
       break;
     }
     case 'dequeueMessage':
       if (chat.activeConversationId && typeof cmd.id === 'string') chat.dequeueMessage(chat.activeConversationId, cmd.id);
       break;
+    case 'steerQueuedMessage':
+      if (chat.activeConversationId && cmd.conversationId === chat.activeConversationId && typeof cmd.id === 'string') {
+        chat.steerQueuedMessage(chat.activeConversationId, cmd.id);
+      }
+      break;
+    case 'conversationHistory': {
+      if (!chat.activeConversationId || cmd.conversationId !== chat.activeConversationId || typeof cmd.beforeId !== 'string') {
+        reply(cmd.reqId, { ok: false });
+        break;
+      }
+      const page = conversationPage(orderForDisplay(chat.messages), cmd.beforeId);
+      reply(cmd.reqId, page ? { ok: true, ...page } : { ok: false });
+      break;
+    }
+    case 'conversationImage': {
+      const dataUrl = chat.activeConversationId && cmd.conversationId === chat.activeConversationId && typeof cmd.id === 'string'
+        ? remoteMessageImage(chat.messages, cmd.id, cmd.index)
+        : null;
+      reply(cmd.reqId, dataUrl ? { ok: true, dataUrl } : { ok: false });
+      break;
+    }
+    case 'conversationHandoff': {
+      const conversation = chat.conversations.find((item) => item.id === cmd.conversationId && item.id === chat.activeConversationId);
+      if (!conversation) { reply(cmd.reqId, { ok: false }); break; }
+      const messages = await window.electronAPI.message.list(conversation.id).catch(() => null);
+      if (!messages || useChatStore.getState().activeConversationId !== conversation.id || !handoffMessages(messages).length) {
+        reply(cmd.reqId, { ok: false });
+        break;
+      }
+      const { t } = useLanguageStore.getState();
+      const selected = useModelStore.getState().getSelectedModel();
+      const exportedAt = Date.now();
+      const markdown = buildHandoffMarkdown({
+        title: conversation.title,
+        modelLabel: conversation.providerId && conversation.modelId
+          ? conversation.providerId + '/' + conversation.modelId
+          : (selected ? selected.providerId + '/' + selected.id : '—'),
+        projectPath: conversation.rootPath || useWorkspaceStore.getState().rootPath || '',
+        exportedAt,
+        prompt: t('handoffPrompt'),
+        howTo: t('handoffHow'),
+        messages,
+        includeTools: cmd.includeTools === true,
+        includeToolResults: cmd.includeToolResults === true,
+      });
+      if (new TextEncoder().encode(markdown).length > 2_000_000) {
+        reply(cmd.reqId, { ok: false, error: 'too-large' });
+        break;
+      }
+      reply(cmd.reqId, { ok: true, filename: handoffFilename(conversation.title, exportedAt), markdown });
+      break;
+    }
+    case 'conversationCheckpoint': {
+      const id = chat.activeConversationId;
+      const change = currentChanges().find((item) => item.id === cmd.id);
+      if (!id || cmd.conversationId !== id || !change?.messageId || conversationBusy(id)) {
+        reply(cmd.reqId, { ok: false, error: 'unavailable' });
+        break;
+      }
+      const index = checkpointRewindIndex(chat.messages, change.messageId);
+      if (index < 0) { reply(cmd.reqId, { ok: false, error: 'unavailable' }); break; }
+      const removed = new Set(chat.messages.slice(index).map((message) => message.id));
+      const affected = changes.changes.filter((item) => item.messageId && removed.has(item.messageId) &&
+        (item.status === 'pending' || item.status === 'applied'));
+      const revision = [chat.messages[chat.messages.length - 1]?.id, affected.map((item) => item.id + ':' + item.status).join(',')].join('|');
+      if (cmd.action === 'preview') {
+        const files = [...new Set(affected.filter((item) => item.kind !== 'exec' && item.kind !== 'computer').map((item) => item.filePath))];
+        const retainedEffects = affected.filter((item) => (item.kind === 'exec' || item.kind === 'computer') && item.status === 'applied').length;
+        reply(cmd.reqId, { ok: true, revision, files: files.slice(0, 25), fileCount: files.length, retainedEffects, messageCount: removed.size });
+      } else if (cmd.action === 'restore' && cmd.revision === revision) {
+        pendingSends.add(id);
+        try {
+          const result = await changes.revertToMessage(change.messageId);
+          reply(cmd.reqId, { ok: result.success, error: result.error });
+        } catch (error) {
+          reply(cmd.reqId, { ok: false, error: String(error) });
+        } finally {
+          pendingSends.delete(id);
+          publishSoon();
+        }
+      } else {
+        reply(cmd.reqId, { ok: false, error: 'stale' });
+      }
+      break;
+    }
+    case 'undoConversationChange': {
+      const change = currentChanges().find((item) => item.id === cmd.id);
+      if (!chat.activeConversationId || cmd.conversationId !== chat.activeConversationId ||
+          !change || change.status !== 'applied' || change.kind === 'exec' || change.kind === 'computer') {
+        reply(cmd.reqId, { ok: false });
+        break;
+      }
+      const result = await changes.revertChange(change.id);
+      reply(cmd.reqId, { ok: result.success, error: result.error });
+      break;
+    }
+    case 'setConversationArchived': {
+      const conversation = chat.conversations.find((item) => item.id === cmd.id);
+      if (conversation && typeof cmd.archived === 'boolean' && !chat.streamingRuns[conversation.id] && !chat.messageEdits[conversation.id]) {
+        await chat.setConversationArchived(conversation.id, cmd.archived);
+      }
+      break;
+    }
+    case 'editConversationMessage':
+    case 'resendConversationMessage': {
+      const conversationId = chat.activeConversationId;
+      const message = chat.messages.find((item) => item.id === cmd.id && item.conversationId === conversationId);
+      if (!conversationId || conversationId !== cmd.conversationId || !message || message.role !== 'user' ||
+        message.isToolResult || message.isLocalNotice || chat.messageEdits[conversationId] ||
+        isHolding(useInstallGateStore.getState().jobs)) {
+        reply(cmd.reqId, { ok: false });
+        break;
+      }
+      if (cmd.type === 'resendConversationMessage') {
+        reply(cmd.reqId, { ok: true });
+        await chat.resendMessage(message.id);
+        break;
+      }
+      const model = useModelStore.getState().getSelectedModel();
+      if (!model || typeof cmd.text !== 'string' || !cmd.text.trim()) {
+        reply(cmd.reqId, { ok: false });
+        break;
+      }
+      reply(cmd.reqId, { ok: true });
+      await chat.editMessage(message.id, cmd.text, model.providerId, model.id);
+      break;
+    }
+    case 'continueConversation': {
+      const conversationId = chat.activeConversationId;
+      if (conversationId && cmd.conversationId === conversationId && chat.continuableConvId === conversationId) {
+        await chat.continueGeneration(conversationId);
+      }
+      break;
+    }
+    case 'compactConversation': {
+      const model = useModelStore.getState().getSelectedModel();
+      if (model && chat.activeConversationId && cmd.conversationId === chat.activeConversationId &&
+        !chat.streamingRuns[chat.activeConversationId] && !chat.messageEdits[chat.activeConversationId] &&
+        !isHolding(useInstallGateStore.getState().jobs)) {
+        await chat.compactConversation(model.providerId, model.id);
+      }
+      break;
+    }
+    case 'clearConversationError':
+      if (cmd.conversationId === chat.activeConversationId) chat.clearError();
+      break;
+    case 'approveConversationPlan': {
+      if (!chat.activeConversationId || cmd.conversationId !== chat.activeConversationId || conversationBusy(chat.activeConversationId)) break;
+      const plan = currentPlan();
+      if (!plan || cmd.id !== plan.id) break;
+      const model = useModelStore.getState().getSelectedModel();
+      const providerId = plan.providerId || model?.providerId;
+      const modelId = plan.modelId || model?.id;
+      if (!providerId || !modelId) break;
+      pendingSends.add(chat.activeConversationId);
+      try {
+        chat.setPlanMode(false);
+        await chat.sendMessage(useLanguageStore.getState().t('planApproved'), providerId, modelId, { keepComposerImages: true });
+      } finally {
+        pendingSends.delete(chat.activeConversationId);
+        publishSoon();
+      }
+      break;
+    }
+    case 'conversationGoal': {
+      const id = chat.activeConversationId;
+      if (!id || cmd.conversationId !== id) break;
+      const goals = useGoalStore.getState();
+      const goal = goals.goals[id];
+      if (!goal) break;
+      if (cmd.action === 'pause' && goal.status === 'running') {
+        goals.setStatus(id, 'paused');
+        if (chat.streamingRuns[id]) chat.stopGeneration(id);
+      } else if (cmd.action === 'clear') {
+        if (chat.streamingRuns[id]) chat.stopGeneration(id);
+        goals.clearGoal(id);
+      } else if (cmd.action === 'edit' && goal.status !== 'completed' &&
+        typeof cmd.text === 'string' && cmd.text.trim() && cmd.text.length <= 32_000) {
+        goals.updateGoal(id, cmd.text.trim());
+        const model = useModelStore.getState().getSelectedModel();
+        if (model && !conversationBusy(id)) {
+          const prompt = useLanguageStore.getState().t('goalUpdatedPrompt');
+          await chat.sendMessage(prompt + ' ' + cmd.text.trim(), model.providerId, model.id, { keepComposerImages: true });
+        }
+      } else if (cmd.action === 'resume' && goal.status === 'paused' && !conversationBusy(id)) {
+        const model = useModelStore.getState().getSelectedModel();
+        if (!model) break;
+        goals.setStatus(id, 'running');
+        await chat.sendMessage(useLanguageStore.getState().t('goalResumePrompt'), model.providerId, model.id, { keepComposerImages: true });
+      }
+      break;
+    }
     case 'changeDetail': {
       const change = currentChanges().find((c) => c.id === cmd.id);
       reply(cmd.reqId, change ? { ok: true, originalCode: change.originalCode, newCode: change.newCode } : { ok: false });
@@ -349,7 +623,7 @@ async function handleCommand(cmd: any) {
       if (cmd.id) useModelStore.getState().selectModel(cmd.id, cmd.providerId);
       break;
     case 'setReasoningEffort':
-      if (cmd.value === 'low' || cmd.value === 'medium' || cmd.value === 'high') {
+      if (cmd.value === 'auto' || cmd.value === 'low' || cmd.value === 'medium' || cmd.value === 'high') {
         chat.setReasoningEffort(cmd.value);
       }
       break;
@@ -377,6 +651,9 @@ async function handleCommand(cmd: any) {
     }
 
     // ---- File browser / editor / terminal (request → reply by reqId) ----
+    case 'workspaceControl':
+      if (cmd.reqId) await handleWorkspaceControl(cmd, (data) => reply(cmd.reqId, data));
+      break;
     case 'listDir': {
       const path = String(cmd.path || '');
       const entries = path ? await fs?.readDir(path) : [];
@@ -457,6 +734,10 @@ export function initRemoteBridge() {
   useUIStore.subscribe(publishSoon);
   useComputerStore.subscribe(publishSoon);
   useInstallGateStore.subscribe(publishSoon);
-  (window as any).electronAPI?.remote?.onCommand(handleCommand);
+  useGoalStore.subscribe(publishSoon);
+  useLanguageStore.subscribe(publishSoon);
+  (window as any).electronAPI?.remote?.onCommand((cmd: any) => {
+    void handleCommand(cmd).catch(() => reply(cmd?.reqId, { ok: false, error: 'Desktop operation failed' }));
+  });
   publishSoon();
 }

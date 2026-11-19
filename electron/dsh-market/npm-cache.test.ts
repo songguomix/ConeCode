@@ -14,22 +14,22 @@ function tempDir(): string {
 
 afterEach(() => {
   vi.unstubAllEnvs();
-  delete process.env.CONECODE_NPM_CACHE;
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
 describe('npm cache isolation', () => {
   it('keeps the npm cache inside the app data directory, not the host ~/.npm', () => {
     const state = new MarketStateStore(tempDir());
+    vi.stubEnv('CONECODE_NPM_CACHE', undefined);
     expect(npmCacheDir(state)).toBe(path.join(state.cacheDir(), 'npm'));
     expect(npmCacheDir(state).startsWith(state.root)).toBe(true);
   });
 
   it('honours CONECODE_NPM_CACHE as an absolute operator override', () => {
     const state = new MarketStateStore(tempDir());
-    process.env.CONECODE_NPM_CACHE = 'relative/ops-cache';
+    vi.stubEnv('CONECODE_NPM_CACHE', 'relative/ops-cache');
     expect(npmCacheDir(state)).toBe(path.resolve('relative/ops-cache'));
-    process.env.CONECODE_NPM_CACHE = '   ';
+    vi.stubEnv('CONECODE_NPM_CACHE', '   ');
     expect(npmCacheDir(state)).toBe(path.join(state.cacheDir(), 'npm'));
   });
 
@@ -44,7 +44,7 @@ describe('npm cache isolation', () => {
   });
 
   it('omits npm_config_cache when no cache dir is known', () => {
-    delete process.env.npm_config_cache;
+    vi.stubEnv('npm_config_cache', undefined);
     expect(npmEnv(undefined).npm_config_cache).toBeUndefined();
   });
 

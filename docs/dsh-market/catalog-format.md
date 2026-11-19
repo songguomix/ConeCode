@@ -68,9 +68,9 @@ cache fields.
 
 | `source.type` | Required fields | Install behavior |
 |---|---|---|
-| `npm` | `version` (exact SemVer) | `npm install <name>@<version>` |
-| `git` | `url` (https), `commit` (lowercase 40 hex), optional `subdir` | `npm install git+<url>.git#<commit>` or `...#<commit>&path:/<subdir>` |
-| `local` | `path` | copied/npm-installed from the absolute path |
+| `npm` | `version` (exact SemVer) | Installs the exact release. A catalog `integrity` value triggers archive verification before installing dependencies. |
+| `git` | `url` (HTTPS), `commit` (lowercase 40 hex), optional `subdir` | Checks out the exact commit, packs the selected package directory and installs the archive. |
+| `local` | `path` | Accepts an absolute path or a path relative to the local catalog file. Directories are copied into staging. npm installs package archives. |
 | `bundled-example` | `path` | first-party sample copied into the profile |
 
 The installer re-reads the installed `package.json` and refuses a resolved
@@ -85,7 +85,7 @@ A configured remote or local source can also be a DSH market index with
 - `metadata.categories`, `labels`, `keywords`, `sortKeys`;
 - plugin `name`, `title`, `description`, `author`, `homepage`, `repository`;
 - versions with `version`, `publishTimestamp`, `source` (`npm` or `git`),
-  `engines.dsh`.
+  `engines.dsh`; Git versions use `source.path` for a repository package subdirectory.
 
 It converts those into the internal model; missing fields (for example a license
 or dependency list) stay missing. It does not claim to implement the official
@@ -108,8 +108,9 @@ For each source the Sources page shows:
 
 A failed remote/local refresh never erases the last usable cache. If no cache
 exists, the source contributes no entries and the error is visible. A remote
-response is size-limited and must be valid JSON; redirects are followed by the
-fetch client, but the URL is validated and cannot carry credentials.
+response must contain valid JSON and fit within 12 MiB. Configure the final URL
+without credentials. The catalog fetcher rejects redirects and remote entries
+that reference local paths.
 
 ## Regenerating the bundled catalog
 

@@ -13,8 +13,9 @@ function slug(value: string): string {
   return value.replace(/^@/, '').replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 22) || 'plugin';
 }
 
-export function chatServerName(pluginId: string, kind: 'tool' | 'command'): string {
-  return `${kind === 'tool' ? 'dsh' : 'dshcmd'}_${slug(pluginId)}_${shortHash(`${kind}\0${pluginId}`)}`;
+export function chatServerName(pluginId: string, kind: 'tool' | 'command', rowId?: string): string {
+  const identity = rowId === undefined ? pluginId : `${pluginId}\0${rowId}`;
+  return `${kind === 'tool' ? 'dsh' : 'dshcmd'}_${slug(pluginId)}_${shortHash(`${kind}\0${identity}`)}`;
 }
 
 export function isDshChatServer(server: string): boolean {

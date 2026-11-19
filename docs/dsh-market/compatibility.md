@@ -1,5 +1,9 @@
 # DSH Compatibility Matrix and Verification Record
 
+## Official DSH Web verification, 2026-11-18
+
+ConeCode installed the catalog archive for `dsh-theme@1.0.1` through the official `dsh` executable from DeepSeek Harness Desktop `0.2.2-rc.3` on macOS arm64. The authenticated Web page registered and served the theme's client module. In a fresh Chromium session its API listed 30 themes. Selecting `forest` set `document.body.dataset.dshTheme` to `forest` and applied 9,386 characters of theme CSS. The reproducible installation and HTTP checks are in [official-web.test.ts](../../electron/dsh-market/official-web.test.ts). This result applies to the official Web profile. The embedded worker matrix below describes installations inside ConeCode.
+
 This page separates two facts that are often conflated:
 
 1. **Author declaration** — the `engines.dsh` range, or DSH peer dependency ranges
@@ -17,10 +21,10 @@ declaration but manually exempted and **Partial**. The marketplace displays both
 | DSH | `0.2.2-rc.1` |
 | Tag | `dsh-v0.2.2-rc.1` |
 | Commit | `66491b05e3f05ad35bcdd4f6cd7ed26041d9e3db` |
-| Adapter | ConeCode DSH layer `1.0.0` |
+| Adapter | ConeCode DSH layer `1.1.0` |
 | Runtime | Electron `42.11.3`, Node `24.19.0`, Chrome `148.0.7778.280` |
 | Host | macOS 27.2, arm64 |
-| Date | 2026-11-06 |
+| Host matrix rerun | 2026-11-18 |
 
 Records are stored in
 [`resources/dsh-market/verifications.json`](../../resources/dsh-market/verifications.json).
@@ -35,7 +39,7 @@ instead of remaining green.
 | [`dsh-plugin-error-radar`](https://www.npmjs.com/package/dsh-plugin-error-radar) | `0.2.0` | No `engines.dsh`; peer `@deepseek-ai/cordis >=4.0.0` | **Verified** | `/radar`, `/health`, config save, disable/re-enable, failed-update rollback, restart restore, uninstall cleanup | None for the host half. Fixture trace data is input, not generated output. |
 | [`dsh-plugin-guide`](https://www.npmjs.com/package/dsh-plugin-guide) | `0.4.5` | `engines.dsh >=0.2.2-0 <0.3.0`, `engines.node >=24.9.0` | **Verified** | skill registration, list, body read | Pure skill plugin. |
 | [`dsh-plugin-health`](https://www.npmjs.com/package/dsh-plugin-health) | `3.0.5` | `engines.dsh >=0.2.0-rc.0 <0.3.0-0` | **Partial** | `plugin_health` tool returns a structured report; update to `3.0.4` and rollback to `3.0.5` | Ships `dsh.client`; the Web UI half is **not mounted** (`web-client`). Host half verified. |
-| [`dsh-find-plugin`](https://www.npmjs.com/package/dsh-find-plugin) | `0.4.0` | Peer `@deepseek-ai/dsh-tools ^0.1.0-rc.6 \|\| ^0.1.7-alpha.1` | **Partial** | `find_dsh_plugin` tool, live GitHub search, curated fallback | The declared peer range excludes `0.2.2-rc.1`; installation is refused without an exact-version exemption. With the exemption, the tool works with the shared `0.2.2-rc.1` peer. |
+| [`dsh-find-plugin`](https://www.npmjs.com/package/dsh-find-plugin) | `0.4.0` | Peer `@deepseek-ai/dsh-tools ^0.1.0-rc.6 \|\| ^0.1.7-alpha.1` | **Partial** | `find_dsh_plugin` tool, terminal query with ranked results | The declared peer range excludes `0.2.2-rc.1`; installation is refused without an exact-version exemption. With the exemption, the tool works with the shared `0.2.2-rc.1` peer. |
 | [`@dhicoc/dsh-chinese-traditional-wisdom-skill`](https://www.npmjs.com/package/@dhicoc/dsh-chinese-traditional-wisdom-skill) | `1.3.0` | No `engines.dsh`; peer `@deepseek-ai/dsh-skill ^0.2.0-rc.2` | **Verified (provider + body)** | `registerProvider`, list, get; body read | The skill body references downstream local engines; provider registration/body retrieval are verified, but every engine workflow is not claimed. |
 | `dsh-plugin-debugging` | `0.7.1` | `engines.dsh ^0.1.7-rc.1 \|\| ^0.2.0-rc.1 \|\| ^0.2.1-rc.1` | **Unverified / expect partial** | — | Requires host services beyond this layer (agents/fs/web server routes); not in the verified set. |
 | [`dsh-layerfs`](https://github.com/Ephemeral-AI-Lab/dsh-layerfs) | repo `b9bf3bc8` / package `0.1.0` | `engines.dsh >=0.2.1-alpha.4 <0.3.0` | **Incompatible / blocked** | — | Injects `shellEnv`, `sessions`; optionally `webServer`, `connection`, `systemPrompt`. Requires LayerFS checkout `fabefdf87a`, native daemon, Docker daemon/image, sealed bundle and DSH Web client. Docker daemon is not running here and the LayerFS build is absent. See [`layerfs.md`](layerfs.md). |
@@ -44,8 +48,8 @@ instead of remaining green.
 | `dsh-plugin-upgrader` | `1.8.0` | `engines.dsh >=0.2.1-rc.3 <0.3.0-0` | **Unverified / client half** | — | Version/rollback UI implemented against DSH client slots; not mounted. |
 | `dsh-plugin-tool-management` | `0.22.2` | `engines.dsh >=0.2.2-rc.1 <0.2.3` | **Unverified / expect partial** | — | Requires many DSH host services and a client UI; not in the verified set. |
 | `dsh-plugin-memory` | `0.17.9` | `engines.dsh ^0.2.1-rc.5` | **Unverified / expect partial** | — | Memory provider needs host prompt/session services beyond this layer. |
-| `dsh-our-free-model` | `2.1.0` | No DSH range; client half | **Incompatible host-only** | — | Model/provider + client UI; not provided by this layer. |
-| `dsh-theme` | `1.0.1` | No range; client half | **Incompatible host-only** | — | Theme/CSS client plugin. |
+| `dsh-our-free-model` | `2.1.0` | No DSH range; client half | **Partial in embedded worker** | `our-free-model` and `our-free-model-region` registered and removed on unload | Tested from the published package with an empty config and networking disabled. Browser model selection runs in DSH Web. Online inference was outside this check. |
+| `dsh-theme` | `1.0.1` | No range; client half | **Verified in official DSH Web** | Select `forest` and apply theme CSS | Client-only contribution. |
 | `hello-conecode` (ConeCode native sample) | `1.0.0` | ConeCode `conecode.plugin.json`, apiVersion 1 | **Verified sample** | `hello_conecode` tool, `/hello` command, `hello-conecode` skill, unload cleanup | First-party sample; explicitly **not** community compatibility evidence. |
 
 The first five rows are community-plugin evidence for this release. The sample

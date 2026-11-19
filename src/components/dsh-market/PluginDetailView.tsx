@@ -7,7 +7,7 @@ import {
 } from 'react-icons/fi';
 import { useDshMarketStore } from '../../stores/dshMarket.store';
 import {
-  CompatBadge, MarketMarkdown, PluginIcon, SourceBadge, StatusBadge,
+  useMarketDialogEscape, CompatBadge, DshWebAction, MarketMarkdown, PluginIcon, SourceBadge, StatusBadge,
   formatDate, formatDateTime, formatNumber,
 } from './MarketCommon';
 
@@ -19,7 +19,6 @@ export default function PluginDetailView({ t }: { t: (key: string) => string }) 
   const clearSelection = useDshMarketStore((s) => s.clearSelection);
   const selectPlugin = useDshMarketStore((s) => s.selectPlugin);
   const install = useDshMarketStore((s) => s.install);
-  const update = useDshMarketStore((s) => s.update);
   const rollback = useDshMarketStore((s) => s.rollback);
   const uninstall = useDshMarketStore((s) => s.uninstall);
   const setEnabled = useDshMarketStore((s) => s.setEnabled);
@@ -32,8 +31,11 @@ export default function PluginDetailView({ t }: { t: (key: string) => string }) 
   const [confirmUninstall, setConfirmUninstall] = useState(false);
   const [deleteData, setDeleteData] = useState(false);
 
+  useMarketDialogEscape(image ? () => setImage(null) : risk ? () => setRisk(null) : confirmUninstall ? () => setConfirmUninstall(false) : null);
+
   useEffect(() => {
     setRisk(null);
+    setAllowScripts(false);
     setConfirmUninstall(false);
     setDeleteData(false);
   }, [detail?.plugin.name, detail?.version.version]);
@@ -51,7 +53,8 @@ export default function PluginDetailView({ t }: { t: (key: string) => string }) 
   }
 
   const { plugin, version, versions, installed } = detail;
-  const selectedCompatibility = detail.versions.find((item) => item.version === version.version)?.compatibility;
+  const selectedCompatibility = installed?.version === version.version ? installed.compatibility
+    : versions.find((item) => item.version === version.version)?.compatibility;
   const installedHere = installed?.version === version.version;
   const newer = installed ? versions.find((item) => semver.gt(item.version, installed.version)) : null;
   const canRiskInstall = selectedCompatibility?.state === 'incompatible';
@@ -117,9 +120,9 @@ export default function PluginDetailView({ t }: { t: (key: string) => string }) 
                 className="px-3 py-1.5 rounded-lg bg-[var(--accent)] text-white text-[10.5px] font-medium">
                 {t('updateTo')} v{version.version}
               </button>
-              <button onClick={() => void rollback(installed.id).catch(() => {})} className="px-2.5 py-1.5 rounded-lg border border-[var(--border)] text-[10.5px] text-[var(--text-secondary)]">
+              {installed.backups.length > 0 && <button onClick={() => void rollback(installed.id).catch(() => {})} className="px-2.5 py-1.5 rounded-lg border border-[var(--border)] text-[10.5px] text-[var(--text-secondary)]">
                 <FiRotateCcw size={10} className="inline mr-1" />{t('rollback')}
-              </button>
+              </button>}
             </div>
           ) : (
             <div className="flex flex-col items-end gap-1">
@@ -130,15 +133,22 @@ export default function PluginDetailView({ t }: { t: (key: string) => string }) 
               {canRiskInstall && <span className="text-[9.5px] text-[var(--warning)]">{t('incompatibleHint')}</span>}
             </div>
           )}
-          <label className="flex items-center gap-1 text-[9.5px] text-[var(--text-muted)] cursor-pointer" title={t('scriptsHint')}>
+          {!installedHere && plugin.format === 'dsh' && <label className="flex items-center gap-1 text-[9.5px] text-[var(--text-muted)] cursor-pointer" title={t('scriptsHint')}>
             <input type="checkbox" checked={allowScripts} onChange={(event) => setAllowScripts(event.target.checked)} className="accent-[var(--accent)]" />
             {t('allowScripts')}
-          </label>
+          </label>}
+          {plugin.format === 'dsh' && version.source.type === 'npm' && plugin.sourceId !== 'installed' && (
+            <DshWebAction t={t} plugin={plugin.name} version={version.version} />
+          )}
         </div>
       </div>
 
       {error && <div className="mx-5 mt-3 rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-[11px] text-red-600 dark:text-red-400 whitespace-pre-wrap">{error}</div>}
-      {newer && !installedHere && <div className="mx-5 mt-3 rounded-xl border border-[var(--border)] bg-[var(--bg-1)] px-3 py-2 text-[10.5px] text-[var(--text-muted)]">{t('updateAvailable')}: v{version.version}</div>}
+      {newer && installedHere && (
+        <button onClick={() => void selectPlugin(plugin.name, newer.version)} className="mx-5 mt-3 rounded-xl border border-[var(--border)] bg-[var(--bg-1)] px-3 py-2 text-left text-[10.5px] text-[var(--accent)]">
+          {t('updateAvailable')} · v{newer.version}
+        </button>
+      )}
 
       <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_320px] gap-5">
         <div className="min-w-0 space-y-4">
@@ -283,7 +293,7 @@ export default function PluginDetailView({ t }: { t: (key: string) => string }) 
               <h3 className="text-[11px] font-semibold text-[var(--text-primary)] mb-2">{t('hostCapabilities')}</h3>
               <div className="flex flex-wrap gap-1">
                 {installed.requiredServices.map((service) => {
-                  const provided = ['tools', 'commands', 'skills', 'credentials', 'logger', 'events', 'reflect', 'registry', 'fiber'].includes(service);
+                  const provided = !installed.compatibility.missing.includes(`host-service:${service}`);
                   return (
                     <span key={service} className={`text-[9px] px-1.5 py-0.5 rounded font-mono border ${provided ? 'bg-emerald-500/12 text-emerald-600 dark:text-emerald-400 border-emerald-500/20' : 'bg-amber-500/12 text-amber-600 dark:text-amber-400 border-amber-500/20'}`}>
                       {service} · {provided ? 'provided' : 'missing'}

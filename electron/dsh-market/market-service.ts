@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { stringify as stringifyYaml } from 'yaml';
 import type {
   BackupRecord,
@@ -32,16 +33,17 @@ import { DSH_BASELINE, DSH_COMPAT_LAYER_VERSION } from '../../src/core/dsh-marke
 import { chatServerName, isDshChatServer } from '../../src/core/dsh-market/naming';
 import { MarketStateStore } from './state';
 import { DshRuntimeManager } from './runtime-manager';
+import { OfficialDshWeb } from './official-web';
 import type { RuntimePluginSpec, RuntimePluginState } from './runtime-host';
-import { PackageInstaller, InstallCancelledError, nativeManifestToPackage, readNativeManifest, type PreparedPackage } from './installer';
+import { PackageInstaller, npmCacheDir, InstallCancelledError, nativeManifestToPackage, readNativeManifest, type PreparedPackage } from './installer';
 import {
   computeCompatibility,
+  bundleOverrides,
   loadBundlePatches,
   manifestAuthor,
   manifestRepository,
   readPackageManifest,
   rowsFromPatches,
-  resolvePackageEntry,
   type RawPackageManifest,
 } from './manifest';
 import {
@@ -58,6 +60,7 @@ import {
   assertInside,
   buildInstallSpec,
   normalizeUserInputUrl,
+  packageReadme,
   pluginDirectoryName,
   safeFileSegment,
   validateGitUrl,
@@ -97,6 +100,12 @@ function existsFile(file: string): boolean {
   try { return fs.statSync(file).isFile(); } catch { return false; }
 }
 
+function relocated(file: string, from: string, to: string): string {
+  const relative = path.relative(from, file);
+  return relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)
+    ? file : path.join(to, relative);
+}
+
 function humanSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
@@ -107,6 +116,7 @@ export class DshMarketService {
   readonly state: MarketStateStore;
   readonly installer: PackageInstaller;
   readonly runtime: DshRuntimeManager;
+  readonly web: OfficialDshWeb;
   readonly environment: DshRuntimeEnvironment;
   private verifications: Record<string, PluginVerification>;
   private catalogs = new Map<string, MarketCatalog>();
@@ -123,6 +133,7 @@ export class DshMarketService {
     this.state = new MarketStateStore(options.rootDir);
     this.installer = new PackageInstaller(this.state);
     this.runtime = new DshRuntimeManager();
+    this.web = new OfficialDshWeb(npmCacheDir(this.state));
     this.environment = currentEnvironment({
       app: options.versions.app,
       electron: options.versions.electron,
@@ -144,7 +155,7 @@ export class DshMarketService {
   async initialize(): Promise<void> {
     if (this.initialized) return;
     if (this.initializing) return this.initializing;
-    this.initializing = this.doInitialize();
+    this.initializing = this.doInitialize().finally(() => { this.initializing = null; });
     return this.initializing;
   }
 
@@ -156,16 +167,22 @@ export class DshMarketService {
     this.npm = await this.installer.npmInfo();
     this.loadCachedCatalogs();
     this.writeProjection(active.id);
-    this.initialized = true;
     await this.loadAllEnabled(active.id).catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
       this.warnings.push(`Runtime initialization failed: ${message}`);
       this.emit({ type: 'runtime', message, level: 'error' });
     });
+    this.initialized = true;
   }
 
   async ensureReady(): Promise<void> {
     if (!this.initialized) await this.initialize();
+  }
+
+  private requireActiveProfile(profileId: string): void {
+    if (profileId !== this.state.activeProfileId()) {
+      throw new Error(`Profile ${profileId} is no longer active. Switch to it before using its plugins.`);
+    }
   }
 
   private ensureBundledSource(): void {
@@ -210,8 +227,7 @@ export class DshMarketService {
     try {
       const native = readNativeManifest(dir);
       if (!native) return null;
-      const readmePath = path.join(dir, native.readme || 'README.md');
-      const readme = existsFile(readmePath) ? fs.readFileSync(readmePath, 'utf8').slice(0, MAX_README_BYTES) : undefined;
+      const readme = packageReadme(dir, native.readme)?.text;
       return {
         id: native.name,
         name: native.name,
@@ -290,7 +306,24 @@ export class DshMarketService {
     if (!existsFile(cache)) throw new Error(source.lastError || 'No cached catalog yet');
     const parsed = readJson<{ fetchedAt?: string; document?: unknown }>(cache);
     if (!parsed.document) throw new Error('Catalog cache is empty');
-    return parseCatalogDocument(parsed.document, source.id);
+    return this.parseSourceDocument(source, parsed.document);
+  }
+
+  private parseSourceDocument(source: MarketSource, document: unknown): MarketCatalog {
+    const catalog = parseCatalogDocument(document, source.id);
+    for (const plugin of catalog.plugins) {
+      for (const version of plugin.versions) {
+        if (version.source.type !== 'local' && version.source.type !== 'bundled-example') continue;
+        if (source.kind === 'remote') {
+          throw new Error(`Remote catalog ${source.id} references a local path for ${plugin.name}@${version.version}; import local plugins explicitly.`);
+        }
+        if (source.kind === 'local' && version.source.path) {
+          const base = existsFile(source.location) ? path.dirname(source.location) : source.location;
+          version.source.path = path.resolve(base, version.source.path);
+        }
+      }
+    }
+    return catalog;
   }
 
   private sourceCachePath(source: MarketSource): string {
@@ -314,9 +347,25 @@ export class DshMarketService {
         throw new Error(`Catalog redirects are refused (HTTP ${response.status}); configure the final URL.`);
       }
       if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`);
-      const buffer = Buffer.from(await response.arrayBuffer());
-      if (buffer.length > maxBytes) throw new Error(`Response is ${humanSize(buffer.length)}, limit ${humanSize(maxBytes)}`);
-      return buffer.toString('utf8');
+      if (!response.body) return '';
+      const reader = response.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let bytes = 0;
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          bytes += value.byteLength;
+          if (bytes > maxBytes) {
+            await reader.cancel();
+            throw new Error(`Response exceeds the ${humanSize(maxBytes)} limit`);
+          }
+          chunks.push(value);
+        }
+      } finally {
+        reader.releaseLock();
+      }
+      return Buffer.concat(chunks, bytes).toString('utf8');
     } finally {
       clearTimeout(timer);
     }
@@ -352,23 +401,16 @@ export class DshMarketService {
         if (stat.size > MAX_CATALOG_BYTES) throw new Error(`Catalog is too large (${humanSize(stat.size)})`);
         try { document = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { throw new Error('Catalog file is not valid JSON'); }
       }
-      const catalog = parseCatalogDocument(document, source.id);
-      if (source.kind === 'remote') {
-        for (const plugin of catalog.plugins) {
-          for (const version of plugin.versions) {
-            if (version.source.type === 'local' || version.source.type === 'bundled-example') {
-              throw new Error(`Remote catalog ${source.id} references a local path for ${plugin.name}@${version.version}; import local plugins explicitly.`);
-            }
-          }
-        }
-      }
+      const catalog = this.parseSourceDocument(source, document);
       fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
       const fetchedAt = isoNow();
-      fs.writeFileSync(cacheFile, JSON.stringify({
+      const tempFile = `${cacheFile}.${makeRequestId()}.tmp`;
+      fs.writeFileSync(tempFile, JSON.stringify({
         fetchedAt,
         document,
         title: catalog.title,
       }, null, 2), 'utf8');
+      fs.renameSync(tempFile, cacheFile);
       this.catalogs.set(source.id, catalog);
       return {
         ...source,
@@ -405,22 +447,14 @@ export class DshMarketService {
   async refreshSources(sourceId?: string): Promise<MarketSource[]> {
     await this.ensureReady();
     const sources = this.state.sources();
-    const updated: MarketSource[] = [];
     for (const source of sources) {
-      if (sourceId && source.id !== sourceId) {
-        updated.push(source);
-        continue;
-      }
-      if (!source.enabled) {
-        updated.push(source);
-        continue;
-      }
+      if ((sourceId && source.id !== sourceId) || !source.enabled) continue;
       const next = await this.syncSource(source, true);
-      updated.push(next);
+      if (this.state.sources().some((item) => item.id === source.id)) this.state.upsertSource(next);
+      else this.catalogs.delete(source.id);
     }
-    this.state.setSources(updated);
     this.emit({ type: 'sources', message: sourceId ? `Synced ${sourceId}` : 'Synced all catalog sources' });
-    return updated;
+    return this.state.sources();
   }
 
   async addRemoteSource(url: string, title?: string): Promise<MarketSource> {
@@ -518,25 +552,28 @@ export class DshMarketService {
     };
   }
 
-  private compatibilityFor(plugin: MarketPlugin, version: MarketVersion, profileId: string, installed?: InstalledPlugin | null): CompatibilityResult {
+  private compatibilityFor(plugin: MarketPlugin, version: MarketVersion, profileId: string, installed?: InstalledPlugin | null, manifest?: RawPackageManifest): CompatibilityResult {
     if (plugin.format === 'native') {
+      const sample = plugin.demo === true && plugin.name === NATIVE_EXAMPLE_NAME && version.source.type === 'bundled-example';
       return {
-        state: 'verified',
+        state: sample ? 'verified' : 'unverified',
         authoredRange: null,
         authoredKeys: [],
         requirements: {},
-        reasons: [{ code: 'native-sample', message: 'ConeCode-native sample; verified by the bundled lifecycle test.' }],
+        reasons: [sample
+          ? { code: 'native-sample', message: 'Bundled native sample verified by the lifecycle test.' }
+          : { code: 'native-plugin', message: 'ConeCode native API v1 plugin with no recorded compatibility test.' }],
         missing: [],
         exempted: false,
       };
     }
     const key = `${plugin.name}@${version.version}`;
     const exemptions = this.state.exemptionVersions(profileId, key);
-    const missingHostServices = installed?.compatibility?.missing
+    const missingHostServices = (installed?.version === version.version ? installed.compatibility?.missing : undefined)
       ?.filter((item) => item.startsWith('host-service:'))
       .map((item) => item.slice('host-service:'.length)) || [];
     return computeCompatibility({
-      manifest: this.syntheticManifest(plugin, version),
+      manifest: manifest || this.syntheticManifest(plugin, version),
       baseline: DSH_BASELINE,
       nodeVersion: process.versions.node,
       platform: process.platform,
@@ -548,8 +585,8 @@ export class DshMarketService {
     });
   }
 
-  private compatibilityWithProbe(plugin: MarketPlugin, version: MarketVersion, profileId: string, probe: RuntimePluginState): CompatibilityResult {
-    const base = this.compatibilityFor(plugin, version, profileId);
+  private compatibilityWithProbe(plugin: MarketPlugin, version: MarketVersion, profileId: string, probe: RuntimePluginState, manifest?: RawPackageManifest): CompatibilityResult {
+    const base = this.compatibilityFor(plugin, version, profileId, null, manifest);
     const missing = probe.missing || [];
     if (!missing.length) return base;
     return {
@@ -614,7 +651,11 @@ export class DshMarketService {
       baseline: DSH_BASELINE,
       layerVersion: DSH_COMPAT_LAYER_VERSION,
       environment: this.environment,
-      supportedServices: ['tools', 'commands', 'skills', 'credentials', ...(runtime.storage?.ready ? ['storage', 'storageDomain', 'storage.backend.json'] : [])],
+      supportedServices: [
+        'tools', 'commands', 'skills', 'credentials',
+        ...(runtime.llmReady ? ['llm'] : []),
+        ...(runtime.storage?.ready ? ['storage', 'storageDomain', 'storage.backend.json'] : []),
+      ],
       supportedFormats: ['dsh-bundle (host half)', 'conecode-native'],
       npmPath: npm?.path || null,
       npmVersion: npm?.version || null,
@@ -653,10 +694,7 @@ export class DshMarketService {
 
   private installedMarketPlugin(installed: InstalledPlugin): MarketPlugin {
     const raw = installed.manifestRaw as RawPackageManifest;
-    const readmeFile = ['README.md', 'readme.md', 'Readme.md', 'README.en.md']
-      .map((name) => path.join(installed.packageDir, name))
-      .find((file) => fs.existsSync(file));
-    const readme = readmeFile ? fs.readFileSync(readmeFile, 'utf8').slice(0, MAX_README_BYTES) : undefined;
+    const readme = packageReadme(installed.packageDir)?.text;
     const source = installed.source || (installed.requestedSpec.startsWith('git+')
       ? { type: 'git' as const, url: installed.requestedSpec.replace(/^git\+/, '').split('#')[0].replace(/\.git$/, ''), commit: installed.requestedSpec.split('#')[1]?.split('&')[0] || '' }
       : installed.requestedSpec.startsWith('file:')
@@ -718,7 +756,7 @@ export class DshMarketService {
     const verification = this.verifications[`${plugin.name}@${selected.version}`] || null;
     const runtimeNotes = [
       `DSH baseline ${DSH_BASELINE.version} (${DSH_BASELINE.commit.slice(0, 10)}); adapter ${DSH_COMPAT_LAYER_VERSION}.`,
-      'Host-side tools, commands and skills load through Cordis. DSH Web client halves are detected but not mounted.',
+      'Tools, commands and skills run in the ConeCode worker. Install in DSH Web to use client modules and official Web host services.',
       ...(plugin.format === 'native' ? ['ConeCode-native plugin; declared in conecode.plugin.json.'] : []),
     ];
     return {
@@ -734,7 +772,7 @@ export class DshMarketService {
       readmeSource: readme.source,
       readmeError: readme.error,
       screenshots,
-      installed: installed && installed.version === selected.version ? installed : installed,
+      installed,
       category: MARKET_CATEGORIES.find((category) => category.id === plugin.category) || null,
       verification,
       runtimeNotes,
@@ -742,6 +780,13 @@ export class DshMarketService {
   }
 
   private async readReadme(plugin: MarketPlugin, version: MarketVersion): Promise<{ text: string | null; source: string | null; error: string | null }> {
+    if (plugin.readme && version.version === latestVersion(plugin).version) {
+      return { text: plugin.readme, source: plugin.sourceId, error: null };
+    }
+    if (version.source.type === 'bundled-example' || version.source.type === 'local') {
+      const readme = version.source.path ? packageReadme(version.source.path) : undefined;
+      return { text: readme?.text || null, source: readme?.source || null, error: null };
+    }
     const cacheFile = this.readmeCachePath(plugin.name, version.version);
     if (existsFile(cacheFile)) {
       try {
@@ -749,20 +794,6 @@ export class DshMarketService {
         if (cached.text) return { text: cached.text, source: cached.source, error: null };
       } catch {
         // refetch
-      }
-    }
-    if (plugin.readme && version.version === latestVersion(plugin).version) {
-      return { text: plugin.readme, source: 'bundled catalog', error: null };
-    }
-    if (version.source.type === 'bundled-example' || version.source.type === 'local') {
-      const dir = version.source.path;
-      if (dir && fs.existsSync(dir)) {
-        const readme = ['README.md', 'readme.md', 'Readme.md'].map((name) => path.join(dir, name)).find(existsFile);
-        if (readme) {
-          const text = fs.readFileSync(readme, 'utf8').slice(0, MAX_README_BYTES);
-          this.cacheReadme(cacheFile, text, readme);
-          return { text, source: readme, error: null };
-        }
       }
     }
     try {
@@ -825,33 +856,23 @@ export class DshMarketService {
 
   private async restoreInstalledPlugins(profileId: string, installed: InstalledPlugin[]): Promise<void> {
     for (const plugin of installed) {
+      const entry = syntheticMarketPlugin(plugin);
+      const version = entry.versions[0];
+      const compatibility = this.compatibilityFor(entry, version, profileId, null, plugin.manifestRaw);
       if (!plugin.enabled) {
-        this.state.patchPlugin(profileId, plugin.id, { status: 'disabled', restartRequired: false });
+        this.state.patchPlugin(profileId, plugin.id, {
+          status: 'disabled', restartRequired: false, compatibility, contributions: { tools: [], commands: [], skills: [] },
+        });
         continue;
       }
       try {
         const state = await this.runtime.load(this.runtimeSpec(plugin));
-        const compatibility = state.missing?.length
-          ? {
-              ...plugin.compatibility,
-              state: 'partial' as const,
-              missing: [...new Set([...plugin.compatibility.missing, ...state.missing.map((item) => `host-service:${item}` as const)])],
-              reasons: [
-                ...plugin.compatibility.reasons,
-                ...state.missing.map((item) => ({
-                  code: 'missing-host-service',
-                  message: `Plugin injects "${item}", which this layer does not provide.`,
-                  requirement: item,
-                })),
-              ],
-            }
-          : plugin.compatibility;
         this.state.patchPlugin(profileId, plugin.id, {
           status: state.status === 'loaded' ? 'loaded' : state.status,
           lastError: state.error || null,
           contributions: state.contributions || { tools: [], commands: [], skills: [] },
           requiredServices: state.requiredServices || [],
-          compatibility,
+          compatibility: this.compatibilityWithProbe(entry, version, profileId, state, plugin.manifestRaw),
           clientUnsupported: plugin.clientUnsupported,
           restartRequired: false,
         });
@@ -859,7 +880,7 @@ export class DshMarketService {
         const message = error instanceof Error ? error.message : String(error);
         this.state.appendLog(profileId, plugin.name, `activation failed: ${message}`);
         this.state.patchPlugin(profileId, plugin.id, {
-          status: 'restart-required',
+          status: 'restart-required', compatibility, contributions: { tools: [], commands: [], skills: [] },
           lastError: message,
           restartRequired: true,
         });
@@ -903,11 +924,6 @@ export class DshMarketService {
     const rows: InstalledRow[] = [];
     const owner = new Map<InstalledRow, string>();
     for (const plugin of installed) {
-      for (const row of plugin.rows) {
-        const copy = { ...row, config: structuredClone(row.config ?? {}) };
-        rows.push(copy);
-        owner.set(copy, plugin.id);
-      }
       for (const override of plugin.bundleOverrides || []) {
         if (Array.isArray(override.insert) || typeof override.id !== 'string') continue;
         let index = -1;
@@ -921,6 +937,11 @@ export class DshMarketService {
         if (typeof override.disabled === 'boolean') row.disabled = override.disabled;
         if (Array.isArray(override.inject)) row.inject = override.inject.filter((item): item is string => typeof item === 'string');
       }
+      for (const row of plugin.rows) {
+        const copy = { ...row, config: structuredClone(row.config ?? {}) };
+        rows.push(copy);
+        owner.set(copy, plugin.id);
+      }
     }
     const grouped = new Map<string, InstalledRow[]>();
     for (const row of rows) {
@@ -931,6 +952,14 @@ export class DshMarketService {
       grouped.set(pluginId, list);
     }
     return grouped;
+  }
+
+  private async refreshLayerTargets(profileId: string, layerId: string, before: Map<string, InstalledRow[]>, alreadyReloaded = false): Promise<InstalledPlugin[]> {
+    const after = this.effectiveRows(profileId);
+    const targets = this.state.installed(profileId).filter((plugin) =>
+      plugin.id !== layerId && plugin.enabled && !isDeepStrictEqual(before.get(plugin.id), after.get(plugin.id)));
+    if (targets.length && !alreadyReloaded) await this.restoreInstalledPlugins(profileId, targets);
+    return targets.map((plugin) => this.state.installedByMarketId(profileId, plugin.id)!);
   }
 
   private runtimeSpec(plugin: InstalledPlugin): RuntimePluginSpec {
@@ -963,13 +992,7 @@ export class DshMarketService {
   ): InstalledPlugin {
     const finalPackageDir = path.join(finalDir, prepared.packageRelativeDir);
     const rows = prepared.rows.map((row) => {
-      let entryPath = row.entryPath;
-      if (prepared.format === 'dsh') {
-        const relative = path.relative(prepared.packageDir, row.entryPath);
-        entryPath = path.join(finalPackageDir, relative);
-      } else {
-        entryPath = path.join(finalDir, prepared.native?.entry || row.entryPath);
-      }
+      const entryPath = relocated(row.entryPath, prepared.stagingDir, finalDir);
       const prior = previous?.rows.find((item) => item.id === row.id);
       return {
         ...row,
@@ -977,9 +1000,7 @@ export class DshMarketService {
         config: prior ? prior.config : row.config,
       };
     });
-    const entry = prepared.format === 'native'
-      ? rows[0]?.entryPath || ''
-      : resolvePackageEntry(finalPackageDir, '.');
+    const entry = rows[0]?.entryPath || path.join(finalPackageDir, 'package.json');
     const createdAt = isoNow();
     const previousBackups = (previous?.backups || []).slice(-3);
     return {
@@ -1049,13 +1070,11 @@ export class DshMarketService {
   }
 
   cancel(requestId: string): void {
-    for (const [key, active] of this.activeOperations) {
+    for (const active of this.activeOperations.values()) {
       if (active.requestId === requestId) {
         active.controller.abort();
         const op = this.state.operations().find((item) => item.requestId === requestId);
         if (op) this.updateOperation(op, { phase: 'cancelled', message: 'Cancelling…' });
-        this.activeOperations.delete(key);
-        this.installer.killAll();
         return;
       }
     }
@@ -1081,6 +1100,7 @@ export class DshMarketService {
     previous: InstalledPlugin | null,
     options: { acceptRisk?: boolean; allowScripts?: boolean; kind: 'install' | 'update' },
   ): Promise<InstalledPlugin> {
+    this.requireActiveProfile(profileId);
     const compatibility = this.compatibilityFor(plugin, selected, profileId, previous);
     if (compatibility.state === 'incompatible' && !options.acceptRisk) {
       throw new Error(`Incompatible plugin: ${compatibility.reasons.map((reason) => reason.message).join(' ')}`);
@@ -1112,8 +1132,15 @@ export class DshMarketService {
         onLog: log,
         signal: begin.controller.signal,
       });
-      if (prepared.rows.length === 0) throw new Error('The bundle patch inserted no mountable plugin rows.');
+      if (!prepared.rows.length && !prepared.bundleOverrides.length) throw new Error('The bundle patch has no mountable rows or overrides.');
+      if (prepared.format !== plugin.format) throw new Error(`Installed package format ${prepared.format} differs from catalog format ${plugin.format}.`);
+      const resolvedCompatibility = this.compatibilityFor(plugin, selected, profileId, null, prepared.manifest);
+      if (resolvedCompatibility.state === 'incompatible') {
+        if (!options.acceptRisk) throw new Error(`Incompatible plugin: ${resolvedCompatibility.reasons.map((reason) => reason.message).join(' ')}`);
+        this.state.setExemption(profileId, `${plugin.name}@${selected.version}`, DSH_BASELINE.version, true);
+      }
       releaseRuntime = await this.lockRuntimeMutation();
+      this.requireActiveProfile(profileId);
       if (begin.controller.signal.aborted) throw new InstallCancelledError();
       previous = this.state.installedByMarketId(profileId, plugin.name);
       const before = this.runtime.getInfo();
@@ -1128,7 +1155,7 @@ export class DshMarketService {
       const probe = await this.runtime.probe(this.probeSpec(prepared));
       if (begin.controller.signal.aborted) throw new InstallCancelledError();
       if (!probe.ok) throw new Error(`Plugin failed its activation probe: ${probe.error || probe.state?.error || 'unknown error'}`);
-      const probedCompatibility = this.compatibilityWithProbe(plugin, selected, profileId, probe.state!);
+      const probedCompatibility = this.compatibilityWithProbe(plugin, selected, profileId, probe.state!, prepared.manifest);
 
       if (begin.controller.signal.aborted) throw new InstallCancelledError();
       this.updateOperation(begin.operation, { phase: 'activating', message: 'Swapping the verified package into the profile' });
@@ -1136,17 +1163,20 @@ export class DshMarketService {
       if (previous?.format === 'dsh' && prepared.format === 'native') this.installer.unlinkPlugin(profileId, previous.name);
       this.installer.linkPlugin(profileId, prepared.name, swapped.finalDir, prepared.packageRelativeDir);
       const record = this.preparedToInstalled(prepared, plugin, selected, swapped.finalDir, previous);
+      const beforeLayers = this.effectiveRows(profileId);
       record.compatibility = probedCompatibility;
       if (previous?.enabled === false) record.enabled = false;
       if (previous) {
         if (swapped.backupDir) record.backups = [...previous.backups, backupRecord(previous, swapped.backupDir)].slice(-3);
       }
       this.state.updatePlugin(profileId, record);
-      if (previous || this.uninstalledPackages.has(packageKey)) {
+      const restarted = !!previous || this.uninstalledPackages.has(packageKey);
+      if (restarted) {
         await this.reloadRuntimeAfterPackageChange(profileId, record.id, record.format);
       }
       if (record.enabled) {
         const loaded = await this.runtime.load(this.runtimeSpec(record));
+        if (begin.controller.signal.aborted) throw new InstallCancelledError();
         if (loaded.status !== 'loaded' && loaded.status !== 'disabled') {
           throw new Error(`Plugin failed to activate in the profile: ${loaded.error || loaded.status}`);
         }
@@ -1159,6 +1189,10 @@ export class DshMarketService {
         record.status = 'disabled';
         this.state.updatePlugin(profileId, record);
       }
+      const targets = await this.refreshLayerTargets(profileId, record.id, beforeLayers, restarted);
+      const failedTarget = targets.find((target) => target.status !== 'loaded' && target.status !== 'disabled');
+      if (failedTarget) throw new Error(`The bundle override failed to activate ${failedTarget.name}: ${failedTarget.lastError || failedTarget.status}`);
+      if (begin.controller.signal.aborted) throw new InstallCancelledError();
       this.installer.removeBackup(swapped.backupDir && !record.backups.some((item) => item.directory === swapped!.backupDir) ? swapped.backupDir : null);
       this.writeProjection(profileId);
       this.uninstalledPackages.delete(packageKey);
@@ -1185,10 +1219,12 @@ export class DshMarketService {
               this.state.patchPlugin(profileId, previous.id, { status: 'restart-required', restartRequired: true, lastError: message });
             }
           } else {
+            const beforeLayers = this.effectiveRows(profileId);
             await this.runtime.unload(plugin.name).catch(() => {});
             fs.rmSync(swapped.finalDir, { recursive: true, force: true });
             this.installer.unlinkPlugin(profileId, plugin.name);
             this.state.removePlugin(profileId, plugin.name);
+            await this.refreshLayerTargets(profileId, plugin.name, beforeLayers);
           }
           this.writeProjection(profileId);
         } catch (rollbackError) {
@@ -1221,7 +1257,7 @@ export class DshMarketService {
         format: 'native',
         packageDir: prepared.packageDir,
         nativeEntryPath: prepared.rows[0]?.entryPath,
-        rows: [],
+        rows: prepared.rows,
         enabled: true,
       };
     }
@@ -1243,14 +1279,13 @@ export class DshMarketService {
     };
   }
 
-  async inspectLocalPlugin(directory: string): Promise<{ plugin: MarketPlugin; version: MarketVersion; warnings: string[] }> {
+  async inspectLocalPlugin(directory: string): Promise<{ plugin: MarketPlugin; version: MarketVersion; warnings: string[]; compatibility: CompatibilityResult }> {
     const dir = path.resolve(directory);
     if (!fs.existsSync(dir)) throw new Error(`Directory not found: ${dir}`);
     const native = readNativeManifest(dir);
     let plugin: MarketPlugin;
     const warnings: string[] = [];
     if (native) {
-      const readmePath = path.join(dir, native.readme || 'README.md');
       plugin = {
         id: native.name,
         name: native.name,
@@ -1274,7 +1309,7 @@ export class DshMarketService {
           dependencies: {},
         }],
         sourceId: 'local-import',
-        ...(existsFile(readmePath) ? { readme: fs.readFileSync(readmePath, 'utf8').slice(0, MAX_README_BYTES) } : {}),
+        readme: packageReadme(dir, native.readme)?.text,
       };
     } else {
       const manifest = readPackageManifest(dir);
@@ -1312,13 +1347,11 @@ export class DshMarketService {
           dependencies: Object.fromEntries(Object.entries(manifest.dependencies || {}).filter(([, value]) => typeof value === 'string')) as Record<string, string>,
         }],
         sourceId: 'local-import',
-        ...(() => {
-          const readme = ['README.md', 'readme.md', 'Readme.md'].map((name) => path.join(dir, name)).find(existsFile);
-          return readme ? { readme: fs.readFileSync(readme, 'utf8').slice(0, MAX_README_BYTES) } : {};
-        })(),
+        readme: packageReadme(dir)?.text,
       };
     }
-    return { plugin, version: plugin.versions[0], warnings };
+    const version = plugin.versions[0];
+    return { plugin, version, warnings, compatibility: this.compatibilityFor(plugin, version, this.state.activeProfileId()) };
   }
 
   async inspectRepository(input: string, ref?: string, subdir?: string): Promise<RepositoryInspection> {
@@ -1368,6 +1401,7 @@ export class DshMarketService {
   }
 
   private async applyRollback(profileId: string, pluginId: string, version?: string): Promise<InstalledPlugin> {
+    this.requireActiveProfile(profileId);
     const plugin = this.state.installedByMarketId(profileId, pluginId);
     if (!plugin) throw new Error(`Plugin ${pluginId} is not installed in profile ${profileId}.`);
     const backup = [...plugin.backups].reverse().find((item) =>
@@ -1410,16 +1444,21 @@ export class DshMarketService {
       backupMoved = true;
       if (plugin.format === 'dsh' && rebuilt.format === 'native') this.installer.unlinkPlugin(profileId, plugin.name);
       this.installer.linkPlugin(profileId, rebuilt.name, finalDir, path.relative(finalDir, rebuilt.packageDir) || '.');
+      const beforeLayers = this.effectiveRows(profileId);
       this.state.updatePlugin(profileId, rebuilt);
       await this.reloadRuntimeAfterPackageChange(profileId, rebuilt.id, rebuilt.format);
+      const failedTarget = (await this.refreshLayerTargets(profileId, rebuilt.id, beforeLayers, true))
+        .find((target) => target.status !== 'loaded' && target.status !== 'disabled');
+      if (failedTarget) throw new Error(`The bundle override failed to activate ${failedTarget.name}: ${failedTarget.lastError || failedTarget.status}`);
       if (rebuilt.enabled) {
         const loaded = await this.runtime.load(this.runtimeSpec(rebuilt));
         if (begin.controller.signal.aborted) throw new InstallCancelledError();
-        if (loaded.status !== 'loaded') throw new Error(loaded.error || `Rollback activation failed (${loaded.status}).`);
+        if (loaded.status !== 'loaded' && loaded.status !== 'disabled') throw new Error(loaded.error || `Rollback activation failed (${loaded.status}).`);
+        rebuilt.status = loaded.status;
         rebuilt.contributions = loaded.contributions || { tools: [], commands: [], skills: [] };
         rebuilt.requiredServices = loaded.requiredServices || [];
         const catalogEntry = syntheticMarketPlugin(rebuilt);
-        rebuilt.compatibility = this.compatibilityWithProbe(catalogEntry, catalogEntry.versions[0], profileId, loaded);
+        rebuilt.compatibility = this.compatibilityWithProbe(catalogEntry, catalogEntry.versions[0], profileId, loaded, rebuilt.manifestRaw);
         this.state.updatePlugin(profileId, rebuilt);
       }
       this.writeProjection(profileId);
@@ -1470,12 +1509,12 @@ export class DshMarketService {
     }
     const patches = native ? null : loadBundlePatches(targetPackage, manifest);
     const packageDir = path.join(finalDir, packageRelativeDir);
-    const toFinalPath = (file: string) => path.join(packageDir, path.relative(targetPackage, file));
-    const entry = native ? path.join(packageDir, native.entry) : toFinalPath(resolvePackageEntry(targetPackage, '.'));
+    const toFinalPath = (file: string) => relocated(file, target, finalDir);
     const rows: InstalledRow[] = patches
       ? rowsFromPatches(targetPackage, plugin.name, patches).map((row) => ({ ...row, entryPath: toFinalPath(row.entryPath) }))
-      : [{ id: 'native', name: plugin.name, entryPath: entry, config: {}, disabled: false, inject: [] }];
-    if (!rows.length) throw new Error('Rollback package has no mountable plugin rows.');
+      : [{ id: 'native', name: plugin.name, entryPath: path.join(packageDir, native!.entry), config: {}, disabled: false, inject: [] }];
+    const overrides = patches ? bundleOverrides(patches) : [];
+    if (!rows.length && !overrides.length) throw new Error('Rollback package has no mountable rows or overrides.');
     const rebuilt: InstalledPlugin = {
       ...plugin,
       ...backup.installation,
@@ -1491,13 +1530,13 @@ export class DshMarketService {
         const previous = plugin.rows.find((item) => item.id === row.id);
         return previous ? { ...row, config: previous.config } : row;
       }),
-      entry,
+      entry: rows[0]?.entryPath || path.join(packageDir, 'package.json'),
       packageDir,
       dsh: manifest.dsh,
       manifestRaw: manifest,
       license: manifest.license,
       repository: manifestRepository(manifest),
-      bundleOverrides: patches?.patches.filter((patch) => !Array.isArray(patch.insert)),
+      bundleOverrides: overrides,
       clientUnsupported: !native && !!manifest.dsh?.client,
       backups: [...plugin.backups.filter((item) => item.directory !== backup.directory), backupRecord(plugin, currentBackup)].slice(-3),
       lastError: null,
@@ -1506,7 +1545,7 @@ export class DshMarketService {
       contributions: { tools: [], commands: [], skills: [] },
     };
     const catalogEntry = syntheticMarketPlugin(rebuilt);
-    rebuilt.compatibility = this.compatibilityFor(catalogEntry, catalogEntry.versions[0], plugin.profileId);
+    rebuilt.compatibility = this.compatibilityFor(catalogEntry, catalogEntry.versions[0], plugin.profileId, null, rebuilt.manifestRaw);
     return rebuilt;
   }
 
@@ -1516,6 +1555,7 @@ export class DshMarketService {
   }
 
   private async applyUninstall(profileId: string, pluginId: string, deleteData: boolean): Promise<void> {
+    this.requireActiveProfile(profileId);
     const plugin = this.state.installedByMarketId(profileId, pluginId);
     if (!plugin) throw new Error(`Plugin ${pluginId} is not installed in profile ${profileId}.`);
     const begin = this.beginOperation(profileId, plugin.name, 'uninstall');
@@ -1533,7 +1573,9 @@ export class DshMarketService {
       const backupRoot = path.join(this.state.backupsDir(profileId), pluginDirName(plugin));
       fs.rmSync(backupRoot, { recursive: true, force: true });
       if (deleteData) fs.rmSync(path.join(this.state.dataDir(profileId), pluginDirName(plugin)), { recursive: true, force: true });
+      const beforeLayers = this.effectiveRows(profileId);
       this.state.removePlugin(profileId, plugin.id);
+      await this.refreshLayerTargets(profileId, plugin.id, beforeLayers);
       this.uninstalledPackages.add(`${profileId}:${plugin.name}`);
       this.writeProjection(profileId);
       this.updateOperation(begin.operation, {
@@ -1558,9 +1600,11 @@ export class DshMarketService {
   }
 
   private async applyEnabled(profileId: string, pluginId: string, enabled: boolean): Promise<InstalledPlugin> {
+    this.requireActiveProfile(profileId);
     let plugin = this.state.installedByMarketId(profileId, pluginId);
     if (!plugin) throw new Error(`Plugin ${pluginId} is not installed in profile ${profileId}.`);
     if (plugin.enabled === enabled) return plugin;
+    const beforeLayers = this.effectiveRows(profileId);
     await this.runtime.ensureStarted(profileId, this.dshHome);
     if (!enabled) {
       await this.runtime.unload(plugin.id);
@@ -1581,6 +1625,12 @@ export class DshMarketService {
         restartRequired: false,
       });
     }
+    const targets = await this.refreshLayerTargets(profileId, plugin.id, beforeLayers);
+    const failedTarget = enabled && targets.find((target) => target.status !== 'loaded' && target.status !== 'disabled');
+    if (failedTarget) {
+      await this.applyEnabled(profileId, plugin.id, false);
+      throw new Error(`The bundle override failed to activate ${failedTarget.name}: ${failedTarget.lastError || failedTarget.status}`);
+    }
     this.writeProjection(profileId);
     this.emit({ type: 'installed', pluginId: plugin.id });
     return plugin;
@@ -1592,6 +1642,7 @@ export class DshMarketService {
   }
 
   private async applyConfig(profileId: string, pluginId: string, rowConfigs: Record<string, unknown>): Promise<InstalledPlugin> {
+    this.requireActiveProfile(profileId);
     const plugin = this.state.installedByMarketId(profileId, pluginId);
     if (!plugin) throw new Error(`Plugin ${pluginId} is not installed in profile ${profileId}.`);
     const previous = structuredClone(plugin);
@@ -1632,6 +1683,7 @@ export class DshMarketService {
     validateProfileId(profileId);
     if (this.activeOperations.size > 0) throw new Error('Finish or cancel active plugin operations before switching profiles.');
     if (this.state.activeProfileId() === profileId) return;
+    this.state.profile(profileId);
     await this.runtime.shutdown();
     this.state.setActiveProfile(profileId);
     this.state.ensureProfileDirs(profileId);
@@ -1658,6 +1710,8 @@ export class DshMarketService {
 
   async invokeTool(profileId: string, pluginId: string, toolName: string, args: unknown, rowId?: string): Promise<InvokeResult> {
     await this.ensureReady();
+    await this.runtimeMutations;
+    this.requireActiveProfile(profileId);
     const plugin = this.state.installedByMarketId(profileId, pluginId);
     if (!plugin) throw new Error(`Plugin ${pluginId} is not installed.`);
     if (!plugin.enabled) throw new Error(`Plugin ${plugin.name} is disabled.`);
@@ -1668,6 +1722,8 @@ export class DshMarketService {
 
   async invokeCommand(profileId: string, pluginId: string, commandName: string, rawInput: string, rowId?: string): Promise<InvokeResult> {
     await this.ensureReady();
+    await this.runtimeMutations;
+    this.requireActiveProfile(profileId);
     const plugin = this.state.installedByMarketId(profileId, pluginId);
     if (!plugin) throw new Error(`Plugin ${pluginId} is not installed.`);
     if (!plugin.enabled) throw new Error(`Plugin ${plugin.name} is disabled.`);
@@ -1681,10 +1737,10 @@ export class DshMarketService {
     return this.runtime.listSkills();
   }
 
-  async getSkill(pluginId: string, name: string): Promise<string | null> {
+  async getSkill(pluginId: string, name: string, rowId?: string): Promise<string | null> {
     await this.ensureReady();
     const plugin = this.state.installedByMarketId(this.state.activeProfileId(), pluginId);
-    const skill = await this.runtime.getSkill(plugin?.id || pluginId, name);
+    const skill = await this.runtime.getSkill(plugin?.id || pluginId, name, rowId);
     return skill?.content || null;
   }
 
@@ -1693,57 +1749,70 @@ export class DshMarketService {
     return this.state.readLog(profileId, plugin?.name || pluginId);
   }
 
-  /** Tools/commands exposed to ConeCode's model loop through the existing MCP bridge. */
-  async listChatTools(): Promise<Array<{ server: string; name: string; description?: string; inputSchema?: any }>> {
+  async openDshWeb(profileId: string, pluginId?: string, version?: string): Promise<string> {
     await this.ensureReady();
-    const out: Array<{ server: string; name: string; description?: string; inputSchema?: any }> = [];
-    for (const plugin of this.state.installed()) {
-      if (!plugin.enabled || plugin.status === 'load-failed') continue;
-      for (const tool of plugin.contributions.tools) {
-        out.push({
-          server: tool.chatServer,
-          name: tool.name,
-          description: `[DSH ${plugin.title}] ${tool.description || tool.name}`,
-          inputSchema: tool.parameters,
-        });
+    this.state.profile(profileId);
+    const home = path.join(this.state.profileDir(profileId), 'official-web');
+    if (pluginId === undefined && version === undefined) return this.web.open(home);
+    const plugin = pluginId && this.findPlugin(pluginId);
+    if (!plugin || plugin.format !== 'dsh' || !version) throw new Error('Choose an exact DSH catalog version.');
+    return this.web.open(home, { name: plugin.name, version: this.findVersion(plugin, version) });
+  }
+
+  private chatEntries() {
+    return this.state.installed().filter((plugin) => plugin.enabled && plugin.status === 'loaded').flatMap((plugin) => {
+      const entries = [
+        ...plugin.contributions.tools.map((tool) => ({
+          kind: 'tool' as const, item: tool, inputSchema: tool.parameters, label: `DSH ${plugin.title}`,
+        })),
+        ...plugin.contributions.commands.map((command) => ({
+          kind: 'command' as const, item: command, label: `DSH command ${plugin.title}`,
+          inputSchema: { type: 'object', properties: { input: { type: 'string', description: command.inputHint || 'Raw command input' } } },
+        })),
+      ];
+      const counts = new Map<string, number>();
+      for (const { kind, item } of entries) {
+        const key = `${kind}:${item.name}`;
+        counts.set(key, (counts.get(key) || 0) + 1);
       }
-      for (const command of plugin.contributions.commands) {
-        out.push({
-          server: command.chatServer,
-          name: command.name,
-          description: `[DSH command ${plugin.title}] ${command.description || command.name}${command.inputHint ? ` — input: ${command.inputHint}` : ''}`,
-          inputSchema: {
-            type: 'object',
-            properties: {
-              input: { type: 'string', description: command.inputHint || 'Raw command input' },
-            },
-          },
-        });
-      }
-    }
-    return out;
+      return entries.map(({ kind, item, label, inputSchema }) => {
+        const duplicate = counts.get(`${kind}:${item.name}`)! > 1;
+        const server = duplicate ? chatServerName(plugin.id, kind, item.rowId) : item.chatServer;
+        return {
+          pluginId: plugin.id, rowId: item.rowId, kind,
+          tool: { server, name: item.name, description: `[${label}${duplicate ? ` / ${item.rowId}` : ''}] ${item.description || item.name}`, inputSchema },
+        };
+      });
+    });
+  }
+
+  async listChatTools() {
+    await this.ensureReady();
+    return this.chatEntries().map((entry) => entry.tool);
   }
 
   async callChatTool(server: string, tool: string, args: Record<string, unknown>): Promise<string> {
     await this.ensureReady();
     if (!isDshChatServer(server)) throw new Error(`Not a DSH market server: ${server}`);
-    const match = this.state.installed().find((plugin) =>
-      plugin.contributions.tools.some((item) => item.chatServer === server && item.name === tool)
-      || plugin.contributions.commands.some((item) => item.chatServer === server && item.name === tool));
+    const match = this.chatEntries().find((entry) => entry.tool.server === server && entry.tool.name === tool);
     if (!match) throw new Error(`DSH plugin tool ${server}:${tool} is no longer registered.`);
-    if (server.startsWith('dshcmd_')) {
-      const rawInput = typeof args.input === 'string' ? args.input : JSON.stringify(args);
-      const result = await this.invokeCommand(this.state.activeProfileId(), match.id, tool, rawInput);
-      if (!result.ok) throw new Error(result.error || 'DSH command failed');
-      return result.rendered || JSON.stringify(result.value);
+    const profile = this.state.activeProfileId();
+    let result: InvokeResult;
+    if (match.kind === 'command') {
+      const fallback = Object.keys(args).length ? JSON.stringify(args) : '';
+      const input = typeof args.input === 'string' ? args.input : fallback;
+      result = await this.invokeCommand(profile, match.pluginId, tool, input, match.rowId);
+    } else {
+      result = await this.invokeTool(profile, match.pluginId, tool, args, match.rowId);
     }
-    const result = await this.invokeTool(this.state.activeProfileId(), match.id, tool, args);
-    if (!result.ok) throw new Error(result.error || 'DSH tool failed');
+    if (!result.ok) throw new Error(result.error || `DSH ${match.kind} failed`);
     return result.rendered || JSON.stringify(result.value);
   }
 
   async contributions(profileId: string, pluginId?: string): Promise<PluginContributions> {
     await this.ensureReady();
+    await this.runtimeMutations;
+    this.requireActiveProfile(profileId);
     const plugin = pluginId ? this.state.installedByMarketId(profileId, pluginId) : null;
     if (pluginId && !plugin) return { tools: [], commands: [], skills: [] };
     return this.runtime.contributions(plugin?.id);
@@ -1768,6 +1837,7 @@ export class DshMarketService {
       }, null, 2), 'utf8');
       const patches: Array<Record<string, unknown>> = [];
       for (const plugin of dshPlugins) {
+        if (plugin.enabled) for (const override of plugin.bundleOverrides || []) patches.push(override);
         for (const row of plugin.rows) {
           patches.push({
             insert: [{
@@ -1778,7 +1848,6 @@ export class DshMarketService {
             }],
           });
         }
-        if (plugin.enabled) for (const override of plugin.bundleOverrides || []) patches.push(override);
       }
       fs.writeFileSync(
         path.join(profileDir, 'cordis.patch.yml'),
@@ -1828,6 +1897,7 @@ function syntheticMarketPlugin(plugin: InstalledPlugin): MarketPlugin {
     id: plugin.id,
     name: plugin.name,
     format: plugin.format,
+    demo: plugin.source?.type === 'bundled-example',
     title: plugin.title,
     description: '',
     category: 'tools',
@@ -1841,7 +1911,7 @@ function syntheticMarketPlugin(plugin: InstalledPlugin): MarketPlugin {
     versions: [{
       version: plugin.version,
       publishedAt: plugin.updatedAt,
-      source: { type: 'npm' },
+      source: plugin.source || { type: 'npm' },
       engines: {},
       peerDependencies: {},
       dependencies: {},

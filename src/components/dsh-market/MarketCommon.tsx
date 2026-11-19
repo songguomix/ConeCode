@@ -1,5 +1,6 @@
-import type { ReactNode } from 'react';
-import { FiAlertTriangle, FiCheckCircle, FiHelpCircle, FiMinusCircle, FiPackage } from 'react-icons/fi';
+import { useEffect, type ReactNode } from 'react';
+import { FiAlertTriangle, FiCheckCircle, FiExternalLink, FiHelpCircle, FiMinusCircle, FiPackage } from 'react-icons/fi';
+import { useDshMarketStore } from '../../stores/dshMarket.store';
 import {
   parseInline,
   parseMarkdownBlocks,
@@ -12,12 +13,41 @@ import type {
   MarketPlugin,
 } from '../../core/dsh-market/types';
 
+export function useMarketDialogEscape(close: (() => void) | null) {
+  useEffect(() => {
+    if (!close) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.isComposing) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      close();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [close]);
+}
+
 export const compatTone: Record<CompatibilityState, string> = {
   verified: 'bg-emerald-500/12 text-emerald-600 dark:text-emerald-400 border-emerald-500/25',
   partial: 'bg-amber-500/12 text-amber-600 dark:text-amber-400 border-amber-500/25',
   incompatible: 'bg-red-500/12 text-red-600 dark:text-red-400 border-red-500/25',
   unverified: 'bg-[var(--bg-3)] text-[var(--text-muted)] border-[var(--border)]',
 };
+
+export function DshWebAction({ t, plugin, version }: { t: (key: string) => string; plugin?: string; version?: string }) {
+  const openWeb = useDshMarketStore((state) => state.openDshWeb);
+  const busy = useDshMarketStore((state) => state.webBusy);
+  const profile = useDshMarketStore((state) => state.snapshot?.profile.id);
+  return (
+    <div className={plugin ? 'max-w-52 text-right' : 'mt-3'}>
+      <button disabled={busy || !profile} onClick={() => void openWeb(plugin, version)}
+        className="px-2.5 py-1.5 rounded-lg border border-[var(--border)] text-[10.5px] text-[var(--text-secondary)] hover:text-[var(--accent)] disabled:opacity-50 inline-flex items-center gap-1.5">
+        <FiExternalLink size={11} />{t(busy ? 'openingDshWeb' : plugin ? 'installDshWeb' : 'openDshWeb')}
+      </button>
+      <p className="mt-1 text-[10px] leading-relaxed text-[var(--text-muted)]">{t('dshWebHint')}</p>
+    </div>
+  );
+}
 
 export function CompatBadge({ state, children }: { state: CompatibilityState; children: ReactNode }) {
   const icon = state === 'verified'
@@ -44,7 +74,7 @@ export function SourceBadge({ plugin }: { plugin: MarketPlugin }) {
   );
 }
 
-export function PluginIcon({ plugin, size = 'w-10 h-10' }: { plugin: MarketPlugin; size?: string }) {
+export function PluginIcon({ plugin, size = 'w-10 h-10' }: { plugin: Pick<MarketPlugin, 'icon' | 'title' | 'name'>; size?: string }) {
   if (plugin.icon && /^https?:\/\//.test(plugin.icon)) {
     return <img src={plugin.icon} alt="" className={`${size} rounded-xl object-cover border border-[var(--border)] shrink-0`} referrerPolicy="no-referrer" />;
   }

@@ -4,7 +4,7 @@ import {
   FiGlobe, FiHardDrive, FiPackage, FiRefreshCw, FiTrash2,
 } from 'react-icons/fi';
 import { useDshMarketStore } from '../../stores/dshMarket.store';
-import { formatDateTime } from './MarketCommon';
+import { DshWebAction, formatDateTime } from './MarketCommon';
 
 export default function SourcesView({ t }: { t: (key: string) => string }) {
   const snapshot = useDshMarketStore((s) => s.snapshot);
@@ -46,9 +46,9 @@ export default function SourcesView({ t }: { t: (key: string) => string }) {
             className="h-9 px-3 rounded-xl bg-[var(--bg-0)] border border-[var(--border)] text-[11px] text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
           />
           <button
-            disabled={!url.trim() || sourceBusy === 'add'}
+            disabled={!url.trim() || sourceBusy !== null}
             onClick={() => {
-              void addRemoteSource(url.trim(), title.trim() || undefined).then(() => { setUrl(''); setTitle(''); });
+              void addRemoteSource(url.trim(), title.trim() || undefined).then(() => { setUrl(''); setTitle(''); }).catch(() => {});
             }}
             className="h-9 px-3 rounded-xl bg-[var(--accent)] text-white text-[11px] font-medium disabled:opacity-40 inline-flex items-center justify-center gap-1.5"
           >
@@ -56,7 +56,7 @@ export default function SourcesView({ t }: { t: (key: string) => string }) {
           </button>
         </div>
         <div className="mt-2 flex items-center gap-2 flex-wrap">
-          <button onClick={() => void addLocalSource().catch(() => {})} className="h-8 px-2.5 rounded-lg border border-[var(--border)] text-[10.5px] text-[var(--text-secondary)] hover:text-[var(--text-primary)] inline-flex items-center gap-1.5">
+          <button disabled={sourceBusy !== null} onClick={() => void addLocalSource().catch(() => {})} className="h-8 px-2.5 rounded-lg border border-[var(--border)] text-[10.5px] text-[var(--text-secondary)] hover:text-[var(--text-primary)] inline-flex items-center gap-1.5">
             <FiHardDrive size={11} />{t('addLocal')}
           </button>
           <button onClick={() => void inspectLocal().catch(() => {})} className="h-8 px-2.5 rounded-lg border border-[var(--border)] text-[10.5px] text-[var(--text-secondary)] hover:text-[var(--text-primary)] inline-flex items-center gap-1.5">
@@ -138,6 +138,7 @@ export default function SourcesView({ t }: { t: (key: string) => string }) {
           <Row label="Storage substrate" value={runtime?.storage.ready ? `${runtime.storage.backend} · ${runtime.storage.root}` : (runtime?.storage.error || 'unavailable')} mono />
         </dl>
         {runtime?.lastError && <div className="mt-2 text-[10.5px] text-[var(--error)] whitespace-pre-wrap">{runtime.lastError}</div>}
+        <DshWebAction t={t} />
         <div className="mt-3 flex items-center gap-2">
           <button onClick={() => void restartRuntime().catch(() => {})} className="px-2.5 py-1.5 rounded-lg border border-[var(--border)] text-[10.5px] text-[var(--text-secondary)] hover:text-[var(--text-primary)] inline-flex items-center gap-1.5">
             <FiRefreshCw size={11} />{t('runtimeRestart')}

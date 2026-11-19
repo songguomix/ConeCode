@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import semver from 'semver';
 import {
   FiChevronDown, FiCode, FiExternalLink, FiFileText, FiPlay, FiPlus,
@@ -6,16 +6,18 @@ import {
 } from 'react-icons/fi';
 import { useDshMarketStore } from '../../stores/dshMarket.store';
 import type { InstalledPlugin } from '../../core/dsh-market/types';
-import { CompatBadge, PluginIcon, StatusBadge, formatDateTime } from './MarketCommon';
+import { useMarketDialogEscape, CompatBadge, PluginIcon, StatusBadge, formatDateTime } from './MarketCommon';
 
-export default function InstalledView({ t }: { t: (key: string) => string }) {
+export default function InstalledView({ t, onOpenDetails }: {
+  t: (key: string) => string;
+  onOpenDetails?: (name: string, version?: string) => void;
+}) {
   const snapshot = useDshMarketStore((s) => s.snapshot);
-  const refresh = useDshMarketStore((s) => s.refresh);
   const setEnabled = useDshMarketStore((s) => s.setEnabled);
   const uninstall = useDshMarketStore((s) => s.uninstall);
   const rollback = useDshMarketStore((s) => s.rollback);
-  const update = useDshMarketStore((s) => s.update);
   const selectPlugin = useDshMarketStore((s) => s.selectPlugin);
+  const openDetails = onOpenDetails || selectPlugin;
   const loadLogs = useDshMarketStore((s) => s.loadLogs);
   const logs = useDshMarketStore((s) => s.logs);
   const switchProfile = useDshMarketStore((s) => s.switchProfile);
@@ -33,6 +35,7 @@ export default function InstalledView({ t }: { t: (key: string) => string }) {
   const [newProfile, setNewProfile] = useState('');
   const [updates, setUpdates] = useState<Record<string, string>>({});
   const installed = snapshot?.installed || [];
+  const sourcesKey = snapshot?.sources.map((source) => `${source.id}:${source.lastSyncAt}`).join('|');
   const installedKey = installed.map((plugin) => `${plugin.name}@${plugin.version}`).join('|');
   useEffect(() => {
     let cancelled = false;
@@ -50,7 +53,7 @@ export default function InstalledView({ t }: { t: (key: string) => string }) {
       if (!cancelled) setUpdates(Object.fromEntries(rows.filter((row): row is readonly [string, string] => !!row)));
     });
     return () => { cancelled = true; };
-  }, [installedKey]);
+  }, [installedKey, sourcesKey]);
   const activeOp = snapshot?.operations.find((op) => ['queued', 'resolving', 'installing', 'probing', 'activating', 'restoring'].includes(op.phase));
 
   useEffect(() => {
@@ -113,7 +116,7 @@ export default function InstalledView({ t }: { t: (key: string) => string }) {
             <span className="w-2 h-2 rounded-full bg-[var(--accent)] animate-pulse" />
             <span className="font-medium text-[var(--text-primary)]">{activeOp.kind} · {activeOp.pluginId}</span>
             <span className="text-[var(--text-muted)]">{activeOp.phase} — {activeOp.message}</span>
-            <button onClick={() => void cancel(activeOp.requestId)} className="ml-auto px-2 py-1 rounded-md border border-[var(--border)] text-[10px] text-[var(--text-secondary)] hover:text-[var(--error)]">
+            <button onClick={() => void cancel(activeOp.requestId).catch(() => {})} className="ml-auto px-2 py-1 rounded-md border border-[var(--border)] text-[10px] text-[var(--text-secondary)] hover:text-[var(--error)]">
               {t('cancelOperation')}
             </button>
           </div>
@@ -137,7 +140,7 @@ export default function InstalledView({ t }: { t: (key: string) => string }) {
           {installed.map((plugin) => (
             <div key={plugin.id} className="rounded-2xl border border-[var(--border)] bg-[var(--bg-1)]/70 p-3.5">
               <div className="flex items-start gap-3">
-                <PluginIcon plugin={{ name: plugin.name, title: plugin.title, icon: undefined } as any} />
+                <PluginIcon plugin={plugin} />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-[13px] font-semibold text-[var(--text-primary)]">{plugin.title}</span>
@@ -174,14 +177,14 @@ export default function InstalledView({ t }: { t: (key: string) => string }) {
                     <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${plugin.enabled ? 'left-[18px]' : 'left-0.5'}`} />
                   </button>
                   <div className="flex items-center gap-1 flex-wrap justify-end">
-                    <ActionButton icon={<FiFileText size={10} />} label={t('details')} onClick={() => void selectPlugin(plugin.name).catch(() => {})} />
+                    <ActionButton icon={<FiFileText size={10} />} label={t('details')} onClick={() => void openDetails(plugin.name)} />
                     <ActionButton icon={<FiCode size={10} />} label={t('config')} onClick={() => setConfigPlugin(plugin)} />
                     <ActionButton icon={<FiTerminal size={10} />} label={t('logs')} onClick={() => setLogsPlugin(plugin)} />
                     <ActionButton icon={<FiPlay size={10} />} label={t('run')} onClick={() => setRunPlugin(plugin)} />
                   </div>
                   <div className="flex items-center gap-1 flex-wrap justify-end">
                     {updates[plugin.name] && (
-                      <ActionButton icon={<FiRefreshCw size={10} />} label={`${t('update')} ${updates[plugin.name]}`} onClick={() => void update(plugin.id, updates[plugin.name]).catch(() => {})} />
+                      <ActionButton icon={<FiRefreshCw size={10} />} label={`${t('update')} ${updates[plugin.name]}`} onClick={() => void openDetails(plugin.name, updates[plugin.name])} />
                     )}
                     {plugin.backups.length > 0 && (
                       <ActionButton icon={<FiRotateCcw size={10} />} label={t('rollback')} onClick={() => {
@@ -255,9 +258,10 @@ function ActionButton({ icon, label, onClick, tone = 'normal' }: {
 }
 
 function Modal({ t, title, children, onClose }: { t: (key: string) => string; title: string; children: React.ReactNode; onClose: () => void }) {
+  useMarketDialogEscape(onClose);
   return (
     <div className="fixed inset-0 z-[90] flex items-center justify-center p-4 bg-black/35 backdrop-blur-sm" onClick={onClose}>
-      <div className="w-full max-w-2xl rounded-2xl border border-[var(--border)] bg-[var(--bg-0)] shadow-2xl max-h-[85vh] flex flex-col" onClick={(event) => event.stopPropagation()}>
+      <div role="dialog" aria-modal="true" aria-label={title} className="w-full max-w-2xl rounded-2xl border border-[var(--border)] bg-[var(--bg-0)] shadow-2xl max-h-[85vh] flex flex-col" onClick={(event) => event.stopPropagation()}>
         <div className="flex items-center gap-2 px-4 py-3 border-b border-[var(--border)]">
           <span className="text-sm font-semibold text-[var(--text-primary)] flex-1 min-w-0 truncate">{title}</span>
           <button onClick={onClose} className="w-7 h-7 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] flex items-center justify-center" aria-label={t('close')}>
@@ -339,21 +343,33 @@ function RunDialog({ plugin, t, onClose }: { plugin: InstalledPlugin; t: (key: s
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const contributions = plugin.contributions;
-  const hasAny = contributions.tools.length + contributions.commands.length + contributions.skills.length > 0;
+  const [skills, setSkills] = useState(contributions.skills);
+  const [loadingSkills, setLoadingSkills] = useState(plugin.enabled);
+  useEffect(() => {
+    if (!plugin.enabled) return;
+    let active = true;
+    void window.electronAPI.dshMarket.skills().then((listed) => {
+      if (active) setSkills(listed.filter((skill) => skill.pluginId === plugin.id));
+    }).catch((loadError) => {
+      if (active) setError(loadError instanceof Error ? loadError.message : String(loadError));
+    }).finally(() => { if (active) setLoadingSkills(false); });
+    return () => { active = false; };
+  }, [plugin.id, plugin.enabled]);
+  const hasAny = contributions.tools.length + contributions.commands.length + skills.length > 0;
 
-  const runTool = async (name: string) => {
+  const runTool = async (name: string, rowId: string) => {
     setError(null);
     setResult(null);
     let args: unknown = {};
     try {
-      args = JSON.parse(toolArgs[name] || '{}');
+      args = JSON.parse(toolArgs[`${rowId}:${name}`] || '{}');
     } catch (parseError) {
       setError(parseError instanceof Error ? parseError.message : String(parseError));
       return;
     }
-    setBusy(`tool:${name}`);
+    setBusy(`tool:${rowId}:${name}`);
     try {
-      setResult(await invokeTool(plugin.id, name, args));
+      setResult(await invokeTool(plugin.id, name, args, rowId));
     } catch (runError) {
       setError(runError instanceof Error ? runError.message : String(runError));
     } finally {
@@ -361,12 +377,12 @@ function RunDialog({ plugin, t, onClose }: { plugin: InstalledPlugin; t: (key: s
     }
   };
 
-  const runCommand = async (name: string) => {
+  const runCommand = async (name: string, rowId: string) => {
     setError(null);
     setResult(null);
-    setBusy(`command:${name}`);
+    setBusy(`command:${rowId}:${name}`);
     try {
-      setResult(await invokeCommand(plugin.id, name, commandInput[name] || ''));
+      setResult(await invokeCommand(plugin.id, name, commandInput[`${rowId}:${name}`] || '', rowId));
     } catch (runError) {
       setError(runError instanceof Error ? runError.message : String(runError));
     } finally {
@@ -376,77 +392,92 @@ function RunDialog({ plugin, t, onClose }: { plugin: InstalledPlugin; t: (key: s
 
   return (
     <Modal t={t} title={`${plugin.title} · ${t('run')}`} onClose={onClose}>
-      {!hasAny && <p className="text-[12px] text-[var(--text-muted)]">{t('noContributions')}</p>}
+      {loadingSkills && <p className="text-[11px] text-[var(--text-muted)]">{t('loading')}</p>}
+      {!hasAny && !loadingSkills && <p className="text-[12px] text-[var(--text-muted)]">{t('noContributions')}</p>}
       <div className="space-y-3">
-        {contributions.tools.map((tool) => (
-          <div key={`tool-${tool.name}`} className="rounded-xl border border-[var(--border)] p-3">
-            <div className="flex items-center gap-2">
-              <FiZap size={12} className="text-[var(--accent)]" />
-              <span className="text-[12px] font-medium text-[var(--text-primary)]">{tool.name}</span>
-              <span className="text-[9.5px] px-1.5 py-0.5 rounded bg-[var(--bg-3)] text-[var(--text-muted)]">{t('tools')}</span>
+        {contributions.tools.map((tool) => {
+          const toolKey = `${tool.rowId}:${tool.name}`;
+          return (
+            <div key={toolKey} className="rounded-xl border border-[var(--border)] p-3">
+              <div className="flex items-center gap-2">
+                <FiZap size={12} className="text-[var(--accent)]" />
+                <span className="text-[12px] font-medium text-[var(--text-primary)]">{tool.name}</span>
+                <span className="text-[9.5px] px-1.5 py-0.5 rounded bg-[var(--bg-3)] text-[var(--text-muted)]">{t('tools')}</span>
+                {plugin.rows.length > 1 && <span className="text-[9.5px] font-mono text-[var(--text-muted)]">{tool.rowId}</span>}
+              </div>
+              <p className="mt-1 text-[10.5px] text-[var(--text-muted)]">{tool.description}</p>
+              <textarea
+                value={toolArgs[toolKey] ?? '{}'}
+                onChange={(event) => setToolArgs((current) => ({ ...current, [toolKey]: event.target.value }))}
+                rows={3}
+                spellCheck={false}
+                placeholder={t('toolArgs')}
+                className="mt-2 w-full rounded-lg bg-[var(--bg-1)] border border-[var(--border)] p-2 text-[10.5px] font-mono outline-none focus:border-[var(--accent)] resize-y"
+              />
+              <button onClick={() => void runTool(tool.name, tool.rowId)} disabled={busy !== null}
+                className="mt-2 px-2.5 py-1 rounded-lg bg-[var(--accent)] text-white text-[10.5px] font-medium disabled:opacity-50 inline-flex items-center gap-1">
+                <FiPlay size={10} />{busy === `tool:${toolKey}` ? t('running') : t('runTool')}
+              </button>
             </div>
-            <p className="mt-1 text-[10.5px] text-[var(--text-muted)]">{tool.description}</p>
-            <textarea
-              value={toolArgs[tool.name] ?? '{}'}
-              onChange={(event) => setToolArgs((current) => ({ ...current, [tool.name]: event.target.value }))}
-              rows={3}
-              spellCheck={false}
-              placeholder={t('toolArgs')}
-              className="mt-2 w-full rounded-lg bg-[var(--bg-1)] border border-[var(--border)] p-2 text-[10.5px] font-mono outline-none focus:border-[var(--accent)] resize-y"
-            />
-            <button onClick={() => void runTool(tool.name)} disabled={busy !== null}
-              className="mt-2 px-2.5 py-1 rounded-lg bg-[var(--accent)] text-white text-[10.5px] font-medium disabled:opacity-50 inline-flex items-center gap-1">
-              <FiPlay size={10} />{busy === `tool:${tool.name}` ? t('running') : t('runTool')}
-            </button>
-          </div>
-        ))}
-        {contributions.commands.map((command) => (
-          <div key={`cmd-${command.name}`} className="rounded-xl border border-[var(--border)] p-3">
-            <div className="flex items-center gap-2">
-              <FiTerminal size={12} className="text-[var(--accent)]" />
-              <span className="text-[12px] font-medium text-[var(--text-primary)]">/{command.name}</span>
-              <span className="text-[9.5px] px-1.5 py-0.5 rounded bg-[var(--bg-3)] text-[var(--text-muted)]">{t('commands')}</span>
+          );
+        })}
+        {contributions.commands.map((command) => {
+          const commandKey = `${command.rowId}:${command.name}`;
+          return (
+            <div key={commandKey} className="rounded-xl border border-[var(--border)] p-3">
+              <div className="flex items-center gap-2">
+                <FiTerminal size={12} className="text-[var(--accent)]" />
+                <span className="text-[12px] font-medium text-[var(--text-primary)]">/{command.name}</span>
+                <span className="text-[9.5px] px-1.5 py-0.5 rounded bg-[var(--bg-3)] text-[var(--text-muted)]">{t('commands')}</span>
+                {plugin.rows.length > 1 && <span className="text-[9.5px] font-mono text-[var(--text-muted)]">{command.rowId}</span>}
+              </div>
+              <p className="mt-1 text-[10.5px] text-[var(--text-muted)]">{command.description}{command.inputHint ? ` · ${command.inputHint}` : ''}</p>
+              <input
+                value={commandInput[commandKey] || ''}
+                onChange={(event) => setCommandInput((current) => ({ ...current, [commandKey]: event.target.value }))}
+                placeholder={t('commandInput')}
+                className="mt-2 w-full rounded-lg bg-[var(--bg-1)] border border-[var(--border)] px-2 py-1.5 text-[10.5px] font-mono outline-none focus:border-[var(--accent)]"
+              />
+              <button onClick={() => void runCommand(command.name, command.rowId)} disabled={busy !== null}
+                className="mt-2 px-2.5 py-1 rounded-lg bg-[var(--accent)] text-white text-[10.5px] font-medium disabled:opacity-50 inline-flex items-center gap-1">
+                <FiPlay size={10} />{busy === `command:${commandKey}` ? t('running') : t('runCommand')}
+              </button>
             </div>
-            <p className="mt-1 text-[10.5px] text-[var(--text-muted)]">{command.description}{command.inputHint ? ` · ${command.inputHint}` : ''}</p>
-            <input
-              value={commandInput[command.name] || ''}
-              onChange={(event) => setCommandInput((current) => ({ ...current, [command.name]: event.target.value }))}
-              placeholder={t('commandInput')}
-              className="mt-2 w-full rounded-lg bg-[var(--bg-1)] border border-[var(--border)] px-2 py-1.5 text-[10.5px] font-mono outline-none focus:border-[var(--accent)]"
-            />
-            <button onClick={() => void runCommand(command.name)} disabled={busy !== null}
-              className="mt-2 px-2.5 py-1 rounded-lg bg-[var(--accent)] text-white text-[10.5px] font-medium disabled:opacity-50 inline-flex items-center gap-1">
-              <FiPlay size={10} />{busy === `command:${command.name}` ? t('running') : t('runCommand')}
-            </button>
-          </div>
-        ))}
-        {contributions.skills.map((skill) => (
-          <div key={`skill-${skill.name}`} className="rounded-xl border border-[var(--border)] p-3">
-            <div className="flex items-center gap-2">
-              <FiFileText size={12} className="text-[var(--accent)]" />
-              <span className="text-[12px] font-medium text-[var(--text-primary)]">{skill.name}</span>
-              <span className="text-[9.5px] px-1.5 py-0.5 rounded bg-[var(--bg-3)] text-[var(--text-muted)]">{t('skills')}</span>
+          );
+        })}
+        {skills.map((skill) => {
+          const skillKey = `${skill.rowId}:${skill.name}`;
+          return (
+            <div key={skillKey} className="rounded-xl border border-[var(--border)] p-3">
+              <div className="flex items-center gap-2">
+                <FiFileText size={12} className="text-[var(--accent)]" />
+                <span className="text-[12px] font-medium text-[var(--text-primary)]">{skill.name}</span>
+                <span className="text-[9.5px] px-1.5 py-0.5 rounded bg-[var(--bg-3)] text-[var(--text-muted)]">{t('skills')}</span>
+                {plugin.rows.length > 1 && <span className="text-[9.5px] font-mono text-[var(--text-muted)]">{skill.rowId}</span>}
+              </div>
+              <p className="mt-1 text-[10.5px] text-[var(--text-muted)]">{skill.description}</p>
+              <button
+                onClick={() => {
+                  setBusy(`skill:${skillKey}`);
+                  setError(null);
+                  setResult(null);
+                  void window.electronAPI.dshMarket.skillContent(plugin.id, skill.name, skill.rowId).then((content) => {
+                    if (content === null) throw new Error(t('skillUnavailable'));
+                    setResult(content);
+                    setBusy(null);
+                  }).catch((skillError: unknown) => {
+                    setError(skillError instanceof Error ? skillError.message : String(skillError));
+                    setBusy(null);
+                  });
+                }}
+                disabled={busy !== null}
+                className="mt-2 px-2.5 py-1 rounded-lg border border-[var(--border)] text-[10.5px] text-[var(--text-secondary)] disabled:opacity-50"
+              >
+                {t('openSkill')}
+              </button>
             </div>
-            <p className="mt-1 text-[10.5px] text-[var(--text-muted)]">{skill.description}</p>
-            <button
-              onClick={() => {
-                setBusy(`skill:${skill.name}`);
-                setError(null);
-                void (window as any).electronAPI.dshMarket.skillContent(plugin.id, skill.name).then((content: string | null) => {
-                  setResult(content || '');
-                  setBusy(null);
-                }).catch((skillError: unknown) => {
-                  setError(skillError instanceof Error ? skillError.message : String(skillError));
-                  setBusy(null);
-                });
-              }}
-              disabled={busy !== null}
-              className="mt-2 px-2.5 py-1 rounded-lg border border-[var(--border)] text-[10.5px] text-[var(--text-secondary)] disabled:opacity-50"
-            >
-              {t('openSkill')}
-            </button>
-          </div>
-        ))}
+          );
+        })}
       </div>
       {busy?.startsWith('skill:') && <div className="mt-3 text-[11px] text-[var(--text-muted)]">{t('running')}</div>}
       {error && <div className="mt-3 text-[11px] text-[var(--error)] whitespace-pre-wrap">{error}</div>}

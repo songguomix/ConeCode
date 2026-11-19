@@ -3,7 +3,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import semver from 'semver';
-import { parse as parseYaml } from 'yaml';
+import { parseDocument } from 'yaml';
 import {
   DSH_COMPAT_LAYER_VERSION,
   type CompatibilityReason,
@@ -75,6 +75,14 @@ export function readPackageManifest(packageDir: string): RawPackageManifest {
   return manifest;
 }
 
+function ensurePackagePath(root: string, resolved: string, label: string): string {
+  const relative = path.relative(root, resolved);
+  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error(`${label} escapes the package directory`);
+  }
+  return resolved;
+}
+
 export function bundlePatchFiles(packageDir: string, manifest: RawPackageManifest): string[] {
   const dsh = manifest.dsh;
   if (!dsh || typeof dsh !== 'object' || Array.isArray(dsh)) {
@@ -92,18 +100,15 @@ export function bundlePatchFiles(packageDir: string, manifest: RawPackageManifes
   if (files.length > 16) throw new Error('dsh.bundle.patch lists more than 16 files');
   const root = fs.realpathSync(packageDir);
   return files.map((file) => {
-    const resolved = path.resolve(root, file);
-    const relative = path.relative(root, resolved);
-    if (relative.startsWith('..') || path.isAbsolute(relative)) {
-      throw new Error(`dsh.bundle.patch ${JSON.stringify(file)} escapes the package directory`);
-    }
+    const label = `dsh.bundle.patch ${JSON.stringify(file)}`;
+    const resolved = ensurePackagePath(root, path.resolve(root, file), label);
     if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
       throw new Error(`dsh.bundle.patch ${JSON.stringify(file)} is missing`);
     }
     if (fs.statSync(resolved).size > 2 * 1024 * 1024) {
       throw new Error(`dsh.bundle.patch ${JSON.stringify(file)} exceeds 2 MiB`);
     }
-    return resolved;
+    return ensurePackagePath(root, fs.realpathSync(resolved), label);
   });
 }
 
@@ -167,6 +172,21 @@ export function applyEntryPatches(
   return entries;
 }
 
+/** Overrides of rows supplied by earlier bundles, in the declared patch order. */
+export function bundleOverrides(patches: LoadedBundlePatch): Array<Record<string, unknown>> {
+  const localIds = new Set<string>();
+  return patches.patches.filter((patch) => {
+    if (Array.isArray(patch.insert)) {
+      if (patch.id === undefined) for (const row of patch.insert) {
+        if (typeof row?.id === 'string') localIds.add(row.id);
+      }
+      return false;
+    }
+    return typeof patch.id === 'string' && !!patch.id && !localIds.has(patch.id)
+      && ('config' in patch || typeof patch.disabled === 'boolean' || Array.isArray(patch.inject));
+  });
+}
+
 export function loadBundlePatches(packageDir: string, manifest: RawPackageManifest): LoadedBundlePatch {
   const files = bundlePatchFiles(packageDir, manifest);
   const warnings: string[] = [];
@@ -175,7 +195,10 @@ export function loadBundlePatches(packageDir: string, manifest: RawPackageManife
     const text = fs.readFileSync(file, 'utf8');
     let value: unknown;
     try {
-      value = parseYaml(text);
+      const document = parseDocument(text);
+      const problem = document.errors[0] ?? document.warnings.find((warning) => warning.code === 'TAG_RESOLVE_FAILED');
+      if (problem) throw problem;
+      value = document.toJS();
     } catch (error) {
       throw new Error(`${file}: invalid YAML: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -267,17 +290,13 @@ export function resolvePackageEntry(packageDir: string, subpath = '.'): string {
   if (target) {
     const resolved = moduleFile(path.resolve(root, target));
     if (!resolved) throw new Error(`${manifest.name}: export ${subpath} points to a missing file`);
-    const relative = path.relative(root, resolved);
-    if (relative.startsWith('..') || path.isAbsolute(relative)) {
-      throw new Error(`${manifest.name}: export ${subpath} escapes the package directory`);
-    }
-    return resolved;
+    return ensurePackagePath(root, resolved, `${manifest.name}: export ${subpath}`);
   }
   if (subpath !== '.') throw new Error(`${manifest.name}: no export named ${subpath}`);
   const main = manifest.module || manifest.main || 'index.js';
   const resolved = moduleFile(path.resolve(root, main));
   if (!resolved) throw new Error(`${manifest.name}: entry ${JSON.stringify(main)} does not exist`);
-  return resolved;
+  return ensurePackagePath(root, resolved, `${manifest.name}: main entry`);
 }
 
 export function resolveRowModule(packageDir: string, packageName: string, rowName: string): string {
@@ -504,7 +523,7 @@ export function computeCompatibility(input: CompatibilityInput): CompatibilityRe
   if (hasClientHalf(manifest)) {
     reasons.push({
       code: 'web-client',
-      message: 'This plugin includes a DSH Web interface that ConeCode cannot display.',
+      message: 'This plugin includes a browser interface. Choose Install in DSH Web to use it.',
     });
     missing.push('web-client');
   }

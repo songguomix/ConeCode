@@ -405,7 +405,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     const clean = name.trim().replace(/[/\\]+/g, '');
     if (!isValidFileName(clean)) return null;
     const full = `${parentDir}/${clean}`;
-    const ok = await window.electronAPI.fs.writeFile(full, '');
+    const ok = await window.electronAPI.fs.writeFile(full, '', { exclusive: true });
     if (!ok) return null;
     await get().refreshDir(parentDir);
     await get().selectFile(full);

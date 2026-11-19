@@ -73,7 +73,8 @@ function text(localized: unknown, fallback = ''): string {
 function isoDate(value: unknown): string {
   if (typeof value === 'number') {
     const ms = value > 10_000_000_000 ? value : value * 1000;
-    return new Date(ms).toISOString();
+    const date = new Date(ms);
+    if (Number.isFinite(date.getTime())) return date.toISOString();
   }
   if (typeof value === 'string') {
     const ms = Date.parse(value);
@@ -180,7 +181,7 @@ function validatePlugin(value: unknown, sourceId: string): MarketPlugin {
         }
       : undefined,
     demo: p.demo === true,
-    sourceId: typeof p.sourceId === 'string' ? p.sourceId : sourceId,
+    sourceId,
     readme: typeof p.readme === 'string' ? p.readme : undefined,
     screenshots: Array.isArray(p.screenshots) ? p.screenshots.filter((item): item is string => typeof item === 'string') : undefined,
   };
@@ -228,6 +229,7 @@ export function parseDshMarketIndex(value: unknown, sourceId: string): MarketCat
           ...(typeof source.registry === 'string' ? { registry: source.registry } : {}),
           ...(typeof source.url === 'string' ? { url: source.url } : {}),
           ...(typeof source.commit === 'string' ? { commit: source.commit } : {}),
+          ...(typeof source.path === 'string' ? { subdir: source.path } : {}),
         },
         engines: { ...(typeof engines.dsh === 'string' ? { dsh: engines.dsh } : {}) },
         peerDependencies: {},
@@ -248,7 +250,9 @@ export function parseDshMarketIndex(value: unknown, sourceId: string): MarketCat
       description: cleanText(text(p.description, '')).slice(0, 420),
       author: typeof p.author === 'string' ? p.author : undefined,
       homepage: typeof p.homepage === 'string' ? p.homepage : undefined,
-      repository: typeof repository.url === 'string' ? { url: repository.url } : undefined,
+      repository: typeof repository.url === 'string'
+        ? { url: repository.url, ...(typeof repository.directory === 'string' ? { directory: repository.directory } : {}) }
+        : undefined,
       license: undefined,
       category: normalizeCategory(categoryId || categoryTitle),
       labels: Array.isArray(pluginMetadata.labels) ? pluginMetadata.labels.filter((x): x is string => typeof x === 'string') : [],
@@ -341,7 +345,7 @@ export function queryCatalog(
   compatibilityOf: (plugin: MarketPlugin) => CompatibilityResult,
   installedOf: (plugin: MarketPlugin) => InstalledPlugin | null,
 ): CatalogPage {
-  const page = Math.max(1, Math.trunc(options.page || 1));
+  const requestedPage = Math.max(1, Math.trunc(options.page || 1));
   const pageSize = Math.min(60, Math.max(1, Math.trunc(options.pageSize || 12)));
   const query = options.query?.trim() || '';
   const scored = plugins
@@ -373,6 +377,7 @@ export function queryCatalog(
   });
 
   const total = compatibleOnly.length;
+  const page = Math.min(requestedPage, Math.max(1, Math.ceil(total / pageSize)));
   const start = (page - 1) * pageSize;
   const items = compatibleOnly.slice(start, start + pageSize).map((item) => ({
     ...item.plugin,

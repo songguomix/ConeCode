@@ -140,6 +140,31 @@ describe('Conversation Area Mode Isolation', () => {
     expect(isRsiConversation(conv!)).toBe(false);
   });
 
+  it('shows the Work list when opening a project starts a conversation from Chat', async () => {
+    await useChatStore.getState().newConversation('p1', 'm1', '/workspace/project');
+
+    expect(useChatStore.getState().conversations).toHaveLength(1);
+    expect(isWorkConversation(useChatStore.getState().conversations[0])).toBe(true);
+    expect(useUIStore.getState().viewMode).toBe('work');
+  });
+
+  it('reopens a saved Work conversation without a project in its own view', async () => {
+    const saved: Conversation = {
+      id: 'without-project', title: 'First message', providerId: 'p1', modelId: 'm1',
+      rootPath: null, isChatMode: false, createdAt: 1, updatedAt: 1,
+    };
+    const first: Message = { id: 'm', role: 'user', content: saved.title, conversationId: saved.id, createdAt: 1 };
+    vi.mocked(window.electronAPI.conversation.list).mockResolvedValue([saved]);
+    vi.mocked(window.electronAPI.message.list).mockResolvedValue([first]);
+
+    await useChatStore.getState().fetchConversations();
+    await useChatStore.getState().setActiveConversation(saved.id);
+
+    expect(useUIStore.getState().viewMode).toBe('work');
+    expect(useChatStore.getState().activeConversationId).toBe(saved.id);
+    expect(useChatStore.getState().messages).toEqual([first]);
+  });
+
   it('creates dedicated RSI conversations and switches viewMode to work', async () => {
     const id = await useChatStore.getState().createRsiConversation('p1', 'm1');
     const conv = useChatStore.getState().conversations.find((c) => c.id === id);
