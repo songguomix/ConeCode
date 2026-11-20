@@ -142,7 +142,6 @@ export const useAutopilotStore = create<AutopilotStore>((set, get) => ({
 
     const chat = useChatStore.getState();
     const settings = useSettingsStore.getState();
-    const workspace = useWorkspaceStore.getState();
     // Unattended means unattended: approvals would stall the run at the first
     // edit. Restored in the finally below, whatever happens.
     const previousApproval = settings.approvalMode;
@@ -156,27 +155,32 @@ export const useAutopilotStore = create<AutopilotStore>((set, get) => ({
         return;
       }
       set({ projectDir: dir });
+      if (useChatStore.getState().activeConversationId !== chat.activeConversationId) {
+        throw new Error('The conversation changed while the project was being created.');
+      }
 
       // A fresh conversation bound to the new folder, so the run is self-contained
       // and resumable later from the home screen.
-      await chat.createConversation(providerId, modelId);
-      await workspace.openFolderPath(dir);
-      await chat.setConversationFolder(dir);
-      await useChatStore.getState().renameConversation(
-        useChatStore.getState().activeConversationId!,
-        idea.title,
-      );
+      const id = await chat.createConversation(providerId, modelId, dir);
+      const send = (prompt: string) => {
+        const current = useChatStore.getState();
+        if (current.activeConversationId !== id || useWorkspaceStore.getState().rootPath !== dir) {
+          throw new Error('The Autopilot conversation or workspace changed.');
+        }
+        return current.sendMessage(prompt, providerId, modelId);
+      };
+      await chat.renameConversation(id, idea.title);
 
       useSettingsStore.setState({ approvalMode: 'fullAuto' });
 
       set({ phase: 'building' });
-      await useChatStore.getState().sendMessage(buildAutopilotPrompt(idea, dir), providerId, modelId);
+      await send(buildAutopilotPrompt(idea, dir));
 
       // --- verification loop -------------------------------------------------
       for (let attempt = 1; attempt <= MAX_REPAIR_ATTEMPTS; attempt++) {
         set({ phase: 'verifying', attempt });
 
-        const command = await resolveVerifyCommand(dir);
+        const command = await resolveVerifyCommand(dir, id);
         if (!command) {
           set({ phase: 'failed', error: 'no-verify-command' });
           return;
@@ -199,9 +203,7 @@ export const useAutopilotStore = create<AutopilotStore>((set, get) => ({
 
         // Hand the real failure back and let it fix its own work.
         set({ phase: 'repairing' });
-        await useChatStore
-          .getState()
-          .sendMessage(buildRepairPrompt(command, output, attempt, MAX_REPAIR_ATTEMPTS), providerId, modelId);
+        await send(buildRepairPrompt(command, output, attempt, MAX_REPAIR_ATTEMPTS));
       }
 
       set({ phase: 'failed', error: 'verification-failed' });
@@ -248,8 +250,11 @@ export async function createProjectDir(title: string): Promise<string | null> {
  * The command that proves the project works: what the agent declared, or failing
  * that, whatever the project layout implies.
  */
-async function resolveVerifyCommand(dir: string): Promise<string | null> {
-  const messages = useChatStore.getState().messages;
+async function resolveVerifyCommand(dir: string, conversationId: string): Promise<string | null> {
+  const chat = useChatStore.getState();
+  const messages = chat.activeConversationId === conversationId
+    ? chat.messages
+    : await window.electronAPI.message.list(conversationId);
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
     if (m.role !== 'assistant' || m.isLocalNotice) continue;

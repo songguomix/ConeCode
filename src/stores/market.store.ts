@@ -1,10 +1,12 @@
 import { create } from 'zustand';
+import type { GithubAccountStatus, GithubPushBranches } from '../types/github.types';
 
 // The GitHub plugin's state. Its whole job is to push the *open project* to a
 // GitHub repo: it stores where to push and the token to push with, reads the
 // project's git state, and runs one commit+push. No skills, no SKILL.md — the
 // chat model only ever asks this store to push; it never touches git itself.
 const REPO_KEY = 'conecode.pluginRepo';
+const REPOS_KEY = 'conecode.pluginRepos';
 const TOKEN_KEY = 'conecode.pluginToken';
 
 /** Minimal git state of the open project, for the plugin view. */
@@ -19,10 +21,17 @@ export interface RepoPushResult {
   message: string;
 }
 
+export interface RepoPushTarget extends GithubPushBranches {
+  root: string;
+  repo: string;
+}
+
 interface MarketStore {
   /** "owner/repo" the open project is pushed to. */
   repo: string;
+  repos: string[];
   tokenSet: boolean;
+  account: GithubAccountStatus | null;
   /** Git state of the open project; null until refreshed with a folder open. */
   status: RepoStatus | null;
   refreshing: boolean;
@@ -32,16 +41,19 @@ interface MarketStore {
   /** Last push outcome — kept so the view can show exactly what the model saw. */
   result: RepoPushResult | null;
   setRepo: (repo: string) => void;
+  addRepo: (repo: string) => boolean;
+  removeRepo: (repo: string) => void;
+  setAccount: (status: GithubAccountStatus) => void;
+  refreshAccount: () => Promise<void>;
   /** Persist a token (or null to forget it). The value never enters state. */
   setToken: (token: string | null) => void;
   /** Read the open project's git state (branch, uncommitted count). */
   refresh: () => Promise<void>;
   /**
-   * Commit whatever is uncommitted in the open project and push the current
-   * branch to the configured repo. Runs through the main process; the token, if
-   * any, authenticates the push without being stored in the git config.
+   * Push a local branch to the selected destination. The main process handles
+   * credentials and only includes working-tree edits for the checked-out branch.
    */
-  pushRepo: (message?: string, target?: { root: string; repo: string }) => Promise<RepoPushResult>;
+  pushRepo: (message?: string, target?: RepoPushTarget) => Promise<RepoPushResult>;
 }
 
 function loadRepo(): string {
@@ -50,6 +62,32 @@ function loadRepo(): string {
   } catch {
     return '';
   }
+}
+
+function addPreset(repos: string[], repo: string): string[] {
+  return repos.some((item) => item.toLowerCase() === repo.toLowerCase()) ? repos : [...repos, repo];
+}
+
+function loadPresets(): string[] {
+  let repos: string[] = [];
+  try {
+    const entries: unknown = JSON.parse(localStorage.getItem(REPOS_KEY) || '[]');
+    if (Array.isArray(entries)) {
+      for (const entry of entries) {
+        const repo = typeof entry === 'string' ? normalizeRepo(entry) : null;
+        if (repo) repos = addPreset(repos, repo);
+      }
+    }
+  } catch {}
+  const selected = normalizeRepo(loadRepo());
+  return selected ? addPreset(repos, selected) : repos;
+}
+
+function saveRepos(repo: string, repos: string[]): void {
+  try {
+    localStorage.setItem(REPO_KEY, repo);
+    localStorage.setItem(REPOS_KEY, JSON.stringify(repos));
+  } catch {}
 }
 
 export function loadGithubToken(): string | null {
@@ -63,8 +101,9 @@ export function loadGithubToken(): string | null {
 /** Accept "owner/repo" or a github.com URL, reject everything else. */
 export function normalizeRepo(input: string): string | null {
   const t = input.trim().replace(/\/+$/, '');
-  const m = t.match(/^(?:https?:\/\/github\.com\/)?([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?$/);
-  return m ? m[1] : null;
+  const match = t.match(/^(?:https?:\/\/github\.com\/)?([A-Za-z0-9-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?$/i);
+  if (!match || ['.', '..'].includes(match[2])) return null;
+  return `${match[1]}/${match[2]}`;
 }
 
 async function openRoot(): Promise<string | null> {
@@ -72,9 +111,15 @@ async function openRoot(): Promise<string | null> {
   return useWorkspaceStore.getState().rootPath || null;
 }
 
+let accountRequest = 0;
+let accountCheck: { request: number; pending: Promise<void> } | undefined;
+let statusRequest = 0;
+
 export const useMarketStore = create<MarketStore>((set, get) => ({
-  repo: loadRepo(),
+  repo: normalizeRepo(loadRepo()) ?? loadRepo(),
+  repos: loadPresets(),
   tokenSet: !!loadGithubToken(),
+  account: null,
   status: null,
   refreshing: false,
   pushing: false,
@@ -82,10 +127,44 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
   result: null,
 
   setRepo: (repo) => {
-    try {
-      localStorage.setItem(REPO_KEY, repo);
-    } catch {}
-    set({ repo });
+    const normalized = normalizeRepo(repo);
+    const repos = normalized ? addPreset(get().repos, normalized) : get().repos;
+    const selected = repos.find((item) => item.toLowerCase() === normalized?.toLowerCase()) ?? repo.trim();
+    saveRepos(selected, repos);
+    set({ repo: selected, repos });
+  },
+
+  addRepo: (repo) => {
+    const normalized = normalizeRepo(repo);
+    if (!normalized) return false;
+    get().setRepo(normalized);
+    return true;
+  },
+
+  removeRepo: (repo) => {
+    const key = repo.toLowerCase();
+    const repos = get().repos.filter((item) => item.toLowerCase() !== key);
+    const selected = get().repo.toLowerCase() === key ? '' : get().repo;
+    saveRepos(selected, repos);
+    set({ repo: selected, repos });
+  },
+
+  setAccount: (account) => {
+    accountRequest++;
+    set({ account });
+  },
+
+  refreshAccount: async () => {
+    const bridge = globalThis.window?.electronAPI?.githubAccount;
+    if (!bridge) return;
+    if (accountCheck?.request === accountRequest) return accountCheck.pending;
+    const request = accountRequest;
+    const pending = bridge.status()
+      .catch((): GithubAccountStatus => ({ state: 'error', error: 'status-failed' }))
+      .then((account) => { if (request === accountRequest) set({ account }); })
+      .finally(() => { if (accountCheck?.request === request) accountCheck = undefined; });
+    accountCheck = { request, pending };
+    return pending;
   },
 
   setToken: (token) => {
@@ -97,7 +176,9 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
   },
 
   refresh: async () => {
+    const request = ++statusRequest;
     const root = await openRoot();
+    if (request !== statusRequest) return;
     set({ refreshing: true });
     try {
       if (!root) {
@@ -105,9 +186,9 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
         return;
       }
       const info = await window.electronAPI.git.info(root);
-      set({ status: info, refreshing: false });
+      if (request === statusRequest) set({ status: info, refreshing: false });
     } catch {
-      set({ status: null, refreshing: false });
+      if (request === statusRequest) set({ status: null, refreshing: false });
     }
   },
 
@@ -131,6 +212,7 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
       return res;
     }
     const repo = normalizeRepo(raw);
+    if (get().pushing) return { ok: false, message: 'Error: another GitHub push is in progress.' };
     const token = loadGithubToken();
     set({ pushing: true, result: null });
     let res: RepoPushResult;
@@ -140,6 +222,11 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
         message,
         repo: repo || undefined,
         token: token || undefined,
+        ...(target?.sourceBranch && { sourceBranch: target.sourceBranch }),
+        ...(target?.targetBranch && { targetBranch: target.targetBranch }),
+        ...(target?.createTarget && { createTarget: true }),
+        ...(target?.commitChanges !== undefined && { commitChanges: target.commitChanges }),
+        ...(target?.originKey && { originKey: target.originKey }),
       });
       res = out.ok ? { ok: true, message: out.message } : { ok: false, message: `Error: ${out.message}` };
     } catch (e: any) {
@@ -150,3 +237,11 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
     return res;
   },
 }));
+
+export async function hasGithubCredentials(): Promise<boolean> {
+  if (loadGithubToken()) return true;
+  const store = useMarketStore.getState();
+  if (store.account?.state === 'signed-in') return true;
+  await store.refreshAccount();
+  return useMarketStore.getState().account?.state === 'signed-in';
+}

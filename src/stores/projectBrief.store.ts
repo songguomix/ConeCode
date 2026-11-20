@@ -172,14 +172,9 @@ export const useProjectBriefStore = create<ProjectBriefStore>((set, get) => ({
       set({ directory });
       checkConversation(initialConversation);
       const chat = useChatStore.getState();
-      const id = await chat.createConversation(providerId, modelId);
+      const id = await chat.createConversation(providerId, modelId, directory);
       checkConversation(id);
-      if (isNewDir) {
-        if (!await useWorkspaceStore.getState().openFolderPath(directory)) throw new Error('briefFolderFailed');
-        checkConversation(id);
-      }
-      await chat.setConversationFolder(directory);
-      checkConversation(id);
+      if (useWorkspaceStore.getState().rootPath !== directory) throw new Error('briefFolderFailed');
       await chat.renameConversation(id, brief.title);
       checkConversation(id);
       await chat.sendMessage(projectExecutionPrompt(prompt, directory, isNewDir), providerId, modelId);

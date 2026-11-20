@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type { SubAgentRun } from '../src/types/subAgent.types';
 import type { ComputerPreviewAppearance } from '../src/core/computer/preview';
 import type { UpdateDownloadProgress } from '../src/core/updates/updateClient';
+import type { GithubCreateBranchOptions, GithubPushOptions, GithubRemoteOptions } from '../src/types/github.types';
 
 contextBridge.exposeInMainWorld('electronAPI', {
   aegis: { testKey: (key: string) => ipcRenderer.invoke('aegis:test-key', key), hasKey: () => ipcRenderer.invoke('aegis:has-key'), setKey: (key: string) => ipcRenderer.invoke('aegis:set-key', key), scan: (urls: string[]) => ipcRenderer.invoke('aegis:scan', urls) },
@@ -117,9 +118,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     status: (cwd?: string) => ipcRenderer.invoke('git:status', cwd),
     diff: (cwd?: string, file?: string) => ipcRenderer.invoke('git:diff', cwd, file),
     branches: (cwd?: string) => ipcRenderer.invoke('git:branches', cwd),
-    pushProject: (opts: { cwd: string; message?: string; repo?: string; token?: string }) =>
-      ipcRenderer.invoke('git:pushProject', opts),
+    localBranches: (cwd: string) => ipcRenderer.invoke('git:localBranches', cwd),
+    remoteBranches: (opts: GithubRemoteOptions) => ipcRenderer.invoke('git:remoteBranches', opts),
+    createBranch: (opts: GithubCreateBranchOptions) => ipcRenderer.invoke('git:createBranch', opts),
+    pushProject: (opts: GithubPushOptions) => ipcRenderer.invoke('git:pushProject', opts),
     review: (cwd: string, options: any) => ipcRenderer.invoke('git:review', cwd, options),
+  },
+  githubAccount: {
+    status: () => ipcRenderer.invoke('github-account:status'),
+    begin: () => ipcRenderer.invoke('github-account:begin'),
+    cancel: () => ipcRenderer.invoke('github-account:cancel'),
+    logout: () => ipcRenderer.invoke('github-account:logout'),
   },
   githubReply: {
     list: (options: { repo: string; token?: string }) => ipcRenderer.invoke('github-reply:list', options),

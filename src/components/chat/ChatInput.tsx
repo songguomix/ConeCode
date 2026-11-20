@@ -113,19 +113,10 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
   }, [inputContent, setInputContent]);
 
   useEffect(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
-  }, [input]);
-
-  useEffect(() => {
     if (centered) {
       textareaRef.current?.focus();
     }
   }, [centered]);
-
-  const resetHeight = () => { if (textareaRef.current) textareaRef.current.style.height = 'auto'; };
 
   const refreshMention = (value: string, caretPos: number) => {
     setCaret(caretPos);
@@ -155,7 +146,6 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
     }
     setInput('');
     setSlashDismissed(false);
-    resetHeight();
     if ((command.name === 'mode' && !conversationCommandMode(args)) ||
         (command.name === 'goal' && !args.trim())) {
       setInput('/' + command.name + ' ');
@@ -225,7 +215,6 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
     const captured = parseQuickCapture(text.trim());
     if (captured) {
       setInput('');
-      resetHeight();
       setPendingCapture(captured);
       return;
     }
@@ -250,12 +239,10 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
       enqueueMessage(activeConversationId, full, selectedModel.providerId, selectedModel.id);
       setInput('');
       setMentionQuery(null);
-      resetHeight();
       return;
     }
     setInput('');
     setMentionQuery(null);
-    resetHeight();
     await sendMessage(full, selectedModel.providerId, selectedModel.id);
   };
 
@@ -274,7 +261,6 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
     }
     setInput('');
     setMentionQuery(null);
-    resetHeight();
     await launchBackground(full);
   };
 

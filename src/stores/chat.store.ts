@@ -3,7 +3,8 @@ import { normalizeTokenUsage, type TokenUsage } from '../core/providers/tokenUsa
 import { create } from 'zustand';
 import { v4 as uuidv4 } from 'uuid';
 import type { Conversation, Message, ReasoningEffort, ChatMessage, ContentPart, ToolCall, ThinkingBlock } from '../types';
-import { useWorkspaceStore } from './workspace.store';
+import type { GithubPushBranches } from '../types/github.types';
+import { useWorkspaceStore, type WorkspaceSnapshot } from './workspace.store';
 import { recordSubAgentRun } from './subAgents.store';
 import type { SubAgentRun } from '../types/subAgent.types';
 import { useUIStore } from './ui.store';
@@ -155,9 +156,48 @@ export interface SendMessageOptions {
 }
 const taskMemoryByConversation = new Map<string, TaskMemoryContext>();
 const rsiSpendBaselines = new Map<string, number>();
+type TaskWorkspaceContext = Pick<WorkspaceSnapshot,
+  'rootPath' | 'extraRoots' | 'selectedFile' | 'fileContent' | 'selectedFileIsImage' |
+  'contextFiles' | 'agentsMd' | 'agentsMdPath' | 'memoryFiles'>;
+type TaskWorkspace = TaskWorkspaceContext & {
+  allRoots: () => string[];
+  mcpTools: McpToolInfo[];
+};
+
+function taskWorkspaceFrom(workspace: TaskWorkspaceContext, mcpTools: McpToolInfo[] = []): TaskWorkspace {
+  const roots = workspace.rootPath ? [workspace.rootPath, ...workspace.extraRoots.map((root) => root.path)] : [];
+  return { ...workspace, mcpTools, allRoots: () => roots };
+}
+
+const emptyTaskWorkspace = taskWorkspaceFrom({
+  rootPath: null, extraRoots: [], selectedFile: null, fileContent: null,
+  selectedFileIsImage: false, contextFiles: [], agentsMd: null, agentsMdPath: null, memoryFiles: [],
+});
+
+function visibleConversationWorkspace(conversationId: string, conversation?: Conversation) {
+  const workspace = useWorkspaceStore.getState();
+  if (useChatStore.getState().activeConversationId !== conversationId) return undefined;
+  if (conversation?.rootPath !== undefined && workspace.rootPath !== conversation.rootPath) return undefined;
+  return workspace;
+}
+
+async function resolveTaskWorkspace(conversationId: string, conversation?: Conversation): Promise<TaskWorkspace> {
+  const live = visibleConversationWorkspace(conversationId, conversation);
+  if (live) return taskWorkspaceFrom(live.saveSnapshot(), live.mcpTools);
+
+  const saved = useChatStore.getState().workspaceSnapshots.get(conversationId);
+  if (saved && (conversation?.rootPath === undefined || saved.rootPath === conversation.rootPath)) {
+    return taskWorkspaceFrom(saved);
+  }
+  if (!conversation?.rootPath) return emptyTaskWorkspace;
+  const loaded = await useWorkspaceStore.getState().loadSnapshot(conversation.rootPath, conversation.extraRoots)
+    .catch(() => null);
+  return loaded ? taskWorkspaceFrom(loaded) : emptyTaskWorkspace;
+}
+
 interface RsiExecutionSession {
   runId: string | null;
-  workspace: ReturnType<typeof useWorkspaceStore.getState>;
+  workspace: TaskWorkspace;
   monitor: RsiExecutionMonitor;
   pendingScreenshot?: { ticket: number; dataUrl: string };
   spendUsd: number;
@@ -451,7 +491,7 @@ const MAX_LIVE_CHAT_IMAGES = 2;
  * folder open there is nothing to scan — the old call fell through to the main
  * process's own working directory, which was never the folder anyone meant.
  */
-async function searchWorkspace(action: FileAction, ws: ReturnType<typeof useWorkspaceStore.getState>): Promise<string> {
+async function searchWorkspace(action: FileAction, ws: TaskWorkspace): Promise<string> {
   const dirs = action.path ? [action.path] : ws.allRoots();
   if (!dirs.length) {
     return 'Error: no project folder is open — open a folder first, or pass an absolute path to search.';
@@ -466,7 +506,7 @@ async function searchWorkspace(action: FileAction, ws: ReturnType<typeof useWork
     (capped ? '\n[The list stopped at the cap — refine the query or narrow the path for the rest.]' : '');
 }
 
-async function globWorkspace(action: FileAction, ws: ReturnType<typeof useWorkspaceStore.getState>): Promise<string> {
+async function globWorkspace(action: FileAction, ws: TaskWorkspace): Promise<string> {
   const dirs = action.path ? [action.path] : ws.allRoots();
   if (!dirs.length) {
     return 'Error: no project folder is open — open a folder first, or pass an absolute path to search.';
@@ -520,6 +560,9 @@ interface FileAction {
   limit?: number;
   /** github_push: optional commit message for the project push. */
   message?: string;
+  sourceBranch?: string;
+  targetBranch?: string;
+  createTarget?: boolean;
   /** generate_image arguments */
   prompt?: string;
   aspect_ratio?: string;
@@ -677,17 +720,22 @@ async function startDetachedRun(
   // that have no parent context (manual "run in background") default to the
   // view the user is looking at.
   isChatMode = useUIStore.getState().viewMode === 'chat',
+  parentWorkspace?: TaskWorkspace,
 ): Promise<string | null> {
   if (isHolding(useInstallGateStore.getState().jobs)) return null;
   if (!content.trim() || !providerId || !modelId) return null;
   const set = useChatStore.setState;
-  const ws = useWorkspaceStore.getState();
-  // Same folder binding as a normal new chat, but the active conversation,
-  // its editor snapshot, and its todos stay untouched.
+  const chat = useChatStore.getState();
+  const active = chat.conversations.find((conversation) => conversation.id === chat.activeConversationId);
+  const visible = useWorkspaceStore.getState();
+  const workspace = isChatMode ? emptyTaskWorkspace : parentWorkspace ?? (chat.activeConversationId
+    ? await resolveTaskWorkspace(chat.activeConversationId, active)
+    : taskWorkspaceFrom(visible.saveSnapshot(), visible.mcpTools));
+  const extraRoots = workspace.extraRoots.map((root) => root.path);
   const conv = await window.electronAPI.conversation.create({
     providerId,
     modelId,
-    rootPath: ws.rootPath,
+    rootPath: workspace.rootPath,
     isChatMode,
   });
   const userMsg: Message = {
@@ -699,14 +747,14 @@ async function startDetachedRun(
   };
   await window.electronAPI.message.create(userMsg);
   const title = content.trim().replace(/\s+/g, ' ').slice(0, 50);
-  await window.electronAPI.conversation.update(conv.id, { title });
+  await window.electronAPI.conversation.update(conv.id, { title, extraRoots });
   const now = Date.now();
   set((s) => ({
-    conversations: [{ ...conv, title, updatedAt: now, isChatMode }, ...s.conversations],
+    conversations: [{ ...conv, title, extraRoots, updatedAt: now, isChatMode }, ...s.conversations],
   }));
   // runAgentLoop already isolates non-active runs (reloads its own persisted
   // transcript, guards all writes by conversation id) — fire and forget.
-  void runAgentLoop(conv.id, providerId, modelId).catch((e) => {
+  void runAgentLoop(conv.id, providerId, modelId, {}, workspace).catch((e) => {
     console.error(`[background] run failed for ${conv.id}:`, e);
   });
   return conv.id;
@@ -746,11 +794,22 @@ async function githubPluginGate(): Promise<string | null> {
   return null;
 }
 
-export async function runGithubPushText(message?: string): Promise<string> {
+type GithubPushDraft = Pick<GithubPushBranches, 'sourceBranch' | 'targetBranch' | 'createTarget'> & { repo?: string };
+
+export async function runGithubPushText(
+  message?: string,
+  root = useWorkspaceStore.getState().rootPath,
+  draft?: GithubPushDraft,
+): Promise<string> {
   const blocked = await githubPluginGate();
   if (blocked) return blocked;
-  const { useGithubPushStore } = await import('./githubPush.store');
-  const res = await useGithubPushStore.getState().request(message);
+  if (!root) return 'Error: no project folder is open.';
+  const [{ useGithubPushStore }, { useMarketStore }] = await Promise.all([
+    import('./githubPush.store'), import('./market.store'),
+  ]);
+  const res = await useGithubPushStore.getState().request(message, {
+    ...draft, root, repo: draft?.repo || useMarketStore.getState().repo,
+  });
   return res.message;
 }
 
@@ -784,17 +843,17 @@ export interface GithubReleaseArgs {
  * the plugin's own configuration and build output, then opens the same review
  * dialog the manual flow uses — nothing uploads until the user confirms.
  */
-export async function runGithubReleaseText(args: GithubReleaseArgs): Promise<string> {
+export async function runGithubReleaseText(args: GithubReleaseArgs, root = useWorkspaceStore.getState().rootPath): Promise<string> {
   const blocked = await githubPluginGate();
   if (blocked) return blocked;
 
-  const { loadGithubToken, normalizeRepo, useMarketStore } = await import('./market.store');
+  const { hasGithubCredentials, normalizeRepo, useMarketStore } = await import('./market.store');
   const repo = normalizeRepo(args.repo || useMarketStore.getState().repo || '');
   if (!repo) {
     return 'Error: no GitHub repository is configured. Set it in Settings → Plugins (GitHub sync), or pass the repo as owner/repo.';
   }
-  if (!loadGithubToken()) {
-    return 'Error: no GitHub token is saved. Add one with Contents read/write permission in Settings → Plugins (GitHub sync) first.';
+  if (!await hasGithubCredentials()) {
+    return 'Error: no GitHub token or connected account. Sign in or save a token with Contents read/write permission in Settings → Plugins (GitHub sync).';
   }
   if (!args.tag?.trim()) {
     return 'Error: a release tag is required (e.g. "v2.4.8").';
@@ -803,7 +862,6 @@ export async function runGithubReleaseText(args: GithubReleaseArgs): Promise<str
   let files = (args.files || []).map((f) => String(f).trim()).filter(Boolean);
   if (!files.length) {
     // Auto-detect: scan the build output the way electron-builder lays it out.
-    const root = useWorkspaceStore.getState().rootPath;
     if (!root) {
       return 'Error: no attachments given and no project folder is open. Build the installers, then pass their absolute paths as files.';
     }
@@ -890,8 +948,9 @@ async function deliverToConversation(convId: string, content: string, providerId
   // they must not linger in the box or re-upload on every later message.
   // Queued/continue deliveries opt out: an image sitting in the box when the
   // queue flushes is the user's next message, never this replay's attachment.
-  const wsState = useWorkspaceStore.getState();
-  const composerImages = options.keepComposerImages || options.images
+  const conversation = get().conversations.find((item) => item.id === convId);
+  const wsState = visibleConversationWorkspace(convId, conversation);
+  const composerImages = options.keepComposerImages || options.images || !wsState
     ? []
     : wsState.contextFiles
       .filter((f) => f.isImage && f.dataUrl)
@@ -954,9 +1013,7 @@ async function recallTaskMemory(convId: string, content: string): Promise<TaskMe
   const memory = useMemoryV2Store.getState();
   const chat = useChatStore.getState();
   const conversation = chat.conversations.find((item) => item.id === convId);
-  const rootPath = chat.activeConversationId === convId
-    ? useWorkspaceStore.getState().rootPath
-    : conversation?.rootPath ?? null;
+  const rootPath = visibleConversationWorkspace(convId, conversation)?.rootPath ?? conversation?.rootPath ?? null;
   // A background turn must never retrieve from the project open in another chat.
   if (content.trim() && memory.active && memory.settings?.enabled !== false && !conversation?.isChatMode && rootPath === memory.rootPath) {
     const taskMemory = await memory.beginTask(content, convId);
@@ -1017,7 +1074,7 @@ function toolFailure(label: string, error: unknown): string {
 
 async function executeIndependentRead(
   action: FileAction,
-  ws: ReturnType<typeof useWorkspaceStore.getState>,
+  ws: TaskWorkspace,
   scope?: string,
 ): Promise<{ result: string; succeeded: boolean }> {
   if (isPerfSnapshot(action.action)) return runPerfSnapshot();
@@ -1031,7 +1088,7 @@ function isPerfSnapshot(action: FileAction['action']): boolean {
 
 async function readToolText(
   action: FileAction,
-  ws: ReturnType<typeof useWorkspaceStore.getState>,
+  ws: TaskWorkspace,
   scope?: string,
 ): Promise<string> {
   switch (action.action) {
@@ -1895,7 +1952,7 @@ function buildSystemMessages(
   nativeTools = false,
   goal?: ConversationGoal,
   reviewMode = false,
-  workspace = useWorkspaceStore.getState(),
+  workspace: TaskWorkspace = useWorkspaceStore.getState(),
   agentMode: AgentMode = 'standard',
   isChatMode = useUIStore.getState().viewMode === 'chat',
 ): ChatMessage[] {
@@ -2062,7 +2119,7 @@ ${parallelRule}
 }
 
 function buildRuntimeContext(
-  ws: ReturnType<typeof useWorkspaceStore.getState>,
+  ws: TaskWorkspace,
   isChatMode: boolean,
   now: Date,
   memory: TaskMemoryContext,
@@ -2131,7 +2188,7 @@ async function runHeadlessAgent(
   parentMessageId: string,
   providerId: string,
   modelId: string,
-  ws: ReturnType<typeof useWorkspaceStore.getState>,
+  ws: TaskWorkspace,
   signal: AbortSignal,
 ): Promise<string> {
   const scope = `sub:${run.id}`;
@@ -2185,7 +2242,7 @@ async function investigateSubAgent(
   task: string,
   providerId: string,
   modelId: string,
-  ws: ReturnType<typeof useWorkspaceStore.getState>,
+  ws: TaskWorkspace,
   signal: AbortSignal,
   scope: string,
   append: (messages: SubAgentRun['messages']) => Promise<void>,
@@ -2435,7 +2492,13 @@ async function autoCompactIfNeeded(convId: string, providerId: string, modelId: 
  * stop the loop and wait for the user; their outcome is later fed back via
  * feedToolResults.
  */
-async function runAgentLoop(convId: string, providerId: string, modelId: string, options: SendMessageOptions = {}) {
+async function runAgentLoop(
+  convId: string,
+  providerId: string,
+  modelId: string,
+  options: SendMessageOptions = {},
+  capturedWorkspace?: TaskWorkspace,
+) {
   const set = useChatStore.setState;
   const get = useChatStore.getState;
 
@@ -2453,11 +2516,6 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
   const turnStartTime = Date.now();
   const convRecord = get().conversations.find((c) => c.id === convId);
   const previousSession = options.rsiResume ? resumableRsiSession(convId) : undefined;
-  // An approval can resume in the background after the user opens another
-  // project. Preserve the workspace that owns the frozen goal and its checks.
-  const workspaceAtStart = previousSession && get().activeConversationId !== convId
-    && convRecord?.rootPath === previousSession.workspace.rootPath
-    ? previousSession.workspace : useWorkspaceStore.getState();
   const viewMode = useUIStore.getState().viewMode;
   // A conversation that EXISTS decides its own mode. The flag was introduced
   // with Chat Mode, so every conversation saved before it — and any background
@@ -2470,21 +2528,13 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
   const isChatMode = convRecord
     ? (convRecord.isChatMode ?? false)
     : (viewMode === 'chat');
-  const workspaceRoots = isChatMode ? [] : workspaceAtStart.allRoots();
-  const taskWorkspace = isChatMode
-    ? {
-        ...workspaceAtStart,
-        rootPath: null,
-        files: [],
-        extraRoots: [],
-        selectedFile: null,
-        fileContent: null,
-        agentsMd: null,
-        agentsMdPath: null,
-        memoryFiles: [],
-        allRoots: () => [] as string[],
-      }
-    : { ...workspaceAtStart, allRoots: () => workspaceRoots };
+  // Capture the turn's workspace independently of whichever conversation is visible.
+  // A resumed RSI check can still use the workspace frozen with its earlier evidence.
+  const frozenWorkspace = previousSession && get().activeConversationId !== convId
+    && convRecord?.rootPath === previousSession.workspace.rootPath ? previousSession.workspace : undefined;
+  const taskWorkspace = isChatMode ? emptyTaskWorkspace
+    : frozenWorkspace ?? capturedWorkspace ?? await resolveTaskWorkspace(convId, convRecord);
+  if (!ownsRun() || abortController.signal.aborted) return;
   // Recall belongs to the initiating request, not to whatever conversation
   // updates the global memory panel while this agent is running.
   const memory = useMemoryV2Store.getState();
@@ -3394,7 +3444,8 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
             result = ok ? `File created: ${action.path}` : `Error: Could not create file ${action.path}`;
             // If the agent just wrote project memory or a custom command (e.g.
             // via /init), reload it so it takes effect on the next turn.
-            if (ok && /(?:AGENTS\.md|CLAUDE\.md|\.conecode\/)/.test(action.path!)) {
+            if (ok && get().activeConversationId === convId && useWorkspaceStore.getState().rootPath === ws.rootPath
+              && /(?:AGENTS\.md|CLAUDE\.md|\.conecode\/)/.test(action.path!)) {
               useWorkspaceStore.getState().reloadProjectConfig();
             }
             break;
@@ -3434,7 +3485,7 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
               break;
             }
             const title = task.replace(/\s+/g, ' ').slice(0, 50);
-            const childId = await startDetachedRun(task, providerId, modelId, isChatMode);
+            const childId = await startDetachedRun(task, providerId, modelId, isChatMode, ws);
             if (!childId) {
               result = 'Error: the background run could not start (an install may be holding the model).';
               shouldContinue = true;
@@ -3506,7 +3557,13 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
             break;
           }
           case 'mcp_call': {
-            result = await window.electronAPI.mcp.call(action.server!, action.tool!, action.args ?? {});
+            const visibleWorkspace = useWorkspaceStore.getState();
+            const available = visibleWorkspace.rootPath === ws.rootPath && visibleWorkspace.mcpTools.some(
+              (tool) => tool.server === action.server && tool.name === action.tool,
+            );
+            result = available
+              ? await window.electronAPI.mcp.call(action.server!, action.tool!, action.args ?? {})
+              : 'Error: This MCP tool is unavailable in the conversation’s workspace.';
             break;
           }
           case 'use_skill': {
@@ -3533,6 +3590,8 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
           case 'github_push': {
             result = await runGithubPushText(
               typeof action.message === 'string' && action.message.trim() ? action.message.trim() : undefined,
+              ws.rootPath,
+              { repo: action.repo, sourceBranch: action.sourceBranch, targetBranch: action.targetBranch, createTarget: action.createTarget },
             );
             break;
           }
@@ -3546,7 +3605,7 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
               files: Array.isArray(action.files) ? action.files : undefined,
               draft: action.draft === true,
               prerelease: action.prerelease === true,
-            });
+            }, ws.rootPath);
             break;
           }
           case 'generate_image': {
@@ -3703,13 +3762,19 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
             break;
           }
           case 'exec': {
+            const cwd = action.cwd || ws.rootPath;
+            if (!cwd) {
+              result = 'Error: No project folder is open. Pass an absolute working directory or open a folder before running commands.';
+              shouldContinue = true;
+              break;
+            }
             result = await propose({
               kind: 'exec',
               filePath: '[Command]',
               originalCode: '',
               newCode: action.command!,
               description: `AI wants to execute: ${action.command}${action.cwd ? ` in ${action.cwd}` : ''}`,
-              cwd: action.cwd || ws.rootPath || undefined,
+              cwd,
               allowDiskImages: action.allowDiskImages === true,
             }, `Command execution proposed — awaiting your approval.`);
             break;
@@ -4160,16 +4225,6 @@ async function runAgentLoop(convId: string, providerId: string, modelId: string,
   }
 }
 
-interface WorkspaceSnapshot {
-  rootPath: string | null;
-  files: any[];
-  extraRoots?: { path: string; files: any[] }[];
-  selectedFile: string | null;
-  openTabs?: string[];
-  fileContent: string | null;
-  contextFiles: { path: string; content: string; isImage?: boolean; dataUrl?: string }[];
-}
-
 interface ChatStore {
   conversations: Conversation[];
   activeConversationId: string | null;
@@ -4292,6 +4347,40 @@ interface ChatStore {
   truncateFrom: (messageId: string, transcript?: Message[]) => Promise<void>;
 }
 
+function snapshotLeavingConversation(state: ChatStore) {
+  if (!state.activeConversationId) return state.workspaceSnapshots;
+  return new Map(state.workspaceSnapshots).set(state.activeConversationId, useWorkspaceStore.getState().saveSnapshot());
+}
+
+async function createWorkspaceConversation(
+  data: Pick<Conversation, 'providerId' | 'modelId' | 'rootPath' | 'isChatMode' | 'agentMode' | 'rsi'>,
+  request: number,
+): Promise<string> {
+  const ws = useWorkspaceStore.getState();
+  const snapshot = data.rootPath ? await ws.loadSnapshot(data.rootPath) : null;
+  const conversation = await window.electronAPI.conversation.create(data);
+  const state = useChatStore.getState();
+  const conversations = [conversation, ...state.conversations];
+  if (request !== conversationLoadRequest) {
+    useChatStore.setState({ conversations });
+    return conversation.id;
+  }
+
+  const workspaceSnapshots = snapshotLeavingConversation(state);
+  ws.restoreSnapshot(snapshot);
+  useTodosStore.getState().clearTodos();
+  useChatStore.setState({
+    conversations,
+    workspaceSnapshots,
+    activeConversationId: conversation.id,
+    messages: [],
+    continuableConvId: null,
+    agentMode: data.agentMode ?? state.agentMode,
+  });
+  useUIStore.getState().setViewMode(data.isChatMode ? 'chat' : 'work');
+  return conversation.id;
+}
+
 export const useChatStore = create<ChatStore>((set, get) => ({
   conversations: [],
   activeConversationId: null,
@@ -4327,6 +4416,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     if (mode === 'rsi' && !isRsiConversation(conv ?? {})) {
       if (rsiAutoCreateInFlight) return;
       rsiAutoCreateInFlight = true;
+      const request = conversationLoadRequest;
       void (async () => {
         // The user may have switched away while this hand-off was pending.
         if (get().agentMode !== 'rsi') return;
@@ -4342,7 +4432,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           return;
         }
         const { useModelStore } = await import('./model.store');
-        if (get().agentMode !== 'rsi') return;
+        if (request !== conversationLoadRequest || get().agentMode !== 'rsi') return;
         const sel = useModelStore.getState().getSelectedModel();
         await get().newRsiConversation(sel?.providerId || '', sel?.id || '');
       })().finally(() => { rsiAutoCreateInFlight = false; });
@@ -4360,8 +4450,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       if (targetConv) {
         void get().setActiveConversation(targetConv.id);
       } else {
+        const request = conversationLoadRequest;
         void (async () => {
           const { useModelStore } = await import('./model.store');
+          if (request !== conversationLoadRequest || get().agentMode !== mode) return;
           const sel = useModelStore.getState().getSelectedModel();
           const ws = useWorkspaceStore.getState();
           await get().newConversation(
@@ -4393,42 +4485,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   createConversation: async (providerId, modelId, folderPath) => {
-    const state = get();
-    conversationLoadRequest++;
-    const ws = useWorkspaceStore.getState();
-    const viewMode = useUIStore.getState().viewMode;
-
-    // One folder supports many conversations: a new chat inherits whatever
-    // folder is currently open instead of starting from "Open Folder". The
-    // previous chat's workspace snapshot is still saved, so switching back
-    // restores its editor state — but the folder itself is shared, not wiped.
-    if (state.activeConversationId) {
-      const snapshot = ws.saveSnapshot();
-      const newSnapshots = new Map(state.workspaceSnapshots);
-      newSnapshots.set(state.activeConversationId!, snapshot);
-      set({ workspaceSnapshots: newSnapshots });
-    }
-
-    // A folder-bound conversation is Work mode even when the folder was opened
-    // from the Chat view; only an explicitly folder-less chat stays Chat.
-    const isChat = viewMode === 'chat' && (folderPath === undefined || folderPath === null);
+    const isChat = useUIStore.getState().viewMode === 'chat' && folderPath == null;
     const rootPath = folderPath !== undefined
       ? folderPath
-      : (isChat ? null : ws.rootPath);
-
-    const conv = await window.electronAPI.conversation.create({
-      providerId,
-      modelId,
-      rootPath,
-      // Persist the mode with the conversation: without this it silently
-      // reverts to whatever the renderer guesses after a restart (the storage
-      // layer only keeps what it is told about).
-      isChatMode: isChat,
-    });
-    useTodosStore.getState().clearTodos();
-    useUIStore.getState().setViewMode(isChat ? 'chat' : 'work');
-    set((s) => ({ conversations: [conv, ...s.conversations], activeConversationId: conv.id, messages: [] }));
-    return conv.id;
+      : (isChat ? null : useWorkspaceStore.getState().rootPath);
+    return createWorkspaceConversation({ providerId, modelId, rootPath, isChatMode: isChat }, ++conversationLoadRequest);
   },
 
   newConversation: async (providerId, modelId, folderPath) => {
@@ -4440,6 +4501,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     const key = `${isChat ? 'chat' : 'work'}:${rootPath ?? ''}`;
 
     return coalesceNewConversation(key, async () => {
+      const request = ++conversationLoadRequest;
       // Re-read after the IPC round-trip: another action may have opened or
       // created a conversation while the message counts were loading.
       const counts = await readMessageCounts();
@@ -4452,7 +4514,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         current.messages.length,
         counts,
       );
-      if (!reusable) return get().createConversation(providerId, modelId, folderPath);
+      if (!reusable) return createWorkspaceConversation({ providerId, modelId, rootPath, isChatMode: isChat }, request);
+      if (request !== conversationLoadRequest) return reusable.id;
 
       // A blank row is a real conversation record, so keep its identity and
       // folder binding; only refresh the model/mode the next turn will use.
@@ -4467,6 +4530,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           conversations: s.conversations.map((c) => c.id === reusable.id ? { ...c, ...patch } : c),
         }));
       }
+      if (request !== conversationLoadRequest) return reusable.id;
       if (get().activeConversationId !== reusable.id) {
         await get().setActiveConversation(reusable.id);
       } else {
@@ -4478,6 +4542,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
   newRsiConversation: async (providerId, modelId, rootPath = useWorkspaceStore.getState().rootPath) => {
     return coalesceNewConversation(`rsi:${rootPath ?? ''}`, async () => {
+      const request = ++conversationLoadRequest;
       const counts = await readMessageCounts();
       const current = get();
       const reusable = pickReusableConversation(
@@ -4488,7 +4553,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         current.messages.length,
         counts,
       );
-      if (!reusable) return get().createRsiConversation(providerId, modelId, rootPath);
+      if (!reusable) return createWorkspaceConversation({
+        providerId, modelId, rootPath, isChatMode: false, agentMode: 'rsi', rsi: defaultRsiState(),
+      }, request);
+      if (request !== conversationLoadRequest) return reusable.id;
 
       const patch: Partial<Conversation> = {};
       if (providerId && reusable.providerId !== providerId) patch.providerId = providerId;
@@ -4499,6 +4567,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           conversations: s.conversations.map((c) => c.id === reusable.id ? { ...c, ...patch } : c),
         }));
       }
+      if (request !== conversationLoadRequest) return reusable.id;
       if (get().activeConversationId !== reusable.id) {
         await get().setActiveConversation(reusable.id);
       } else {
@@ -4511,92 +4580,52 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
   setActiveConversation: async (id) => {
     const state = get();
-    if (id === state.activeConversationId) return;
     const opening = state.conversations.find((conversation) => conversation.id === id);
     if (!opening) return;
+    const request = ++conversationLoadRequest;
+    if (id === state.activeConversationId) return;
+    const ws = useWorkspaceStore.getState();
+    const root = isChatConversation(opening) ? null : opening.rootPath;
+    const saved = state.workspaceSnapshots.get(id);
+    const [messages, snapshot, { useModelStore }] = await Promise.all([
+      window.electronAPI.message.list(id),
+      root && saved?.rootPath === root ? saved : root ? ws.loadSnapshot(root, opening.extraRoots) : null,
+      import('./model.store'),
+    ]);
+    if (request !== conversationLoadRequest) return;
+    const current = get();
+    const conversation = current.conversations.find((item) => item.id === id);
+    if (!conversation || isUnarchivedConversation(opening) && !isUnarchivedConversation(conversation)) return;
+
     // Session end: give Memory 2.0 one last chance to sediment a decision or
     // lesson before the transcript leaves the active context.
     if (isMemoryV2Active()
-      && state.activeConversationId
-      && !state.streamingRuns[state.activeConversationId]
-      && state.messages.length) {
-      const left = state.messages
+      && current.activeConversationId
+      && !current.streamingRuns[current.activeConversationId]
+      && current.messages.length) {
+      const left = current.messages
         .filter((m) => !m.isLocalNotice && !m.isToolResult && m.role !== 'tool')
         .map((m) => ({ role: m.role, content: m.content }));
-      void useMemoryV2Store.getState().endSession(state.activeConversationId, left);
-    }
-    const request = ++conversationLoadRequest;
-    const ws = useWorkspaceStore.getState();
-
-    if (state.activeConversationId) {
-      const snapshot = ws.saveSnapshot();
-      const newSnapshots = new Map(state.workspaceSnapshots);
-      newSnapshots.set(state.activeConversationId, snapshot);
-      set({ workspaceSnapshots: newSnapshots });
+      void useMemoryV2Store.getState().endSession(current.activeConversationId, left);
     }
 
-    const messages = await window.electronAPI.message.list(id);
-    if (request !== conversationLoadRequest) return;
-    const conversation = get().conversations.find((item) => item.id === id);
-    if (!conversation || isUnarchivedConversation(opening) && !isUnarchivedConversation(conversation)) return;
+    // Publish the prepared workspace and transcript without an asynchronous gap.
+    const workspaceSnapshots = snapshotLeavingConversation(current);
+    ws.restoreSnapshot(snapshot);
     useTodosStore.getState().clearTodos();
-    set({ activeConversationId: id, messages });
-    // Continuity survives restarts: a tail that ends in an interrupted partial
-    // re-arms the one-click continue (the flag is persisted on the message).
-    // Cleared otherwise so a stale pointer never follows the user around.
     set({
-      continuableConvId: conversationContinuable(messages) && !get().streamingRuns[id] ? id : null,
+      workspaceSnapshots,
+      activeConversationId: id,
+      messages,
+      agentMode: conversation.agentMode ?? 'standard',
+      continuableConvId: conversationContinuable(messages) && !current.streamingRuns[id] ? id : null,
     });
-
-    // A conversation remembers the provider/model it last used. Restore it
-    // without adding a synthetic "recent" entry just because the chat opened.
-    // The execution protocol belongs to the conversation: a dedicated RSI
-    // session reopens in the RSI view with its own direction state, and
-    // switching to any other conversation cannot inherit it.
-    const restoredAgentMode = conversation?.agentMode ?? 'standard';
-    set({ agentMode: restoredAgentMode });
     useUIStore.getState().setViewMode(isChatConversation(conversation) ? 'chat' : 'work');
-    if (conversation?.providerId && conversation.modelId) {
-      const { useModelStore } = await import('./model.store');
-      if (request !== conversationLoadRequest || get().activeConversationId !== id) return;
+    if (conversation.providerId && conversation.modelId) {
       const available = useModelStore.getState().models
         .get(conversation.providerId)
         ?.some((model) => model.id === conversation.modelId);
       if (available) useModelStore.getState().selectModel(conversation.modelId, conversation.providerId, false);
-    }
-
-    const snapshot = state.workspaceSnapshots.get(id);
-    if (snapshot) {
-      // Same folder as the one already open → keep the live tree (it may have
-      // new files since the snapshot) and only restore editor-side state.
-      // Different folder → restore the whole snapshot.
-      if (snapshot.rootPath === ws.rootPath) {
-        ws.restoreSnapshot({ ...snapshot, files: ws.files, extraRoots: ws.extraRoots });
-      } else {
-        ws.restoreSnapshot(snapshot);
-      }
-    } else {
-      // No in-memory snapshot (e.g. after an app restart) — fall back to the
-      // folder persisted on the conversation record, if it still exists.
-      const conv = get().conversations.find((c) => c.id === id);
-      if (conv?.rootPath) {
-        if (conv.rootPath !== ws.rootPath) {
-          if (await ws.openFolderPath(conv.rootPath)) {
-            // Re-open the extra folders too. Any that have since been deleted or
-            // moved are skipped rather than failing the whole restore.
-            for (const extra of conv.extraRoots || []) await ws.addRoot(extra);
-          } else {
-            // Persisted folder is gone → fall back to the blank default rather
-            // than showing a folder this conversation doesn't belong to.
-            ws.resetWorkspace();
-          }
-        }
-      } else {
-        // No folder bound to this conversation → blank project (the default).
-        // A new chat adopts the open folder at creation, so null here means
-        // the user closed it or never opened one.
-        ws.resetWorkspace();
-      }
     }
   },
 
@@ -4611,11 +4640,12 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     const extraRoots = useWorkspaceStore.getState().extraRoots.map((r) => r.path);
     // A conversation that opens a folder is a Work-mode conversation from here
     // on — persist that too, or the flag would revert after a restart.
-    await window.electronAPI.conversation.update(convId, { rootPath, extraRoots, isChatMode: false });
+    const binding = { rootPath, extraRoots, isChatMode: false };
     set((s) => ({
-      conversations: s.conversations.map((c) => c.id === convId ? { ...c, rootPath, isChatMode: false } : c),
+      conversations: s.conversations.map((c) => c.id === convId ? { ...c, ...binding } : c),
     }));
-    if (get().activeConversationId === convId) useUIStore.getState().setViewMode('work');
+    useUIStore.getState().setViewMode('work');
+    await window.electronAPI.conversation.update(convId, binding);
   },
 
   ensureWorkFolder: async () => {
@@ -4630,16 +4660,22 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     // A mode switch is not permission to create files or directories. Unlike
     // openFolder(), this binds the selected folder to the current conversation
     // instead of discarding its transcript in a newly-created conversation.
+    const request = conversationLoadRequest;
+    const activeId = get().activeConversationId;
     const dir = await window.electronAPI.dialog.openFolder();
-    if (!dir) return null;
-    if (!await ws.openFolderPath(dir)) return null;
+    if (!dir || request !== conversationLoadRequest || get().activeConversationId !== activeId) return null;
 
-    if (get().activeConversationId) {
+    if (activeId) {
+      const snapshot = await ws.loadSnapshot(dir);
+      if (!snapshot || request !== conversationLoadRequest || get().activeConversationId !== activeId) return null;
+      ws.restoreSnapshot(snapshot);
       await get().setConversationFolder(dir);
     } else {
       const { useModelStore } = await import('./model.store');
+      if (request !== conversationLoadRequest || get().activeConversationId !== activeId) return null;
       const sel = useModelStore.getState().getSelectedModel();
-      await get().newConversation(sel?.providerId || '', sel?.id || '', dir);
+      const id = await get().newConversation(sel?.providerId || '', sel?.id || '', dir);
+      if (get().activeConversationId !== id || useWorkspaceStore.getState().rootPath !== dir) return null;
     }
     return dir;
   },
@@ -4651,11 +4687,12 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     // Detach the folder from the workspace (blank project if it was the last
     // one). Memory-only: files on disk and conversation bindings are untouched,
     // so reopening any of this folder's chats brings it straight back.
-    useWorkspaceStore.getState().closeRoot(folderKey);
+    const workspaceSnapshots = snapshotLeavingConversation(get());
+    useWorkspaceStore.getState().closeRoot(folderKey, false);
     // Back to the home default: no active chat, empty transcript. The next
     // chat inherits the (now blank) workspace, so it starts folder-less too.
     useTodosStore.getState().clearTodos();
-    set({ activeConversationId: null, messages: [] });
+    set({ activeConversationId: null, messages: [], workspaceSnapshots });
   },
 
   setConversationArchived: async (id, archived) => {
@@ -4721,41 +4758,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }));
   },
 
-  createRsiConversation: async (providerId, modelId, rootPath = useWorkspaceStore.getState().rootPath) => {
-    const state = get();
-    conversationLoadRequest++;
-    const ws = useWorkspaceStore.getState();
-
-    // Same snapshot discipline as createConversation: the previous chat keeps
-    // its workspace state for when the user switches back.
-    if (state.activeConversationId) {
-      const snapshot = ws.saveSnapshot();
-      const newSnapshots = new Map(state.workspaceSnapshots);
-      newSnapshots.set(state.activeConversationId, snapshot);
-      set({ workspaceSnapshots: newSnapshots });
-    }
-
-    // RSI executes against the open workspace — reuse it, never create a
-    // folder on the user's behalf. A fresh conversation starts fully
-    // independent: no transcript, no inherited direction, its own run history.
-    const conv = await window.electronAPI.conversation.create({
-      providerId,
-      modelId,
-      rootPath,
-      isChatMode: false,
-      agentMode: 'rsi',
-      rsi: defaultRsiState(),
-    });
-    useTodosStore.getState().clearTodos();
-    useUIStore.getState().setViewMode('work');
-    set((s) => ({
-      conversations: [conv, ...s.conversations],
-      activeConversationId: conv.id,
-      messages: [],
-      agentMode: 'rsi',
-    }));
-    return conv.id;
-  },
+  createRsiConversation: (providerId, modelId, rootPath = useWorkspaceStore.getState().rootPath) =>
+    createWorkspaceConversation({
+      providerId, modelId, rootPath, isChatMode: false, agentMode: 'rsi', rsi: defaultRsiState(),
+    }, ++conversationLoadRequest),
 
   updateRsiDirection: async (convId, patch) => {
     // Scoped to the given conversation: another session's direction config is

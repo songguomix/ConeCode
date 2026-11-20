@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { loadGithubToken, useMarketStore } from './market.store';
+import { hasGithubCredentials, loadGithubToken, useMarketStore } from './market.store';
 import { useLanguageStore } from './language.store';
 
 export interface GithubReleaseRequest {
@@ -53,7 +53,7 @@ export const useGithubReleaseStore = create<ReleaseState>((set, get) => ({
   pending: null,
   busy: false,
   request: async (partial) => {
-    if (get().pending || settle) {
+    if (get().pending || get().busy || settle) {
       return { ok: false, message: 'Error: another GitHub release is awaiting confirmation. Finish or cancel it first.' };
     }
     return new Promise((resolve) => {
@@ -79,14 +79,14 @@ export const useGithubReleaseStore = create<ReleaseState>((set, get) => ({
     settle = null;
     set({ pending: null, busy: true });
     const token = loadGithubToken();
-    if (!token) {
-      set({ busy: false });
-      resolve({ ok: false, message: useLanguageStore.getState().t('releaseTokenRequired') });
-      return;
-    }
-    const configuredRepo = useMarketStore.getState().repo;
-    void window.electronAPI.git
-      .publishRelease({ ...request, token, repo: request.repo || configuredRepo })
+    const repo = request.repo || useMarketStore.getState().repo;
+    const publish = async (): Promise<ReleaseOutcome> => {
+      if (!token && !await hasGithubCredentials()) {
+        return { ok: false, message: useLanguageStore.getState().t('releaseTokenRequired') };
+      }
+      return window.electronAPI.git.publishRelease({ ...request, token: token || undefined, repo });
+    };
+    void publish()
       .then((result) => {
         set({ busy: false });
         resolve(result);

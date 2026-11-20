@@ -10,7 +10,7 @@ const TOKEN_KEY = 'conecode.pluginToken';
 beforeEach(() => {
   vi.restoreAllMocks();
   useGithubReleaseStore.getState().cancel();
-  useMarketStore.setState({ repo: 'owner/repo' });
+  useMarketStore.setState({ repo: 'owner/repo', account: null });
   usePluginStore.setState({ disabled: [] });
   useWorkspaceStore.setState({ rootPath: '/proj' });
   localStorage.setItem(TOKEN_KEY, 'tok-123');
@@ -131,6 +131,19 @@ describe('useGithubReleaseStore confirmation', () => {
     const outcome = await done;
     expect(outcome.ok).toBe(false);
     expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('publishes through the connected account without a renderer token', async () => {
+    const publish = vi.fn().mockResolvedValue({ ok: true, message: 'Published' });
+    (globalThis as any).window = { electronAPI: {
+      githubAccount: { status: async () => ({ state: 'signed-in', login: 'octocat' }) },
+      git: { publishRelease: publish },
+    } };
+    localStorage.removeItem(TOKEN_KEY);
+    const done = useGithubReleaseStore.getState().request({ repo: 'owner/repo', tag: 'v1', files: ['/p/app.dmg'] });
+    useGithubReleaseStore.getState().confirm();
+    expect((await done).ok).toBe(true);
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ repo: 'owner/repo', token: undefined }));
   });
 
   it('does not publish on cancellation', async () => {

@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { buildReplyDraft } from '../core/githubReply/replyText';
+import { hasGithubCredentials } from './market.store';
 import type {
   ReplyContextResult,
   ReplyLanguage,
@@ -73,6 +74,10 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+let listRequest = 0;
+let threadRequest = 0;
+let postRequest = 0;
+
 export const useGithubReplyStore = create<GithubReplyState>((set, get) => ({
   language: loadReplyLanguage(),
   threads: [],
@@ -98,6 +103,7 @@ export const useGithubReplyStore = create<GithubReplyState>((set, get) => ({
   },
 
   loadThreads: async (repo, token) => {
+    const request = ++listRequest;
     const trimmed = repo.trim();
     if (!trimmed) {
       set({
@@ -110,17 +116,19 @@ export const useGithubReplyStore = create<GithubReplyState>((set, get) => ({
     set({ loadingList: true, listError: null });
     try {
       const result = await bridge().list({ repo: trimmed, token });
+      if (request !== listRequest) return;
       if (!result.ok) {
         set({ loadingList: false, threads: [], listError: result.message ?? 'Could not load issues and pull requests.' });
         return;
       }
       set({ loadingList: false, threads: result.items, listError: null });
     } catch (error) {
-      set({ loadingList: false, threads: [], listError: errorMessage(error) });
+      if (request === listRequest) set({ loadingList: false, threads: [], listError: errorMessage(error) });
     }
   },
 
   selectThread: async (number, repo, token) => {
+    const request = ++threadRequest;
     set({
       selectedNumber: number,
       loadingContext: true,
@@ -131,6 +139,7 @@ export const useGithubReplyStore = create<GithubReplyState>((set, get) => ({
     });
     try {
       const result = await bridge().context({ repo: repo.trim(), token, number });
+      if (request !== threadRequest) return;
       if (!result.ok || !result.context) {
         set({
           loadingContext: false,
@@ -144,7 +153,7 @@ export const useGithubReplyStore = create<GithubReplyState>((set, get) => ({
         draft: buildReplyDraft(result.context, { language: get().language }),
       });
     } catch (error) {
-      set({ loadingContext: false, contextError: errorMessage(error) });
+      if (request === threadRequest) set({ loadingContext: false, contextError: errorMessage(error) });
     }
   },
 
@@ -156,19 +165,25 @@ export const useGithubReplyStore = create<GithubReplyState>((set, get) => ({
   },
 
   post: async (repo, token) => {
-    const { selectedNumber, draft, posting } = get();
+    const { selectedNumber, draft, posting, context } = get();
     if (posting || selectedNumber === null) return false;
+    const target = repo.trim();
+    if (context && context.repo.toLowerCase() !== target.toLowerCase()) return false;
     if (!draft.trim()) {
       set({ postResult: { ok: false, message: 'Write a reply before posting.' } });
       return false;
     }
-    if (!token) {
-      set({ postResult: { ok: false, message: 'Save a GitHub token (with Issues write access) before posting a reply.' } });
-      return false;
-    }
+    const request = ++postRequest;
     set({ posting: true, postResult: null });
     try {
-      const result = await bridge().post({ repo: repo.trim(), token, number: selectedNumber, body: draft });
+      const authenticated = token || await hasGithubCredentials();
+      if (request !== postRequest) return false;
+      if (!authenticated) {
+        set({ posting: false, postResult: { ok: false, message: 'Sign in to GitHub or save a GitHub token with Issues write access.' } });
+        return false;
+      }
+      const result = await bridge().post({ repo: target, token, number: selectedNumber, body: draft });
+      if (request !== postRequest) return false;
       set({
         posting: false,
         postResult: { ok: result.ok, message: result.message, url: result.url },
@@ -179,17 +194,20 @@ export const useGithubReplyStore = create<GithubReplyState>((set, get) => ({
           threads: threads.map((thread) =>
             thread.number === selectedNumber ? { ...thread, comments: thread.comments + 1 } : thread
           ),
-          context: context ? { ...context, comments: context.comments + 1 } : null,
+          context: context?.number === selectedNumber ? { ...context, comments: context.comments + 1 } : context,
         });
       }
       return result.ok;
     } catch (error) {
-      set({ posting: false, postResult: { ok: false, message: errorMessage(error) } });
+      if (request === postRequest) set({ posting: false, postResult: { ok: false, message: errorMessage(error) } });
       return false;
     }
   },
 
-  reset: () =>
+  reset: () => {
+    listRequest++;
+    threadRequest++;
+    postRequest++;
     set({
       threads: [],
       loadingList: false,
@@ -201,5 +219,6 @@ export const useGithubReplyStore = create<GithubReplyState>((set, get) => ({
       draft: '',
       posting: false,
       postResult: null,
-    }),
+    });
+  },
 }));

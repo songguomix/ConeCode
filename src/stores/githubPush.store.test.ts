@@ -32,4 +32,19 @@ describe('AI GitHub push confirmation', () => {
     expect((await result).ok).toBe(false);
     expect(push).not.toHaveBeenCalled();
   });
+
+  it('uses the branch pair and create-only choice approved for the captured workspace', async () => {
+    const push = vi.spyOn(useMarketStore.getState(), 'pushRepo').mockResolvedValue({ ok: true, message: 'pushed' });
+    const result = useGithubPushStore.getState().request('fix', { root: '/selected', repo: 'org/repo' });
+    useWorkspaceStore.setState({ rootPath: '/other' });
+    useMarketStore.setState({ repo: 'other/repo' });
+    useGithubPushStore.getState().confirm('org/repo', {
+      sourceBranch: 'stable', targetBranch: 'preview/v2', createTarget: true, commitChanges: false,
+    });
+    expect((await result).ok).toBe(true);
+    expect(push).toHaveBeenCalledWith('fix', {
+      root: '/selected', repo: 'org/repo', sourceBranch: 'stable', targetBranch: 'preview/v2',
+      createTarget: true, commitChanges: false,
+    });
+  });
 });

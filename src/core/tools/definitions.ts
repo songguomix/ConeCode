@@ -529,11 +529,15 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
   {
     name: 'github_push',
     description:
-      'Commit the open project and push it to GitHub through the GitHub plugin — this is the ONLY way the repository gets pushed. The plugin uses the repo and token configured in Settings → Plugins (GitHub sync). Never run git commands or call the GitHub API yourself; the plugin owns the push and reports the outcome.',
+      'Open the GitHub plugin’s push review for this conversation’s project. The user confirms the repository, local branch, and remote branch before any push. The plugin uses the connected GitHub account or saved credentials and handles committing and pushing. Let the plugin run the operation and report its outcome.',
     parameters: {
       type: 'object',
       properties: {
         message: str('Optional commit message; a short default is used when omitted'),
+        repo: str('Optional destination as owner/repo; defaults to the selected preset or origin'),
+        sourceBranch: str('Optional local branch; defaults to the current branch'),
+        targetBranch: str('Optional remote branch name; defaults to the source branch'),
+        createTarget: { type: 'boolean', description: 'Require a new remote branch; reject an existing branch' },
       },
     },
     mutating: true,

@@ -12,6 +12,8 @@ beforeEach(() => {
   gitInfo.mockResolvedValue({ isRepo: true, branch: 'main', dirty: 2 });
   useMarketStore.setState({
     repo: '',
+    repos: [],
+    account: null,
     tokenSet: false,
     status: null,
     refreshing: false,
@@ -49,6 +51,23 @@ describe('repo status', () => {
     await useMarketStore.getState().refresh();
     expect(gitInfo).toHaveBeenCalledWith('/proj');
     expect(useMarketStore.getState().status).toEqual({ isRepo: true, branch: 'main', dirty: 2 });
+  });
+});
+
+describe('repository presets', () => {
+  it('persists multiple presets, deduplicates GitHub URLs and selects them by name', () => {
+    const store = useMarketStore.getState();
+    expect(store.addRepo('https://github.com/team/desktop.git')).toBe(true);
+    expect(store.addRepo('team/server')).toBe(true);
+    expect(store.addRepo('TEAM/desktop')).toBe(true);
+    expect(store.addRepo('team/')).toBe(false);
+    expect(useMarketStore.getState()).toMatchObject({ repo: 'team/desktop', repos: ['team/desktop', 'team/server'] });
+    expect(JSON.parse(localStorage.getItem('conecode.pluginRepos')!)).toEqual(['team/desktop', 'team/server']);
+
+    store.removeRepo('team/desktop');
+    expect(useMarketStore.getState()).toMatchObject({ repo: '', repos: ['team/server'] });
+    store.setRepo('team/server');
+    expect(localStorage.getItem('conecode.pluginRepo')).toBe('team/server');
   });
 });
 

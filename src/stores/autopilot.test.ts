@@ -46,6 +46,7 @@ beforeEach(() => {
       app: { getSystemInfo: async () => ({ homedir: '/home/me' }) },
       fs: {
         createDir: async (p: string) => { createdDirs.push(p); return true; },
+        stat: async (path: string) => ({ isDirectory: createdDirs.includes(path) }),
         writeFile: async (path: string, content: string) => { writtenFiles.push({ path, content }); return true; },
         readDir: async () => existingProjects.map((name) => ({ name, path: `/x/${name}`, isDirectory: true })),
         glob: async () => ({ files: ['/proj/package.json'], capped: false }),
@@ -68,7 +69,7 @@ beforeEach(() => {
   useSettingsStore.setState({ approvalMode: 'suggest', sandboxMode: 'workspaceWrite', sandboxAllowNetwork: true });
   useWorkspaceStore.setState({ rootPath: null });
   useMemoryStore.setState({ enabled: false, entries: [], loaded: true, extracting: false, turnsSinceExtraction: 0 });
-  useChatStore.setState({ messages: [], conversations: [], activeConversationId: 'c1', isStreaming: false });
+  useChatStore.setState({ messages: [], conversations: [], activeConversationId: 'previous', isStreaming: false });
   useAutopilotStore.setState({
     phase: 'idle', running: null, projectDir: null, attempt: 0,
     verifyCommand: null, lastOutput: '', error: null, ideas: [], loadingIdeas: false, ideasModelKey: null,
@@ -79,10 +80,6 @@ beforeEach(() => {
     sentPrompts.push(content);
     fakeAgentReply(`Built it.\n\n${VERIFY_MARKER} npm test`);
   });
-  vi.spyOn(useChatStore.getState(), 'createConversation').mockResolvedValue('c1');
-  vi.spyOn(useChatStore.getState(), 'renameConversation').mockResolvedValue(undefined as any);
-  vi.spyOn(useChatStore.getState(), 'setConversationFolder').mockResolvedValue(undefined as any);
-  vi.spyOn(useWorkspaceStore.getState(), 'openFolderPath').mockResolvedValue(true);
 });
 
 describe('autopilot: one click, no further input', () => {
@@ -184,13 +181,25 @@ describe('autopilot: one click, no further input', () => {
   });
 
   it('binds the run to its own conversation and workspace', async () => {
-    const rename = vi.spyOn(useChatStore.getState(), 'renameConversation');
-    const openFolder = vi.spyOn(useWorkspaceStore.getState(), 'openFolderPath');
+    await useAutopilotStore.getState().run(idea, 'p1', 'm1');
+
+    expect(useWorkspaceStore.getState().rootPath).toBe('/home/me/ConeCode Projects/cli-tool');
+    expect(useChatStore.getState().conversations[0]).toMatchObject({
+      id: 'c1', title: 'CLI Tool', rootPath: '/home/me/ConeCode Projects/cli-tool',
+    });
+  });
+
+  it('keeps a verification failure out of a conversation opened during the run', async () => {
+    vi.spyOn(window.electronAPI.exec, 'run').mockImplementationOnce(async () => {
+      useChatStore.setState({ activeConversationId: 'other', messages: [] });
+      return { success: false, stdout: '', stderr: 'verification failed', exitCode: 1 };
+    });
 
     await useAutopilotStore.getState().run(idea, 'p1', 'm1');
 
-    expect(openFolder).toHaveBeenCalledWith('/home/me/ConeCode Projects/cli-tool');
-    expect(rename).toHaveBeenCalledWith('c1', 'CLI Tool');
+    expect(sentPrompts).toHaveLength(1);
+    expect(useChatStore.getState().messages).toEqual([]);
+    expect(useAutopilotStore.getState().phase).toBe('failed');
   });
 });
 

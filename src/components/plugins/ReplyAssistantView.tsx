@@ -16,7 +16,7 @@ import type { ReplyLanguage } from '../../types/githubReply.types';
 /**
  * The GitHub plugin's reply assistant tab.
  *
- * Shares the plugin's owner/repo and token, lists open issues/PRs through the
+ * Shares the plugin's repository and credentials, lists open issues/PRs through the
  * main process, generates an editable local draft, and posts only after an
  * explicit confirmation step. Webhook automation stays in the separate
  * self-hosted service; this tab is the in-app, manual workflow.
@@ -24,6 +24,8 @@ import type { ReplyLanguage } from '../../types/githubReply.types';
 export default function ReplyAssistantView({ onConfigureRepo }: { onConfigureRepo?: () => void }) {
   const repo = useMarketStore((s) => s.repo);
   const tokenSet = useMarketStore((s) => s.tokenSet);
+  const login = useMarketStore((s) => s.account?.state === 'signed-in' ? s.account.login : undefined);
+  const authenticated = !!login || tokenSet;
   const { t } = useLanguageStore();
   const {
     language,
@@ -48,13 +50,10 @@ export default function ReplyAssistantView({ onConfigureRepo }: { onConfigureRep
   const [confirming, setConfirming] = useState(false);
 
   useEffect(() => {
-    if (!repo.trim()) {
-      reset();
-      return;
-    }
-    void loadThreads(repo, loadGithubToken() ?? '');
-    // tokenSet changes when a token is saved in the push tab.
-  }, [repo, tokenSet, loadThreads, reset]);
+    setConfirming(false);
+    reset();
+    if (repo.trim()) void loadThreads(repo, loadGithubToken() ?? '');
+  }, [repo, tokenSet, login, loadThreads, reset]);
 
   if (!repo.trim()) {
     return (
@@ -271,7 +270,7 @@ export default function ReplyAssistantView({ onConfigureRepo }: { onConfigureRep
             {t('replyAssistantDraftHint')}
           </p>
 
-          {!tokenSet && (
+          {!authenticated && (
             <p className="px-2 py-2 mb-2 rounded-xl bg-[var(--bg-2)] border border-[var(--border)] text-[11px] text-[var(--text-muted)]">
               {t('replyAssistantTokenHint')}
             </p>
@@ -283,7 +282,7 @@ export default function ReplyAssistantView({ onConfigureRepo }: { onConfigureRep
               <div className="flex gap-1.5">
                 <button
                   onClick={() => void confirmPost()}
-                  disabled={posting}
+                  disabled={posting || !authenticated}
                   className="flex-1 px-3 py-1.5 rounded-lg bg-[var(--accent)] text-white text-[12px] font-medium hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
                 >
                   {posting ? t('replyAssistantPosting') : t('replyAssistantConfirmPost')}
@@ -300,7 +299,7 @@ export default function ReplyAssistantView({ onConfigureRepo }: { onConfigureRep
           ) : (
             <button
               onClick={() => setConfirming(true)}
-              disabled={!tokenSet || !draft.trim() || posting}
+              disabled={!authenticated || !draft.trim() || posting}
               className="w-full mb-2 px-3 py-2 rounded-xl bg-[var(--accent)] text-white text-[13px] font-medium hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50 flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-not-allowed"
             >
               <FiSend size={13} />

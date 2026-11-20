@@ -1,6 +1,9 @@
 import { createDomainLookup, reviewSearch, testVirusTotalKey } from './aegis';
-import { publishGithubRelease } from './githubRelease';
+import { publishGithubRelease, type ReleaseOptions } from './githubRelease';
 import { getReplyThread, listReplyThreads, postReply } from './githubReply';
+import { createGithubAuth } from './githubAuth';
+import { createGithubBranch, listGithubBranches, listGithubRemoteBranches, pushGithubProject } from './githubProject';
+import type { GithubCreateBranchOptions, GithubPushOptions, GithubRemoteOptions } from '../src/types/github.types';
 import { DshMarketService } from './dsh-market/market-service';
 import { registerDshMarketIpc } from './dsh-market/ipc';
 import { registerUpdateIpc } from './updates/ipc';
@@ -517,12 +520,21 @@ function getShellEnv(): NodeJS.ProcessEnv {
   return cachedShellEnv;
 }
 
-// Run a git subcommand in `cwd` using the user's login-shell PATH (so a
-// Finder-launched app still finds git). Read-only by callers; never throws.
-function runGit(args: string[], cwd: string): Promise<{ code: number; stdout: string; stderr: string }> {
+const githubAuth = createGithubAuth({
+  env: getShellEnv,
+  configDir: () => path.join(app.getPath('userData'), 'github-account'),
+  openExternal: (url) => shell.openExternal(url),
+});
+
+async function githubToken(fallback?: string): Promise<string> {
+  return await githubAuth.token() || (typeof fallback === 'string' ? fallback : '');
+}
+
+// Use the user's login-shell PATH so Finder-launched builds find Git.
+function runGit(args: string[], cwd: string, env?: NodeJS.ProcessEnv): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     try {
-      const proc = spawn('git', args, { cwd, env: getShellEnv() });
+      const proc = spawn('git', args, { cwd, env: { ...getShellEnv(), ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
       let stdout = '';
       let stderr = '';
       proc.stdout.on('data', (d) => { stdout += d.toString(); });
@@ -936,6 +948,7 @@ app.whenReady().then(() => {
 });
 
 app.on('before-quit', () => {
+  githubAuth.dispose();
   computerPreview.destroy();
   stopTunnel();
   remoteServer.stop();
@@ -1646,13 +1659,19 @@ function registerIPC() {
     return r.code === 0 ? r.stdout : (r.stderr || `git diff failed (exit ${r.code})`);
   });
 
-  ipcMain.handle('git:publishRelease', (_, options) => publishGithubRelease(options));
+  ipcMain.handle('github-account:status', () => githubAuth.status());
+  ipcMain.handle('github-account:begin', () => githubAuth.login());
+  ipcMain.handle('github-account:cancel', () => githubAuth.cancel());
+  ipcMain.handle('github-account:logout', () => githubAuth.logout());
+
+  ipcMain.handle('git:publishRelease', async (_, options: Omit<ReleaseOptions, 'token'> & { token?: string }) =>
+    publishGithubRelease({ ...options, token: await githubToken(options?.token) }));
 
   // GitHub plugin reply assistant: main-process requests avoid renderer CORS and
   // keep the token out of any browser-level network layer.
-  ipcMain.handle('github-reply:list', (_, options) => listReplyThreads(options));
-  ipcMain.handle('github-reply:context', (_, options) => getReplyThread(options));
-  ipcMain.handle('github-reply:post', (_, options) => postReply(options));
+  ipcMain.handle('github-reply:list', async (_, options) => listReplyThreads({ ...options, token: await githubToken(options?.token) }));
+  ipcMain.handle('github-reply:context', async (_, options) => getReplyThread({ ...options, token: await githubToken(options?.token) }));
+  ipcMain.handle('github-reply:post', async (_, options) => postReply({ ...options, token: await githubToken(options?.token) }));
 
   ipcMain.handle('git:branches', async (_, cwd?: string) => {
     const dir = cwd || process.cwd();
@@ -1666,102 +1685,12 @@ function registerIPC() {
       .filter((line) => line && !line.endsWith('/HEAD'))));
   });
 
-  // The GitHub plugin's whole job: commit the open project and push it to the
-  // configured repo. A token, when given, authenticates through a one-shot HTTP
-  // header so it never lands in .git/config, the remote URL, or the shell's argv.
-  ipcMain.handle(
-    'git:pushProject',
-    async (_, opts: { cwd: string; message?: string; repo?: string; token?: string }) => {
-      const cwd = opts?.cwd;
-      if (!cwd) return { ok: false, message: 'No project folder is open.' };
-
-      const inside = await runGit(['rev-parse', '--is-inside-work-tree'], cwd);
-      if (inside.code !== 0 || inside.stdout.trim() !== 'true') {
-        return { ok: false, message: 'The open project is not a Git repository.' };
-      }
-
-      let branch = (await runGit(['branch', '--show-current'], cwd)).stdout.trim();
-      if (!branch) branch = (await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], cwd)).stdout.trim();
-      if (!branch || branch === 'HEAD') {
-        return { ok: false, message: 'The project is in a detached HEAD state — check out a branch first.' };
-      }
-
-      const status = await runGit(['status', '--porcelain'], cwd);
-      const dirty = status.stdout.split('\n').filter((l) => l.trim()).length;
-      let committed = false;
-      if (dirty > 0) {
-        const add = await runGit(['add', '-A'], cwd);
-        if (add.code !== 0) return { ok: false, message: add.stderr.trim() || 'git add failed.' };
-        const commit = await runGit(['commit', '-m', opts.message?.trim() || 'Update via ConeCode'], cwd);
-        if (commit.code !== 0) {
-          return { ok: false, message: commit.stderr.trim() || commit.stdout.trim() || 'git commit failed.' };
-        }
-        committed = true;
-      }
-
-      const repo = (opts.repo || '').trim();
-      const token = (opts.token || '').trim();
-      let args: string[];
-      let target = repo || 'origin';
-      let pushResult = { code: 0, stdout: '', stderr: '' };
-      if (token && repo) {
-        const basic = Buffer.from(`x-access-token:${token}`).toString('base64');
-        args = [
-          '-c', `http.https://github.com/.extraheader=AUTHORIZATION: basic ${basic}`,
-          'push', `https://github.com/${repo}.git`, `HEAD:refs/heads/${branch}`,
-        ];
-        pushResult = await runGit(args, cwd);
-        // A fine-grained PAT that passes the repo read API can still be denied
-        // at the git-over-HTTPS endpoint (repository not selected, or missing
-        // "Contents: read and write"). That leaves the repo permanently out of
-        // sync while the UI shows only the raw 403. Fall back to the origin
-        // remote (keychain/gh credentials), and REPORT BOTH outcomes — never
-        // silently swap an auth failure for a success.
-        if (pushResult.code !== 0) {
-          const tokenErr = pushResult.stderr.trim() || pushResult.stdout.trim() || 'git push (token) failed.';
-          const originUrl = (await runGit(['remote', 'get-url', 'origin'], cwd)).stdout.trim();
-          if (!originUrl) {
-            return {
-              ok: false,
-              message: `Token push failed (${tokenErr}) and the project has no "origin" remote to fall back to. Fix the token (GitHub → Fine-grained tokens: select this repo and allow "Contents: Read and write") or add an origin remote.`,
-            };
-          }
-          const fallback = await runGit(['push', '-u', 'origin', branch], cwd);
-          if (fallback.code === 0) {
-            return {
-              ok: true,
-              message: `Pushed branch "${branch}" via the "origin" remote (keychain credentials). NOTE: the stored token was REFUSED: ${tokenErr} — fix it for syncs that don't run from this machine.`,
-            };
-          }
-          return {
-            ok: false,
-            message: `Token push failed: ${tokenErr} — and origin fallback also failed: ${(fallback.stderr.trim() || fallback.stdout.trim() || 'git push failed.')}`,
-          };
-        }
-      } else {
-        const remote = (await runGit(['remote', 'get-url', 'origin'], cwd)).stdout.trim();
-        if (!remote) {
-          return {
-            ok: false,
-            message: 'The project has no "origin" remote — set an owner/repo and token in the GitHub plugin.',
-          };
-        }
-        target = remote;
-        args = ['push', '-u', 'origin', branch];
-        pushResult = await runGit(args, cwd);
-      }
-
-      if (pushResult.code !== 0) {
-        return { ok: false, message: pushResult.stderr.trim() || pushResult.stdout.trim() || 'git push failed.' };
-      }
-      return {
-        ok: true,
-        message: committed
-          ? `Committed and pushed branch "${branch}" to ${target}.`
-          : `Pushed branch "${branch}" to ${target}.`,
-      };
-    },
-  );
+  ipcMain.handle('git:localBranches', (_, cwd: string) => listGithubBranches(runGit, cwd));
+  ipcMain.handle('git:remoteBranches', async (_, opts: GithubRemoteOptions) =>
+    listGithubRemoteBranches(runGit, { ...opts, token: await githubToken(opts?.token) }));
+  ipcMain.handle('git:createBranch', (_, opts: GithubCreateBranchOptions) => createGithubBranch(runGit, opts));
+  ipcMain.handle('git:pushProject', async (_, opts: GithubPushOptions) =>
+    pushGithubProject(runGit, { ...opts, token: await githubToken(opts?.token) }));
 
   ipcMain.handle('git:review', async (_event, cwd: string, options: {
     scope: 'uncommitted' | 'base' | 'commit';

@@ -77,7 +77,7 @@ function installStubs() {
 function resetStores() {
   useModelStore.setState({ models: new Map([['p1', [model]]]), selectedModelId: 'gpt-test' });
   useSettingsStore.setState({ toolCallMode: 'auto', approvalMode: 'suggest', autoIncludeFileContext: false });
-  useWorkspaceStore.setState({ rootPath: '/proj', mcpTools: [], contextFiles: [], selectedFile: null, fileContent: null, agentsMd: null });
+  useWorkspaceStore.setState({ rootPath: '/proj', extraRoots: [], mcpTools: [], contextFiles: [], selectedFile: null, fileContent: null, agentsMd: null });
   useTodosStore.getState().clearTodos();
   useChatStore.setState({
     messages: [],
@@ -89,6 +89,7 @@ function resetStores() {
     messageEdits: {},
     streamingRuns: {},
     queuedMessages: {},
+    workspaceSnapshots: new Map(),
   });
   useMemoryStore.setState({ entries: [], enabled: false, extracting: false, loaded: true });
   useCodeChangesStore.setState({ changes: [] });
@@ -116,6 +117,32 @@ describe('mid-run message queue', () => {
     expect(streamCalls[0].conversationId).toBe('conv1');
     expect(created.some((m) => m.content === 'and another thing')).toBe(true);
     expect(useChatStore.getState().queuedMessages.conv1).toHaveLength(0);
+  });
+
+  it('searches the queued conversation’s own folders when both chats share a primary folder', async () => {
+    const original = { ...useChatStore.getState().conversations[0], rootPath: '/proj', extraRoots: ['/reference'] };
+    useWorkspaceStore.setState({ extraRoots: [{ path: '/reference', files: [] }] });
+    const snapshot = useWorkspaceStore.getState().saveSnapshot();
+    useChatStore.setState({ conversations: [original], streamingRuns: { conv1: fakeRun() } });
+    useChatStore.getState().enqueueMessage('conv1', 'find the notes', 'p1', 'gpt-test');
+    useChatStore.setState({
+      activeConversationId: 'conv2', conversations: [original, { ...original, id: 'conv2', extraRoots: ['/other'] }],
+      workspaceSnapshots: new Map([['conv1', snapshot]]), streamingRuns: {},
+    });
+    useWorkspaceStore.setState({ extraRoots: [{ path: '/other', files: [] }] });
+
+    const glob = vi.fn(async (_query: { pattern: string; dir?: string }) => ({ files: [], capped: false }));
+    window.electronAPI.fs.glob = glob;
+    queued = [{ choices: [{ message: {
+      role: 'assistant', content: '', tool_calls: [{
+        id: 'glob-notes', type: 'function', function: { name: 'glob', arguments: '{"pattern":"**/*.md"}' },
+      }],
+    }, finish_reason: 'tool_calls' }] }, textResponse('done')];
+
+    await useChatStore.getState().flushQueue('conv1');
+
+    expect(glob.mock.calls.map(([query]) => query.dir)).toEqual(['/proj', '/reference']);
+    expect(useWorkspaceStore.getState().allRoots()).toEqual(['/proj', '/other']);
   });
 
   it('flushes automatically through endRun (stop path)', async () => {

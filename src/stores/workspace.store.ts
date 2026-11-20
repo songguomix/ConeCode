@@ -4,14 +4,15 @@ import {
   memoryFileCandidates, selectExistingFiles, type MemoryFile,
 } from '../core/memory/memoryFiles';
 import { canAddRoot, normalizeRoot, rootOf, displayPath, type AddRootResult } from '../core/workspace/roots';
+import { useChatStore } from './chat.store';
 
 // The home directory only changes when the machine does, so it is fetched once
 // and reused rather than crossing IPC on every folder open.
 let cachedHomeDir: string | null = null;
 async function getHomeDir(): Promise<string> {
   if (cachedHomeDir) return cachedHomeDir;
-  const info = await window.electronAPI.app.getSystemInfo().catch(() => null);
-  const home = (info as any)?.homedir || '';
+  const info = await window.electronAPI.app?.getSystemInfo?.().catch(() => null);
+  const home = info?.homedir || '';
   cachedHomeDir = home;
   return home;
 }
@@ -59,6 +60,32 @@ interface ProjectConfig {
   // Custom slash commands from <root>/.conecode/commands/*.md.
   customCommands: SlashCommand[];
 }
+
+const emptyEditor = {
+  selectedFile: null,
+  fileContent: null,
+  selectedFileIsImage: false,
+  openTabs: [] as string[],
+  contextFiles: [] as ContextFile[],
+};
+
+export type WorkspaceSnapshot = Pick<WorkspaceStore,
+  'rootPath' | 'files' | 'extraRoots' | 'selectedFile' | 'fileContent'
+  | 'selectedFileIsImage' | 'openTabs' | 'contextFiles'
+> & ProjectConfig;
+
+const emptyWorkspace: WorkspaceSnapshot = {
+  ...emptyEditor,
+  rootPath: null,
+  files: [],
+  extraRoots: [],
+  agentsMd: null,
+  agentsMdPath: null,
+  memoryFiles: [],
+  customCommands: [],
+};
+
+let workspaceVersion = 0;
 
 interface WorkspaceStore extends ProjectConfig {
   rootPath: string | null;
@@ -117,10 +144,11 @@ interface WorkspaceStore extends ProjectConfig {
    * first extra folder is promoted to primary. The new state is persisted on
    * the active conversation, so each chat keeps its own folders.
    */
-  closeRoot: (folderPath: string) => void;
+  closeRoot: (folderPath: string, persist?: boolean) => void;
   ensureFileList: () => Promise<string[]>;
-  saveSnapshot: () => { rootPath: string | null; files: FileItem[]; extraRoots: ExtraRoot[]; selectedFile: string | null; openTabs: string[]; fileContent: string | null; selectedFileIsImage: boolean; contextFiles: ContextFile[] } & ProjectConfig;
-  restoreSnapshot: (snapshot: { rootPath: string | null; files: FileItem[]; extraRoots?: ExtraRoot[]; selectedFile: string | null; openTabs?: string[]; fileContent: string | null; selectedFileIsImage?: boolean; contextFiles: ContextFile[] } & Partial<ProjectConfig>) => void;
+  loadSnapshot: (rootPath: string, extraPaths?: string[]) => Promise<WorkspaceSnapshot | null>;
+  saveSnapshot: () => WorkspaceSnapshot;
+  restoreSnapshot: (snapshot: WorkspaceSnapshot | null) => void;
 }
 
 async function loadDir(dirPath: string): Promise<FileItem[]> {
@@ -208,60 +236,45 @@ async function loadProjectConfig(rootPath: string): Promise<ProjectConfig> {
   return { agentsMd, agentsMdPath, memoryFiles, customCommands };
 }
 
+function reloadWorkspaceTools(rootPath: string | undefined, version: number): void {
+  window.electronAPI.mcp?.reload?.(rootPath)
+    .then((tools) => {
+      if (rootPath && version === workspaceVersion) useWorkspaceStore.setState({ mcpTools: tools || [] });
+    })
+    .catch(() => {});
+}
+
 // Remember the current folder state on the active conversation (persisted), so
 // each chat comes back to its own folders when re-selected. Fire-and-forget:
 // failures must never break a folder close.
-async function persistFolderBinding(): Promise<void> {
-  try {
-    const { useChatStore } = await import('./chat.store');
-    await useChatStore.getState().setConversationFolder(useWorkspaceStore.getState().rootPath);
-  } catch {}
+function persistFolderBinding(): Promise<void> {
+  return useChatStore.getState().setConversationFolder(useWorkspaceStore.getState().rootPath).catch(() => {});
 }
 
 export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
-  rootPath: null,
-  files: [],
-  extraRoots: [],
-  selectedFile: null,
-  fileContent: null,
-  selectedFileIsImage: false,
-  openTabs: [],
+  ...emptyWorkspace,
   dirtyTabs: {},
-  contextFiles: [],
-  agentsMd: null,
-  agentsMdPath: null,
-  memoryFiles: [],
-  customCommands: [],
   fileList: null,
   mcpTools: [],
 
   openFolder: async () => {
+    const version = workspaceVersion;
     const folderPath = await window.electronAPI.dialog.openFolder();
     if (!folderPath) return;
-    // A newly chosen folder starts a new conversation immediately: create
-    // FIRST so the previous chat's snapshot keeps the OLD workspace, then
-    // open the folder and bind it to the fresh chat.
-    const { useChatStore } = await import('./chat.store');
+    // Let conversation navigation mount the chosen folder and save the old workspace.
     const { useModelStore } = await import('./model.store');
+    if (version !== workspaceVersion) return;
     const model = useModelStore.getState().getSelectedModel();
-    await useChatStore.getState().newConversation(model?.providerId || '', model?.id || '', folderPath);
-    if (!await get().openFolderPath(folderPath)) return;
+    const id = await useChatStore.getState().newConversation(model?.providerId || '', model?.id || '', folderPath);
+    if (useChatStore.getState().activeConversationId !== id || get().rootPath !== folderPath) return;
     await useChatStore.getState().setConversationFolder(folderPath);
   },
 
   openFolderPath: async (folderPath: string) => {
-    const stat = await window.electronAPI.fs.stat(folderPath);
-    if (!stat?.isDirectory) return false;
-    const files = await loadDir(folderPath);
-    set({ rootPath: folderPath, files, extraRoots: [], selectedFile: null, openTabs: [], dirtyTabs: {}, fileContent: null, selectedFileIsImage: false, fileList: null });
-    // Load AGENTS.md + custom commands in the background; don't block the open.
-    const cfg = await loadProjectConfig(folderPath);
-    set(cfg);
-    // Reconnect MCP servers (incl. this workspace's .conecode/mcp.json) and pick
-    // up their tools. May spawn external processes — fire-and-forget.
-    (window as any).electronAPI?.mcp?.reload?.(folderPath)
-      .then((tools: any[]) => set({ mcpTools: tools || [] }))
-      .catch(() => {});
+    const version = ++workspaceVersion;
+    const snapshot = await get().loadSnapshot(folderPath);
+    if (version !== workspaceVersion || !snapshot) return false;
+    get().restoreSnapshot(snapshot);
     return true;
   },
 
@@ -270,6 +283,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   },
 
   toggleExpand: async (dirPath: string) => {
+    const version = workspaceVersion;
     const { files } = get();
 
     const updateFiles = async (items: FileItem[]): Promise<FileItem[]> => {
@@ -296,10 +310,13 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     const owner = extraRoots.find((r) => dirPath === r.path || dirPath.startsWith(r.path + '/'));
     if (owner) {
       const updated = await updateFiles(owner.files);
-      set({ extraRoots: extraRoots.map((r) => (r.path === owner.path ? { ...r, files: updated } : r)) });
+      if (version === workspaceVersion) {
+        set((s) => ({ extraRoots: s.extraRoots.map((r) => (r === owner ? { ...r, files: updated } : r)) }));
+      }
       return;
     }
-    set({ files: await updateFiles(files) });
+    const updated = await updateFiles(files);
+    if (version === workspaceVersion) set({ files: updated });
   },
 
   collapseAll: () => {
@@ -322,21 +339,16 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   selectFile: async (filePath: string) => {
     // Images: load as a base64 data URL so the editor can render them instead
     // of dumping raw bytes as garbled text into the textarea.
-    if (isImageFile(filePath)) {
-      const dataUrl = await window.electronAPI.fs.readFileBase64(filePath);
-      set((s) => ({
-        selectedFile: filePath,
-        fileContent: dataUrl,
-        selectedFileIsImage: true,
-        openTabs: s.openTabs.includes(filePath) ? s.openTabs : [...s.openTabs, filePath],
-      }));
-      return;
-    }
-    const content = await window.electronAPI.fs.readFile(filePath);
+    const version = workspaceVersion;
+    const image = isImageFile(filePath);
+    const content = image
+      ? await window.electronAPI.fs.readFileBase64(filePath)
+      : await window.electronAPI.fs.readFile(filePath);
+    if (version !== workspaceVersion) return;
     set((s) => ({
       selectedFile: filePath,
       fileContent: content,
-      selectedFileIsImage: false,
+      selectedFileIsImage: image,
       openTabs: s.openTabs.includes(filePath) ? s.openTabs : [...s.openTabs, filePath],
     }));
   },
@@ -402,27 +414,31 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   },
 
   createFile: async (parentDir: string, name: string) => {
+    const version = workspaceVersion;
     const clean = name.trim().replace(/[/\\]+/g, '');
     if (!isValidFileName(clean)) return null;
     const full = `${parentDir}/${clean}`;
     const ok = await window.electronAPI.fs.writeFile(full, '', { exclusive: true });
     if (!ok) return null;
+    if (version !== workspaceVersion) return full;
     await get().refreshDir(parentDir);
-    await get().selectFile(full);
+    if (version === workspaceVersion) await get().selectFile(full);
     return full;
   },
 
   createFolder: async (parentDir: string, name: string) => {
+    const version = workspaceVersion;
     const clean = name.trim().replace(/[/\\]+/g, '');
     if (!isValidFileName(clean)) return null;
     const full = `${parentDir}/${clean}`;
     const ok = await window.electronAPI.fs.createDir(full);
     if (!ok) return null;
-    await get().refreshDir(parentDir);
+    if (version === workspaceVersion) await get().refreshDir(parentDir);
     return full;
   },
 
   renamePath: async (oldPath: string, newName: string) => {
+    const version = workspaceVersion;
     const clean = newName.trim().replace(/[/\\]+/g, '');
     if (!isValidFileName(clean)) return null;
     const dir = oldPath.includes('/') ? oldPath.slice(0, oldPath.lastIndexOf('/')) : '';
@@ -430,6 +446,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     if (newPath === oldPath) return oldPath;
     const ok = await window.electronAPI.fs.rename(oldPath, newPath);
     if (!ok) return null;
+    if (version !== workspaceVersion) return newPath;
     // Retarget any open tabs at or under the renamed path.
     const { openTabs, selectedFile } = get();
     const retarget = (p: string) => (p === oldPath || p.startsWith(oldPath + '/') ? newPath + p.slice(oldPath.length) : p);
@@ -438,15 +455,17 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     if (selectedFile && (selectedFile === oldPath || selectedFile.startsWith(oldPath + '/'))) {
       await get().selectFile(retarget(selectedFile));
     }
-    await get().refreshFiles();
+    if (version === workspaceVersion) await get().refreshFiles();
     return newPath;
   },
 
   deletePath: async (targetPath: string, isDirectory: boolean) => {
+    const version = workspaceVersion;
     const ok = isDirectory
       ? await window.electronAPI.fs.deleteDir(targetPath)
       : await window.electronAPI.fs.deleteFile(targetPath);
     if (!ok) return false;
+    if (version !== workspaceVersion) return true;
     // Close any tabs at or under the deleted path.
     const { openTabs, selectedFile } = get();
     const doomed = openTabs.filter((p) => p === targetPath || p.startsWith(targetPath + '/'));
@@ -460,6 +479,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       const { useAiHighlightsStore } = await import('./aiHighlights.store');
       for (const p of doomed) useAiHighlightsStore.getState().clearFile(p);
     } catch {}
+    if (version !== workspaceVersion) return true;
     if (selectedFile && (selectedFile === targetPath || selectedFile.startsWith(targetPath + '/'))) {
       const idx = Math.max(0, openTabs.indexOf(selectedFile) - doomed.length);
       const next = remaining[Math.min(idx, remaining.length - 1)] ?? null;
@@ -469,25 +489,29 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     } else {
       set({ openTabs: remaining });
     }
-    set((s) => ({
-      files: removePathFromTree(s.files, targetPath),
-      extraRoots: s.extraRoots.map((r) => ({ ...r, files: removePathFromTree(r.files, targetPath) })),
-      fileList: null,
-    }));
+    if (version === workspaceVersion) {
+      set((s) => ({
+        files: removePathFromTree(s.files, targetPath),
+        extraRoots: s.extraRoots.map((r) => ({ ...r, files: removePathFromTree(r.files, targetPath) })),
+        fileList: null,
+      }));
+    }
     return true;
   },
 
   resetWorkspace: () => {
-    set({ rootPath: null, files: [], extraRoots: [], selectedFile: null, openTabs: [], dirtyTabs: {}, fileContent: null, selectedFileIsImage: false, contextFiles: [], agentsMd: null, agentsMdPath: null, memoryFiles: [], customCommands: [], fileList: null, mcpTools: [] });
+    get().restoreSnapshot(null);
   },
 
   // Re-read AGENTS.md and custom commands from disk — call after the agent
   // creates/edits those files (e.g. /init writes AGENTS.md) so the freshly
   // written memory is picked up into the next system prompt without reopening.
   reloadProjectConfig: async () => {
+    const version = workspaceVersion;
     const { rootPath } = get();
     if (!rootPath) return;
-    set(await loadProjectConfig(rootPath));
+    const config = await loadProjectConfig(rootPath);
+    if (version === workspaceVersion) set(config);
   },
 
   allRoots: () => {
@@ -499,27 +523,33 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   // silently producing a tree that shows the same file twice — see
   // core/workspace/roots.ts for why.
   addRoot: async (folderPath: string) => {
+    const version = workspaceVersion;
     const path = normalizeRoot(folderPath);
     const verdict = canAddRoot(path, get().allRoots());
     if (!verdict.ok) return verdict;
 
-    const stat = await window.electronAPI.fs.stat(path);
-    if (!stat?.isDirectory) return { ok: false, reason: 'empty' as const };
-
     // With nothing open yet, the first folder becomes the primary one.
     if (!get().rootPath) {
-      await get().openFolderPath(path);
+      if (!await get().openFolderPath(path)) return { ok: false, reason: 'empty' };
+      await persistFolderBinding();
       return verdict;
     }
 
+    const stat = await window.electronAPI.fs.stat(path);
+    if (!stat?.isDirectory) return { ok: false, reason: 'empty' as const };
     const files = await loadDir(path);
+    if (version !== workspaceVersion) return { ok: false, reason: 'empty' };
+    const currentVerdict = canAddRoot(path, get().allRoots());
+    if (!currentVerdict.ok) return currentVerdict;
     set((state) => ({ extraRoots: [...state.extraRoots, { path, files }], fileList: null }));
-    return verdict;
+    await persistFolderBinding();
+    return currentVerdict;
   },
 
   addRootFromDialog: async () => {
+    const version = workspaceVersion;
     const folderPath = await window.electronAPI.dialog.openFolder();
-    if (!folderPath) return { ok: false, reason: 'empty' as const };
+    if (!folderPath || version !== workspaceVersion) return { ok: false, reason: 'empty' };
     return get().addRoot(folderPath);
   },
 
@@ -537,6 +567,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       fileList: null,
       openTabs: remaining,
       dirtyTabs,
+      contextFiles: state.contextFiles.filter((file) => rootOf(file.path, [path]) === null),
       ...(closesOpenFile ? { selectedFile: null, fileContent: null, selectedFileIsImage: false } : {}),
     });
     if (closesOpenFile && remaining.length) {
@@ -544,13 +575,13 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     }
   },
 
-  closeRoot: (folderPath: string) => {
+  closeRoot: (folderPath: string, persist = true) => {
     const path = normalizeRoot(folderPath);
     const state = get();
     // Extra folder → detach it.
     if (state.extraRoots.some((r) => r.path === path)) {
       get().removeRoot(path);
-      void persistFolderBinding();
+      if (persist) void persistFolderBinding();
       return;
     }
     if (state.rootPath !== path) return;
@@ -558,7 +589,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     if (!next) {
       // Last folder out → blank project, ready to pick a new one.
       get().resetWorkspace();
-      void persistFolderBinding();
+      if (persist) void persistFolderBinding();
       return;
     }
     // Promote the first extra folder to primary so the others survive.
@@ -568,6 +599,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     const dirtyTabs = Object.fromEntries(
       Object.entries(state.dirtyTabs).filter(([p]) => rootOf(p, remainingRoots) !== null),
     );
+    const version = ++workspaceVersion;
     set({
       rootPath: next.path,
       files: next.files,
@@ -575,16 +607,18 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       fileList: null,
       openTabs: remaining,
       dirtyTabs,
+      contextFiles: state.contextFiles.filter((file) => rootOf(file.path, [path]) === null),
+      agentsMd: null,
+      agentsMdPath: null,
+      memoryFiles: [],
+      customCommands: [],
+      mcpTools: [],
       ...(closesOpenFile ? { selectedFile: null, fileContent: null, selectedFileIsImage: false } : {}),
     });
-    void (async () => {
-      set(await loadProjectConfig(next.path));
-      (window as any).electronAPI?.mcp?.reload?.(next.path)
-        .then((tools: any[]) => set({ mcpTools: tools || [] }))
-        .catch(() => {});
-      if (closesOpenFile && remaining.length) await get().selectFile(remaining[remaining.length - 1]);
-      await persistFolderBinding();
-    })();
+    if (persist) void persistFolderBinding();
+    void get().reloadProjectConfig().catch(() => {});
+    reloadWorkspaceTools(next.path, version);
+    if (closesOpenFile && remaining.length) void get().selectFile(remaining[remaining.length - 1]);
   },
 
   // Lazily build (and cache) a flat list of workspace-relative file paths for
@@ -615,27 +649,50 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     return rel;
   },
 
+  loadSnapshot: async (rootPath, extraPaths = []) => {
+    const stat = await window.electronAPI.fs.stat(rootPath);
+    if (!stat?.isDirectory) return null;
+    const [files, config] = await Promise.all([loadDir(rootPath), loadProjectConfig(rootPath)]);
+    const extraRoots: ExtraRoot[] = [];
+    for (const candidate of extraPaths) {
+      const folder = canAddRoot(candidate, [rootPath, ...extraRoots.map((root) => root.path)]);
+      const path = folder.path;
+      if (!folder.ok || !path || !(await window.electronAPI.fs.stat(path))?.isDirectory) continue;
+      extraRoots.push({ path, files: await loadDir(path) });
+    }
+    return { ...emptyWorkspace, ...config, rootPath, files, extraRoots };
+  },
+
   saveSnapshot: () => {
     const { rootPath, files, extraRoots, selectedFile, openTabs, fileContent, selectedFileIsImage, contextFiles, agentsMd, agentsMdPath, memoryFiles, customCommands } = get();
     return { rootPath, files, extraRoots, selectedFile, openTabs, fileContent, selectedFileIsImage, contextFiles, agentsMd, agentsMdPath, memoryFiles, customCommands };
   },
 
   restoreSnapshot: (snapshot) => {
-    set({ fileList: null, extraRoots: [], openTabs: [], agentsMd: null, agentsMdPath: null, memoryFiles: [], customCommands: [], ...snapshot });
+    const version = ++workspaceVersion;
+    const rootPath = snapshot?.rootPath;
+    const previousRoot = get().rootPath;
+    const mcpTools = rootPath && rootPath === previousRoot ? get().mcpTools : [];
+    set({ ...(snapshot ?? emptyWorkspace), fileList: null, dirtyTabs: {}, mcpTools });
+    if (rootPath ? !mcpTools.length : previousRoot) reloadWorkspaceTools(rootPath ?? undefined, version);
   },
 
   addContextFile: async (filePath: string) => {
-    const { contextFiles } = get();
-    if (contextFiles.some(f => f.path === filePath)) return;
+    const version = workspaceVersion;
+    if (get().contextFiles.some((file) => file.path === filePath)) return;
+    const add = (file: ContextFile) => {
+      if (version !== workspaceVersion || get().contextFiles.some((item) => item.path === filePath)) return;
+      set((s) => ({ contextFiles: [...s.contextFiles, file] }));
+    };
     if (isImageFile(filePath)) {
       const dataUrl = await window.electronAPI.fs.readFileBase64(filePath);
       if (!dataUrl) return;
-      set({ contextFiles: [...contextFiles, { path: filePath, content: '', isImage: true, dataUrl }] });
+      add({ path: filePath, content: '', isImage: true, dataUrl });
       return;
     }
     const content = await window.electronAPI.fs.readFile(filePath);
     if (content == null) return;
-    set({ contextFiles: [...contextFiles, { path: filePath, content }] });
+    add({ path: filePath, content });
   },
 
   // Attach an image pasted straight into the chat input. There's no file on
@@ -661,16 +718,19 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   },
 
   saveFile: async (content: string) => {
+    const version = workspaceVersion;
     const { selectedFile } = get();
     if (!selectedFile) return;
     await window.electronAPI.fs.writeFile(selectedFile, content);
-    set({ fileContent: content });
+    if (version === workspaceVersion && get().selectedFile === selectedFile) set({ fileContent: content });
   },
 
   refreshFiles: async () => {
+    const version = workspaceVersion;
     const { rootPath, extraRoots } = get();
     if (!rootPath) return;
     const files = await loadDir(rootPath);
+    if (version !== workspaceVersion) return;
     // Preserve expansion across a full refresh so create/rename/delete don't
     // collapse the tree the user is looking at.
     const collect = (items: FileItem[]): [string, boolean][] =>
@@ -686,13 +746,14 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   },
 
   refreshDir: async (dirPath: string) => {
+    const version = workspaceVersion;
     const { rootPath, extraRoots, files } = get();
     if (!rootPath) return;
     // The tree only stores children for expanded dirs; a create inside a
     // collapsed dir just needs an expansion to reveal it.
     const owner = extraRoots.find((r) => dirPath === r.path || dirPath.startsWith(r.path + '/'));
     const fresh = await loadDir(dirPath).catch(() => null);
-    if (!fresh) return;
+    if (!fresh || version !== workspaceVersion) return;
     // Merge: keep the expanded state of subdirectories that still exist.
     const prevExpanded = new Map<string, FileItem>();
     const collect = (items: FileItem[]) => {
@@ -719,11 +780,10 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       return item;
     });
     if (owner) {
-      if (dirPath === owner.path) {
-        set({ extraRoots: extraRoots.map((r) => (r.path === owner.path ? { ...r, files: merged.map((m) => ({ ...m, expanded: prevExpanded.get(m.path)?.expanded ?? false })) } : r)), fileList: null });
-      } else {
-        set({ extraRoots: extraRoots.map((r) => (r.path === owner.path ? { ...r, files: graft(r.files) } : r)), fileList: null });
-      }
+      const refreshed = dirPath === owner.path
+        ? merged.map((item) => ({ ...item, expanded: prevExpanded.get(item.path)?.expanded ?? false }))
+        : graft(owner.files);
+      set((s) => ({ extraRoots: s.extraRoots.map((r) => r === owner ? { ...r, files: refreshed } : r), fileList: null }));
       return;
     }
     if (dirPath === rootPath) {

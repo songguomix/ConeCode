@@ -167,6 +167,14 @@ button:disabled { cursor: not-allowed; }
   outline-offset: 2px;
 }
 textarea { scrollbar-gutter: stable; }
+.chat-composer textarea {
+  field-sizing: content;
+  min-height: calc(1lh + 1rem);
+}
+.chat-composer textarea::placeholder {
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 /* The composer supplies one focus indicator around the entire input group. */
 .chat-composer textarea:focus-visible { outline: none; }
 /* Search fields sit inside a bordered pill that already shows focus. The inner

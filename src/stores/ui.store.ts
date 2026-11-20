@@ -83,6 +83,8 @@ function loadViewMode(): ViewMode {
 interface UIStore {
   viewMode: ViewMode;
   sidebarOpen: boolean;
+  /** Projects added to the Work sidebar for this app session. */
+  workProjectPaths: string[];
   settingsOpen: boolean;
   modelSelectorOpen: boolean;
   terminalOpen: boolean;
@@ -141,6 +143,7 @@ interface UIStore {
 export const useUIStore = create<UIStore>((set) => ({
   viewMode: loadViewMode(),
   sidebarOpen: false,
+  workProjectPaths: [],
   settingsOpen: false,
   modelSelectorOpen: false,
   terminalOpen: false,

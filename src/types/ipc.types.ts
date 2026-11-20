@@ -3,6 +3,10 @@ import type { Conversation, Message } from './chat.types';
 import type { SubAgentRun } from './subAgent.types';
 import type { ProviderConfig } from './provider.types';
 import type {
+  GithubAccountStatus, GithubBranches, GithubCreateBranchOptions, GithubLocalBranches,
+  GithubPushOptions, GithubRemoteOptions,
+} from './github.types';
+import type {
   ReplyContextRequest,
   ReplyContextResult,
   ReplyListRequest,
@@ -313,17 +317,26 @@ export interface ElectronAPI {
     onProgress: (callback: (progress: import('../core/updates/updateClient').UpdateDownloadProgress) => void) => () => void;
   };
   git: {
-    publishRelease: (options: { repo: string; token: string; tag: string; name?: string; body?: string; target: string; files: string[]; draft?: boolean; prerelease?: boolean }) => Promise<{ ok: boolean; message: string; url?: string }>;
+    publishRelease: (options: { repo: string; token?: string; tag: string; name?: string; body?: string; target: string; files: string[]; draft?: boolean; prerelease?: boolean }) => Promise<{ ok: boolean; message: string; url?: string }>;
     info: (cwd?: string) => Promise<{ isRepo: boolean; branch: string | null; dirty: number }>;
     status: (cwd?: string) => Promise<string>;
     diff: (cwd?: string, file?: string) => Promise<string>;
     branches: (cwd?: string) => Promise<string[]>;
-    pushProject: (opts: { cwd: string; message?: string; repo?: string; token?: string }) =>
+    localBranches: (cwd: string) => Promise<GithubLocalBranches>;
+    remoteBranches: (opts: GithubRemoteOptions) => Promise<GithubBranches>;
+    createBranch: (opts: GithubCreateBranchOptions) => Promise<{ ok: boolean; message: string }>;
+    pushProject: (opts: GithubPushOptions) =>
       Promise<{ ok: boolean; message: string }>;
     review: (cwd: string, options: {
       scope: 'uncommitted' | 'base' | 'commit';
       target?: string;
     }) => Promise<{ ok: boolean; status?: string; diff?: string; error?: string; scope?: string; target?: string | null }>;
+  };
+  githubAccount: {
+    status: () => Promise<GithubAccountStatus>;
+    begin: () => Promise<GithubAccountStatus>;
+    cancel: () => Promise<GithubAccountStatus>;
+    logout: () => Promise<GithubAccountStatus>;
   };
   /** GitHub plugin: manual reply assistant for open issues and pull requests. */
   githubReply: {

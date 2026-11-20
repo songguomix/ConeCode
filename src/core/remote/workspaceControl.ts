@@ -73,9 +73,6 @@ async function applyWorkspaceCommand(cmd: WorkspaceCommand, action: string, repl
     if (path && !folder) return fail('invalid-path');
     if (!folder || !stillCurrent()) return fail();
     const result = await workspace.addRoot(folder);
-    if (result.ok && useChatStore.getState().activeConversationId === chat.activeConversationId) {
-      await useChatStore.getState().setConversationFolder(useWorkspaceStore.getState().rootPath);
-    }
     return result.ok ? reply({ ok: true, path: result.path }) : fail(result.reason);
   }
   if (action === 'workspaceCloseRoot') {

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useGithubReplyStore } from './githubReply.store';
+import { useMarketStore } from './market.store';
 import type { ReplyThreadContext } from '../types/githubReply.types';
 
 const context: ReplyThreadContext = {
@@ -30,6 +31,7 @@ function installBridge(overrides: Partial<{ list: any; context: any; post: any }
 
 beforeEach(() => {
   (globalThis as any).window = undefined;
+  useMarketStore.setState({ account: null });
   useGithubReplyStore.setState({
     language: 'auto',
     threads: [],
@@ -123,5 +125,16 @@ describe('GitHub reply store', () => {
     const ok = await useGithubReplyStore.getState().post('acme/widgets', 'token');
     expect(ok).toBe(false);
     expect(useGithubReplyStore.getState().postResult?.message).toContain('bridge offline');
+  });
+
+  it('uses account authentication and keeps the draft bound to its original repository', async () => {
+    const bridge = installBridge();
+    useMarketStore.setState({ account: { state: 'signed-in', login: 'alice' } });
+    useGithubReplyStore.setState({ selectedNumber: 7, draft: 'Thanks!', context });
+
+    expect(await useGithubReplyStore.getState().post('other/widgets', '')).toBe(false);
+    expect(bridge.post).not.toHaveBeenCalled();
+    expect(await useGithubReplyStore.getState().post('acme/widgets', '')).toBe(true);
+    expect(bridge.post).toHaveBeenCalledWith({ repo: 'acme/widgets', number: 7, body: 'Thanks!', token: '' });
   });
 });

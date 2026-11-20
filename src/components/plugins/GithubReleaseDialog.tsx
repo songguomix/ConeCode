@@ -41,7 +41,6 @@ export default function GithubReleaseDialog() {
       <ul className="mt-2 max-h-40 space-y-0.5 overflow-y-auto text-xs">
         {pending?.files.map((file) => <li key={file} className="break-all font-mono text-[var(--text-secondary)]">{file}</li>)}
       </ul>
-      <p className="mt-3 text-xs text-[var(--text-secondary)]">{t('githubPushConfirmHint')}</p>
       <div className="mt-4 flex flex-wrap justify-end gap-2">
         <button type="button" onClick={cancel} disabled={busy} className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm cursor-pointer disabled:cursor-not-allowed hover:bg-[var(--bg-1)] transition-colors">{t('cancel')}</button>
         <button type="button" onClick={confirm} disabled={busy} className="rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed transition-all">

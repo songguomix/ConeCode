@@ -126,6 +126,7 @@ export default function Sidebar() {
   const changes = useCodeChangesStore((s) => s.changes);
   const rootPath = useWorkspaceStore((s) => s.rootPath);
   const extraRoots = useWorkspaceStore((s) => s.extraRoots);
+  const workProjectPaths = useUIStore((s) => s.workProjectPaths);
   const addRootFromDialog = useWorkspaceStore((s) => s.addRootFromDialog);
   const closeRoot = useWorkspaceStore((s) => s.closeRoot);
   const sidebar = rsiSidebarLayout({ agentMode, viewMode });
@@ -159,8 +160,8 @@ export default function Sidebar() {
   );
 
   const workGroups = useMemo(
-    () => groupOpenProjectConversations(workConversations, openFolderPaths),
-    [workConversations, openFolderPaths],
+    () => groupOpenProjectConversations(workConversations, [...openFolderPaths, ...workProjectPaths]),
+    [workConversations, openFolderPaths, workProjectPaths],
   );
 
   const rsiGroups = useMemo(
@@ -228,14 +229,25 @@ export default function Sidebar() {
   const [folderError, setFolderError] = useState<string | null>(null);
   const [projectBusy, setProjectBusy] = useState(false);
 
+  const expandProject = (path: string) => {
+    setCollapsedGroups((previous) => {
+      const next = new Set(previous);
+      next.delete(path);
+      next.delete(`rsi:${path}`);
+      return next;
+    });
+  };
+
   const handleAddProject = async () => {
     setFolderError(null);
     setProjectBusy(true);
     try {
-      const result = await addRootFromDialog();
-      if (!result.ok && result.reason && result.reason !== 'empty') {
-        setFolderError(t(`addFolder_${result.reason}`));
-      }
+      const path = await window.electronAPI.dialog.openFolder();
+      if (!path) return;
+      const stat = await window.electronAPI.fs.stat(path);
+      if (!stat?.isDirectory) throw new Error('Project folder is unavailable');
+      useUIStore.setState((state) => ({ workProjectPaths: [...new Set([...state.workProjectPaths, path])] }));
+      expandProject(path);
     } catch {
       setFolderError(t('projectOperationFailed'));
     } finally {
@@ -252,38 +264,18 @@ export default function Sidebar() {
       const conversation = useChatStore.getState().conversations.find((item) => item.id === id);
       const path = conversation?.rootPath;
       if (!path) return;
-      const workspace = useWorkspaceStore.getState();
-      // A per-project + must also point the agent's workspace at that project.
-      if (workspace.rootPath !== path && !await workspace.openFolderPath(path)) {
-        throw new Error('Project folder is unavailable');
-      }
-      if (useChatStore.getState().activeConversationId !== id) return;
-      // Keep the other open projects in the list when a chat restores its snapshot.
-      let snapshotComplete = true;
-      for (const openPath of openFolderPaths) {
-        if (useWorkspaceStore.getState().allRoots().includes(openPath)) continue;
-        const added = await workspace.addRoot(openPath);
-        // A project nested in another one cannot be reopened; remember that so
-        // the conversation keeps its saved snapshot instead of a truncated one.
-        if (!added.ok) snapshotComplete = false;
-      }
-      if (useChatStore.getState().activeConversationId !== id) return;
-      const extraPaths = useWorkspaceStore.getState().extraRoots.map((root) => root.path);
-      const savedExtras = conversation.extraRoots ?? [];
-      if (snapshotComplete && (extraPaths.length !== savedExtras.length || extraPaths.some((root, index) => root !== savedExtras[index]))) {
-        await useChatStore.getState().setConversationFolder(path);
-      }
-      setCollapsedGroups((previous) => {
-        const next = new Set(previous);
-        next.delete(path);
-        next.delete(`rsi:${path}`);
-        return next;
-      });
+      if (useWorkspaceStore.getState().rootPath !== path) throw new Error('Project folder is unavailable');
+      expandProject(path);
     } catch {
       setFolderError(t('projectOperationFailed'));
     } finally {
       setProjectBusy(false);
     }
+  };
+
+  const handleCloseProject = (path: string) => {
+    useUIStore.setState((state) => ({ workProjectPaths: state.workProjectPaths.filter((item) => item !== path) }));
+    if (useWorkspaceStore.getState().allRoots().includes(path)) void closeFolderGroup(path);
   };
 
   // RSI never lists files: picking a folder is the only workspace action it
@@ -292,9 +284,7 @@ export default function Sidebar() {
     setFolderError(null);
     try {
       const result = await addRootFromDialog();
-      if (result.ok) {
-        await useChatStore.getState().setConversationFolder(useWorkspaceStore.getState().rootPath);
-      } else if (result.reason && result.reason !== 'empty') {
+      if (!result.ok && result.reason && result.reason !== 'empty') {
         setFolderError(t(`addFolder_${result.reason}`));
       }
     } catch {
@@ -325,8 +315,12 @@ export default function Sidebar() {
     const openConversation = () => {
       if (editingId === conv.id) return;
       if (isWork && conv.rootPath && !isRsi && !isArchived) {
-        if (projectBusy) return;
-        void handleProjectChat(async () => { await setActiveConversation(conv.id); return conv.id; });
+        setFolderError(null);
+        void setActiveConversation(conv.id).then(() => {
+          if (useChatStore.getState().activeConversationId === conv.id && useWorkspaceStore.getState().rootPath !== conv.rootPath) {
+            setFolderError(t('projectOperationFailed'));
+          }
+        }).catch(() => setFolderError(t('projectOperationFailed')));
       } else {
         void setActiveConversation(conv.id);
       }
@@ -510,7 +504,7 @@ export default function Sidebar() {
             mode={sidebar.isRsi ? "rsi" : "work"}
             busy={!sidebar.isRsi && projectBusy}
             onAdd={sidebar.isRsi ? handleAddRsiFolder : handleAddProject}
-            onRemove={sidebar.isRsi ? handleRemoveRsiFolder : (path) => void closeFolderGroup(path)}
+            onRemove={sidebar.isRsi ? handleRemoveRsiFolder : handleCloseProject}
             onDismissError={() => setFolderError(null)}
           />
         )}
@@ -652,10 +646,8 @@ export default function Sidebar() {
                           <FiPlus size={13} />
                         </button>
                       )}
-                      {/* A closed project has nothing to close: opening one of its
-                          chats (or the + above) reopens the folder again. */}
-                      {isOpen && (
-                        <button onClick={() => void closeFolderGroup(folderKey)} disabled={projectBusy}
+                      {(isOpen || workProjectPaths.includes(folderKey)) && (
+                        <button onClick={() => handleCloseProject(folderKey)} disabled={projectBusy}
                           aria-label={`${t('closeFolder')} · ${label}`} title={t('closeFolder')}
                           className="p-1 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-3)] disabled:opacity-50 cursor-pointer">
                           <FiX size={13} />

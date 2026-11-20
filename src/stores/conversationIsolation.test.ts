@@ -55,8 +55,143 @@ beforeEach(() => {
     workspaceSnapshots: new Map(),
   });
   useUIStore.setState({ viewMode: 'chat' });
-  useWorkspaceStore.setState({ rootPath: '/workspace/project', files: [], extraRoots: [] });
+  useWorkspaceStore.getState().resetWorkspace();
+  useWorkspaceStore.setState({ rootPath: '/workspace/project' });
   useModelStore.setState({ models: new Map(), selectedModelId: 'test-model' });
+});
+
+describe('Work conversation folder isolation', () => {
+  const primary = '/workspace/project';
+  const firstExtra = '/workspace/first-extra';
+  const secondExtra = '/workspace/second-extra';
+  const firstFile = `${firstExtra}/first.txt`;
+  const secondFile = `${secondExtra}/second.txt`;
+  const workConversation = (id: string, rootPath: string, extraRoots: string[] = []): Conversation => ({
+    id, title: id, providerId: 'p1', modelId: 'm1', rootPath, extraRoots,
+    isChatMode: false, createdAt: 1, updatedAt: 1,
+  });
+
+  function openFirstWorkspace() {
+    useWorkspaceStore.setState({
+      rootPath: primary,
+      extraRoots: [{ path: firstExtra, files: [] }],
+      selectedFile: firstFile,
+      fileContent: 'First workspace',
+      openTabs: [firstFile],
+      dirtyTabs: { [firstFile]: true },
+      contextFiles: [{ path: firstFile, content: 'First workspace' }],
+    });
+  }
+
+  it('restores each chat’s saved folders and editor when the primary folder is shared', async () => {
+    const first = workConversation('first', primary, [firstExtra]);
+    const second = workConversation('second', primary, [secondExtra]);
+    useWorkspaceStore.setState({
+      extraRoots: [{ path: secondExtra, files: [] }],
+      selectedFile: secondFile,
+      fileContent: 'Second workspace',
+      openTabs: [secondFile],
+    });
+    const secondSnapshot = useWorkspaceStore.getState().saveSnapshot();
+    openFirstWorkspace();
+    useChatStore.setState({
+      conversations: [first, second],
+      activeConversationId: first.id,
+      workspaceSnapshots: new Map([[second.id, secondSnapshot]]),
+    });
+
+    await useChatStore.getState().setActiveConversation(second.id);
+
+    expect(useWorkspaceStore.getState().allRoots()).toEqual([primary, secondExtra]);
+    expect(useWorkspaceStore.getState()).toMatchObject({ selectedFile: secondFile, openTabs: [secondFile], contextFiles: [] });
+    expect(useWorkspaceStore.getState().dirtyTabs[firstFile]).toBeUndefined();
+
+    await useChatStore.getState().setActiveConversation(first.id);
+
+    expect(useWorkspaceStore.getState().allRoots()).toEqual([primary, firstExtra]);
+    expect(useWorkspaceStore.getState()).toMatchObject({
+      selectedFile: firstFile,
+      openTabs: [firstFile],
+      contextFiles: [{ path: firstFile, content: 'First workspace' }],
+    });
+    expect(window.electronAPI.conversation.update).not.toHaveBeenCalled();
+  });
+
+  it('uses persisted folders and clears the editor when a saved chat has no snapshot', async () => {
+    const first = workConversation('first', primary, [firstExtra]);
+    const second = workConversation('second', primary, [secondExtra]);
+    useWorkspaceStore.getState().resetWorkspace();
+    vi.mocked(window.electronAPI.conversation.list).mockResolvedValue([first, second]);
+    await useChatStore.getState().fetchConversations();
+    await useChatStore.getState().setActiveConversation(first.id);
+    openFirstWorkspace();
+
+    await useChatStore.getState().setActiveConversation(second.id);
+
+    expect(useWorkspaceStore.getState().allRoots()).toEqual([primary, secondExtra]);
+    expect(useWorkspaceStore.getState()).toMatchObject({
+      selectedFile: null, openTabs: [], fileContent: null, contextFiles: [],
+    });
+    expect(useWorkspaceStore.getState().dirtyTabs).toEqual({});
+    expect(window.electronAPI.conversation.update).not.toHaveBeenCalled();
+  });
+
+  it('keeps the last selected workspace when an earlier folder read finishes late', async () => {
+    const first = workConversation('first', primary, [firstExtra]);
+    const second = workConversation('second', '/workspace/slow', [secondExtra]);
+    const third = workConversation('third', '/workspace/latest', ['/workspace/latest-extra']);
+    openFirstWorkspace();
+    useChatStore.setState({ conversations: [first, second, third], activeConversationId: first.id });
+    let startSlowRead!: () => void;
+    let finishSlowRead!: () => void;
+    const slowReadStarted = new Promise<void>((resolve) => { startSlowRead = resolve; });
+    vi.mocked(window.electronAPI.fs.readDir).mockImplementation(async (path) => {
+      if (path === second.rootPath && !finishSlowRead) {
+        await new Promise<void>((resolve) => {
+          finishSlowRead = resolve;
+          startSlowRead();
+        });
+      }
+      return [];
+    });
+
+    const openingSecond = useChatStore.getState().setActiveConversation(second.id);
+    await slowReadStarted;
+    try {
+      await useChatStore.getState().setActiveConversation(third.id);
+    } finally {
+      finishSlowRead();
+      await openingSecond;
+    }
+
+    expect(useChatStore.getState().activeConversationId).toBe(third.id);
+    expect(useWorkspaceStore.getState().allRoots()).toEqual([third.rootPath, '/workspace/latest-extra']);
+
+    await useChatStore.getState().setActiveConversation(second.id);
+
+    expect(useWorkspaceStore.getState().allRoots()).toEqual([second.rootPath, secondExtra]);
+  });
+
+  it.each([primary, '/workspace/new-project'])('starts a new Work chat in %s with its own workspace', async (path) => {
+    const first = workConversation('first', primary, [firstExtra]);
+    openFirstWorkspace();
+    useUIStore.setState({ viewMode: 'work' });
+    useChatStore.setState({ conversations: [first], activeConversationId: first.id });
+
+    const id = await useChatStore.getState().newConversation('p1', 'm1', path);
+
+    expect(useChatStore.getState().activeConversationId).toBe(id);
+    expect(useWorkspaceStore.getState().allRoots()).toEqual([path]);
+    expect(useWorkspaceStore.getState()).toMatchObject({
+      selectedFile: null, openTabs: [], fileContent: null, contextFiles: [],
+    });
+    expect(useWorkspaceStore.getState().dirtyTabs).toEqual({});
+
+    await useChatStore.getState().setActiveConversation(first.id);
+
+    expect(useWorkspaceStore.getState().allRoots()).toEqual([primary, firstExtra]);
+    expect(useWorkspaceStore.getState().openTabs).toEqual([firstFile]);
+  });
 });
 
 describe('Conversation archiving', () => {
