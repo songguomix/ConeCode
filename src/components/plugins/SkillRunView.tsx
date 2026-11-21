@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react';
-import { FiChevronRight, FiLoader, FiCheck, FiTool } from 'react-icons/fi';
+import { FiChevronRight, FiLoader, FiTool } from 'react-icons/fi';
 import { useBackgroundStore } from '../../stores/background.store';
 import { useSkillsStore, useLanguageStore } from '../../stores';
 import { findBuiltin } from '../../core/skills/builtin';
+import { BackgroundTaskStatusIcon, backgroundTaskStatusKey } from '../background/backgroundTaskPresentation';
 
 const TRIGGERS: Record<string, string> = {
   'todo-scan': 'pluginTrigger_todo-scan',
@@ -132,13 +133,9 @@ export default function SkillRunView({ skillId }: { skillId: string }) {
           </p>
           {runs.slice(0, 5).map((task) => (
             <div key={task.conversationId} className="flex items-center gap-2 px-3 py-1.5 rounded-xl hover:bg-[var(--bg-2)] transition-colors">
-              {task.status === 'running' ? (
-                <FiLoader size={12} className="text-[var(--accent)] animate-spin shrink-0" />
-              ) : (
-                <FiCheck size={12} className="text-[var(--success)] shrink-0" />
-              )}
+              <BackgroundTaskStatusIcon task={task} size={12} />
               <span className="flex-1 min-w-0 text-[12px] text-[var(--text-secondary)] truncate">
-                {new Date(task.startedAt).toLocaleTimeString()} · {t(task.status === 'running' ? 'backgroundRunning' : 'backgroundDone')}
+                {new Date(task.startedAt).toLocaleTimeString()} · {t(backgroundTaskStatusKey(task))}
               </span>
               <button onClick={() => jump(task.conversationId)} title={t('backgroundJump')}
                 className="w-7 h-7 rounded-lg flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-3)] transition-colors shrink-0 cursor-pointer">

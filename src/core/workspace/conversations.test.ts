@@ -165,6 +165,13 @@ describe('pickReusableConversation', () => {
     expect(pickReusableConversation([archived], 'chat', null, null, 0, {})).toBeNull();
   });
 
+  it('does not reuse a detached task that was interrupted before writing its first message', () => {
+    const task = blank('task', null, 99, {
+      backgroundTask: { status: 'running', promptId: 'request', source: 'chat', startedAt: 99, finishedAt: null, unseen: false },
+    });
+    expect(pickReusableConversation([task], 'chat', null, null, 0, {})).toBeNull();
+  });
+
   it('prefers the active blank conversation', () => {
     const active = blank('active', null, 1);
     const older = blank('older', null, 99);

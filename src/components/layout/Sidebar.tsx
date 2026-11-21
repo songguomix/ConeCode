@@ -143,14 +143,18 @@ export default function Sidebar() {
     () => [rootPath, ...extraRoots.map((r) => r.path)].filter((p): p is string => !!p),
     [rootPath, extraRoots],
   );
-  const unarchivedConversations = useMemo(
-    () => conversations.filter(isUnarchivedConversation),
+  const sidebarConversations = useMemo(
+    () => conversations.filter((conversation) => !conversation.backgroundTask),
     [conversations],
   );
+  const unarchivedConversations = useMemo(
+    () => sidebarConversations.filter(isUnarchivedConversation),
+    [sidebarConversations],
+  );
   const archivedConversations = useMemo(
-    () => conversations.filter((c) => !isUnarchivedConversation(c))
+    () => sidebarConversations.filter((c) => !isUnarchivedConversation(c))
       .sort((a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0)),
-    [conversations],
+    [sidebarConversations],
   );
 
   const chatConversations = useMemo(
@@ -203,10 +207,9 @@ export default function Sidebar() {
     { key: 'remote', icon: <FiSmartphone size={15} />, label: t('remoteControl'), open: remoteOpen, toggle: toggleRemote },
     { key: 'computer', icon: <FiCpu size={15} />, label: t('computerControl'), open: computerOpen, toggle: toggleComputer, dot: computerEnabled ? 'error-pulse' : null },
   ];
-  // Live state must survive being folded into a menu: a running dev server, and
-  // above all the agent holding the real mouse, stay visible on the trigger.
-  const triggerDot = mostUrgentDot(panels.map((p) => p.dot));
-  const anyPanelOpen = panels.some((p) => p.open);
+  // Background activity stays inside the Panels menu.
+  const triggerDot = mostUrgentDot(panels.map((p) => p.key === 'background' ? undefined : p.dot));
+  const anyPanelOpen = panels.some((p) => p.key !== 'background' && p.open);
 
   const handleRename = (id: string) => {
     if (editTitle.trim()) {

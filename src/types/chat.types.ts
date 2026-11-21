@@ -1,6 +1,28 @@
 import type { AgentMode } from '../core/agents/modePrompts';
 import type { RsiConversationState } from '../core/agents/rsiConversation';
 
+export type BackgroundStatus = 'running' | 'waiting' | 'done' | 'stopped' | 'blocked';
+export type BackgroundReason = 'question' | 'approval' | 'delegation' | 'configuration' | 'budget' | 'interrupted';
+
+export interface BackgroundTaskRecord {
+  status: BackgroundStatus;
+  reason?: BackgroundReason;
+  source: string;
+  startedAt: number;
+  finishedAt: number | null;
+  unseen: boolean;
+  parentConversationId?: string;
+  retryAt?: number;
+  retryCount?: number;
+  dismissed?: boolean;
+  reported?: boolean;
+  planMode?: boolean;
+  reviewMode?: boolean;
+  /** Allows a launch interrupted before the first transcript write to recover. */
+  promptId: string;
+  initialPrompt?: string;
+}
+
 export interface Conversation {
   id: string;
   title: string;
@@ -17,6 +39,7 @@ export interface Conversation {
   archivedAt?: number | null;
   /** Explicitly marks a conversation created in Chat mode (dialogue only). */
   isChatMode?: boolean;
+  backgroundTask?: BackgroundTaskRecord;
   /** Execution protocol and RSI data belong to this stable conversation ID. */
   agentMode?: AgentMode;
   rsi?: RsiConversationState;
@@ -72,6 +95,12 @@ export interface Message {
   // The turn ended by interruption (network drop) or by hitting the output
   // limit rather than finishing — the UI offers one-click continuation for it.
   interrupted?: boolean;
+  /** A complete background reply, committed in the same write as its text. */
+  backgroundFinal?: boolean;
+  /** Records an interaction boundary before the separate task-state write. */
+  backgroundWait?: BackgroundReason;
+  backgroundApprovalResult?: boolean;
+  backgroundApprovalRefresh?: boolean;
 }
 
 export interface ChatState {

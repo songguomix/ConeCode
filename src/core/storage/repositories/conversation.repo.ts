@@ -25,6 +25,8 @@ export const conversationRepo = {
       providerId: data.providerId || '',
       modelId: data.modelId || '',
       rootPath: data.rootPath ?? null,
+      ...(data.extraRoots?.length ? { extraRoots: data.extraRoots } : {}),
+      ...(data.backgroundTask ? { backgroundTask: structuredClone(data.backgroundTask) } : {}),
       // Chat/Work mode travels with the conversation: without persisting it,
       // the renderer's in-memory flag would silently revert to Work after an
       // app restart. Absent on pre-Chat-Mode records, which always worked with
@@ -130,6 +132,8 @@ export const messageRepo = {
 
   create(data: Omit<Message, 'createdAt'>): Message {
     const messages = readJSON<Message[]>(MSG_FILE, []);
+    const existing = messages.find((message) => message.id === data.id && message.conversationId === data.conversationId);
+    if (existing) return existing;
     const msg: Message = { ...data, createdAt: Date.now() };
     messages.push(msg);
     writeJSON(MSG_FILE, messages);

@@ -448,6 +448,11 @@ async function captureMacScreenFallback(targetDisplay?: Electron.Display): Promi
 // chats (even on the same model) can stream at the same time without
 // cancelling each other.
 const mainStreamControllers = new Map<string, AbortController>();
+
+function stopMainStreams(): void {
+  for (const controller of mainStreamControllers.values()) controller.abort();
+  mainStreamControllers.clear();
+}
 let powerSaveBlockerId: number | null = null;
 const terminals = new Map<string, import('child_process').ChildProcess>();
 
@@ -855,6 +860,23 @@ function createWindow() {
   });
   const window = mainWindow;
   window.once('ready-to-show', () => window.show());
+  let reloadTimer: ReturnType<typeof setTimeout> | undefined;
+  let lastRendererLoad = Date.now();
+  let consecutiveCrashes = 0;
+  window.webContents.on('did-finish-load', () => { lastRendererLoad = Date.now(); });
+  window.webContents.on('did-start-navigation', ({ isMainFrame, isSameDocument }) => {
+    if (isMainFrame && !isSameDocument) stopMainStreams();
+  });
+  window.webContents.on('render-process-gone', (_event, { reason }) => {
+    stopMainStreams();
+    if (reason === 'clean-exit' || reason === 'integrity-failure') return;
+    if (Date.now() - lastRendererLoad > 60_000) consecutiveCrashes = 0;
+    const delay = Math.min(30_000, 1_000 * 2 ** Math.min(consecutiveCrashes++, 5));
+    clearTimeout(reloadTimer);
+    reloadTimer = setTimeout(() => {
+      if (!window.isDestroyed()) window.webContents.reload();
+    }, delay);
+  });
 
   const distPath = path.join(__dirname, '../dist/index.html');
   // vite-plugin-electron sets this in dev: the dev server always wins when it
@@ -871,6 +893,8 @@ function createWindow() {
     mainWindow.on('focus', () => computerPreview.statusChanged());
   }
   mainWindow.on('closed', () => {
+    clearTimeout(reloadTimer);
+    stopMainStreams();
     computerPreview.destroy();
     mainWindow = null;
     // The hidden, pre-warmed screenshot window must not keep the app alive on
@@ -1252,7 +1276,11 @@ function registerIPC() {
       mainStreamControllers.set(runKey, controller);
     }
     const onChunk = (!silent && emitChunks !== false)
-      ? (chunk: any) => mainWindow?.webContents.send('chat:chunk', { ...chunk, conversationId: ownsMainStream ? conversationId : undefined })
+      ? (chunk: any) => {
+        if (mainStreamControllers.get(runKey) === controller && !event.sender.isDestroyed()) {
+          event.sender.send('chat:chunk', { ...chunk, conversationId });
+        }
+      }
       : () => {};
     try {
       const result = await adapter.streamMessage(
@@ -1272,8 +1300,7 @@ function registerIPC() {
       mainStreamControllers.get(String(conversationId))?.abort();
       mainStreamControllers.delete(String(conversationId));
     } else {
-      for (const controller of mainStreamControllers.values()) controller.abort();
-      mainStreamControllers.clear();
+      stopMainStreams();
     }
     return true;
   });

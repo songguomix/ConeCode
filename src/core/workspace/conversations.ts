@@ -96,7 +96,7 @@ export function groupOpenProjectConversations(
  * so it is never silently reopened by the "+" button.
  */
 export function isBlankConversation(conv: Conversation, messageCount: number): boolean {
-  if (messageCount > 0) return false;
+  if (messageCount > 0 || conv.backgroundTask) return false;
   if (conv.title && conv.title !== 'New Chat') return false;
   if (isRsiConversation(conv) && conv.rsi) {
     if (conv.rsi.status !== 'idle' || conv.rsi.runs.length > 0) return false;

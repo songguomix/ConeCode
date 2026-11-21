@@ -20,6 +20,8 @@ export default function App() {
   const rootPath = useWorkspaceStore((s) => s.rootPath);
   const subscribePreview = usePreviewStore((s) => s.subscribe);
   const isStreaming = useChatStore((s) => s.isStreaming);
+  const foregroundStreaming = useChatStore((s) => Object.keys(s.streamingRuns).some((id) =>
+    !s.conversations.find((conversation) => conversation.id === id)?.backgroundTask));
   const pendingApprovalIds = useCodeChangesStore((s) => s.changes
     .filter((change) => change.status === 'pending')
     .map((change) => change.id)
@@ -30,7 +32,8 @@ export default function App() {
   const preventSleepWhileRunning = useSettingsStore((s) => s.preventSleepWhileRunning);
   const t = useLanguageStore((s) => s.t);
   const bootstrapped = useRef(false);
-  const previousStreaming = useRef(false);
+  const backgroundReady = useRef<Promise<unknown>>();
+  const previousForegroundStreaming = useRef(false);
   const knownApprovals = useRef<Set<string> | null>(null);
   const initScreenshot = useScreenshotStore((s) => s.init);
 
@@ -42,7 +45,7 @@ export default function App() {
     if (bootstrapped.current) return;
     bootstrapped.current = true;
 
-    void (async () => {
+    const loadModelSettings = (async () => {
       // Settings and providers determine how models should be presented; load
       // them together, then fetch models once. Other startup reads are independent.
       await Promise.all([loadSettings(), fetchProviders()]);
@@ -79,7 +82,7 @@ export default function App() {
     // inside sendMessage, so the first message could spawn a second, empty chat.
     // The conversation is created only on the first send; until then we show the
     // empty "start a conversation" state.
-    void fetchConversations();
+    backgroundReady.current = Promise.all([loadModelSettings, fetchConversations()]);
     // Start mirroring state to / accepting commands from any connected phone.
     initRemoteBridge();
     // Follow the preview dev server even while its panel is closed, so the
@@ -91,10 +94,6 @@ export default function App() {
     // Re-register the stored screenshot hotkey (main forgets on quit) and
     // answer its trigger.
     const stopScreenshot = initScreenshot();
-    // Background tasks (opencode-style): reconcile detached runs so finished
-    // ones badge + notify even while the user chats elsewhere.
-    const initBackground = useBackgroundStore.getState().init;
-    const stopBackground = initBackground();
     // RSI performance monitor: auto-read renderer errors, resume sampling when
     // it was left on (persisted flag).
     const monitor = useMonitorStore.getState();
@@ -120,13 +119,14 @@ export default function App() {
     );
     return () => {
       stopScreenshot();
-      stopBackground();
       monitor.stop();
       window.removeEventListener('error', onWindowError);
       window.removeEventListener('unhandledrejection', onUnhandledRejection);
       stopShotResult?.();
     };
   }, []);
+
+  useEffect(() => useBackgroundStore.getState().init(backgroundReady.current), []);
 
   useEffect(() => {
     const refresh = () => { void useFreeStore.getState().refresh(); };
@@ -168,15 +168,15 @@ export default function App() {
   }, [isStreaming, preventSleepWhileRunning]);
 
   useEffect(() => {
-    if (previousStreaming.current && !isStreaming && !pendingApprovalIds) {
+    if (previousForegroundStreaming.current && !foregroundStreaming && !pendingApprovalIds) {
       void window.electronAPI.notification.show({
         title: t('taskReadyTitle'),
         body: t('taskReadyBody'),
         mode: notificationMode,
       });
     }
-    previousStreaming.current = isStreaming;
-  }, [isStreaming, notificationMode, pendingApprovalIds, t]);
+    previousForegroundStreaming.current = foregroundStreaming;
+  }, [foregroundStreaming, notificationMode, pendingApprovalIds, t]);
 
   useEffect(() => {
     const current = new Set(pendingApprovalIds ? pendingApprovalIds.split(',') : []);

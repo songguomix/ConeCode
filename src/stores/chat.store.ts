@@ -2,7 +2,7 @@ import { FREE_PROVIDER_ID, FREE_WEEKLY_TOKEN_LIMIT } from '../core/providers/fre
 import { normalizeTokenUsage, type TokenUsage } from '../core/providers/tokenUsage';
 import { create } from 'zustand';
 import { v4 as uuidv4 } from 'uuid';
-import type { Conversation, Message, ReasoningEffort, ChatMessage, ContentPart, ToolCall, ThinkingBlock } from '../types';
+import type { BackgroundReason, BackgroundTaskRecord, Conversation, Message, ReasoningEffort, ChatMessage, ContentPart, ToolCall, ThinkingBlock } from '../types';
 import type { GithubPushBranches } from '../types/github.types';
 import { useWorkspaceStore, type WorkspaceSnapshot } from './workspace.store';
 import { recordSubAgentRun } from './subAgents.store';
@@ -67,6 +67,7 @@ import {
 import { normalizeWebUrl, isLocalUrl, parseResultRef } from '../core/browser/policy';
 import { toSample, checkBreaches, describeBreach, formatBytes, DEFAULT_THRESHOLDS } from '../core/monitor/perf';
 import { useMonitorStore } from './monitor.store';
+import { finishBackgroundRun, updateBackgroundTask, type BackgroundRunOutcome } from './background.store';
 import {
   ConstraintViolationError,
   gptDetector,
@@ -154,6 +155,9 @@ export interface SendMessageOptions {
   taskMemory?: TaskMemoryContext;
   /** Synthetic continuation uses the current task memory. */
   reuseTaskMemory?: boolean;
+  /** Continue an interrupted tool/assistant turn from the persisted transcript. */
+  recoveringBackground?: boolean;
+  recoveringApproval?: boolean;
 }
 const taskMemoryByConversation = new Map<string, TaskMemoryContext>();
 const rsiSpendBaselines = new Map<string, number>();
@@ -706,12 +710,7 @@ async function runCostSnapshot(convId?: string): Promise<string> {
   );
 }
 
-/**
- * Start a run in a fresh conversation without touching the UI or the
- * background-task registry. Both the composer's "run in background" and the
- * model's `run_background` tool build on this; registration (if any) is the
- * caller's job.
- */
+/** Save the task before starting its detached conversation. */
 async function startDetachedRun(
   content: string,
   providerId: string,
@@ -721,6 +720,7 @@ async function startDetachedRun(
   // view the user is looking at.
   isChatMode = useUIStore.getState().viewMode === 'chat',
   parentWorkspace?: TaskWorkspace,
+  opts?: { title?: string; source?: string; parentConversationId?: string },
 ): Promise<string | null> {
   if (isHolding(useInstallGateStore.getState().jobs)) return null;
   if (!content.trim() || !providerId || !modelId) return null;
@@ -732,32 +732,110 @@ async function startDetachedRun(
     ? await resolveTaskWorkspace(chat.activeConversationId, active)
     : taskWorkspaceFrom(visible.saveSnapshot(), visible.mcpTools));
   const extraRoots = workspace.extraRoots.map((root) => root.path);
+  const title = opts?.title || content.trim().replace(/\s+/g, ' ').slice(0, 50);
+  const parent = chat.conversations.find((conversation) => conversation.id === opts?.parentConversationId);
+  const agentMode = parent?.agentMode ?? chat.agentMode;
+  const backgroundTask: BackgroundTaskRecord = {
+    status: 'running',
+    startedAt: Date.now(),
+    finishedAt: null,
+    unseen: false,
+    source: opts?.source || 'chat',
+    parentConversationId: opts?.parentConversationId,
+    promptId: uuidv4(),
+    initialPrompt: content,
+    planMode: parent?.backgroundTask?.planMode ?? chat.planMode,
+    reviewMode: parent?.backgroundTask?.reviewMode ?? chat.reviewMode,
+  };
   const conv = await window.electronAPI.conversation.create({
     providerId,
     modelId,
     rootPath: workspace.rootPath,
+    title,
+    extraRoots,
     isChatMode,
+    agentMode,
+    backgroundTask,
   });
-  const userMsg: Message = {
-    id: uuidv4(),
-    conversationId: conv.id,
-    role: 'user',
-    content,
-    createdAt: Date.now(),
-  };
-  await window.electronAPI.message.create(userMsg);
-  const title = content.trim().replace(/\s+/g, ' ').slice(0, 50);
-  await window.electronAPI.conversation.update(conv.id, { title, extraRoots });
-  const now = Date.now();
+  startingBackgroundRuns.add(conv.id);
   set((s) => ({
-    conversations: [{ ...conv, title, extraRoots, updatedAt: now, isChatMode }, ...s.conversations],
+    conversations: [{ ...conv, title, extraRoots, isChatMode, agentMode, backgroundTask }, ...s.conversations],
   }));
-  // runAgentLoop already isolates non-active runs (reloads its own persisted
-  // transcript, guards all writes by conversation id) — fire and forget.
-  void runAgentLoop(conv.id, providerId, modelId, {}, workspace).catch((e) => {
-    console.error(`[background] run failed for ${conv.id}:`, e);
-  });
+  try {
+    await saveBackgroundPrompt(conv.id, backgroundTask, []);
+    const current = useChatStore.getState().conversations.find((item) => item.id === conv.id)?.backgroundTask;
+    if (current?.status === 'running' && !current.dismissed && !isHolding(useInstallGateStore.getState().jobs)) {
+      void runAgentLoop(conv.id, providerId, modelId, {}, workspace).catch((error) => {
+        console.error(`[background] run failed for ${conv.id}:`, error);
+      });
+    }
+  } catch (error) {
+    await finishBackgroundRun(conv.id, classifyBackgroundError(error));
+  } finally {
+    startingBackgroundRuns.delete(conv.id);
+  }
   return conv.id;
+}
+
+const startingBackgroundRuns = new Set<string>();
+
+async function saveBackgroundPrompt(id: string, task: BackgroundTaskRecord, messages: Message[]): Promise<void> {
+  if (task.initialPrompt === undefined) return;
+  if (!messages.some((message) => message.id === task.promptId)) {
+    const prompt: Message = {
+      id: task.promptId, conversationId: id, role: 'user', content: task.initialPrompt, createdAt: task.startedAt,
+    };
+    await persistMessage(prompt);
+    useChatStore.setState((state) => state.activeConversationId === id && !state.messages.some((message) => message.id === prompt.id)
+      ? { messages: [...state.messages, prompt] } : {});
+  }
+  await updateBackgroundTask(id, { initialPrompt: undefined });
+}
+
+async function resumeBackgroundRun(id: string, checkWaiting = false): Promise<void> {
+  const chat = useChatStore.getState;
+  const current = () => chat().conversations.find((conversation) => conversation.id === id);
+  const canRun = () => {
+    const task = current()?.backgroundTask;
+    return !task?.dismissed && task?.status === 'running';
+  };
+  const conversation = current();
+  if (!conversation || chat().streamingRuns[id] || startingBackgroundRuns.has(id)
+    || isHolding(useInstallGateStore.getState().jobs)
+    || (!canRun() && !(checkWaiting && conversation.backgroundTask?.status === 'waiting'))) return;
+  startingBackgroundRuns.add(id);
+  try {
+    const task = conversation.backgroundTask!;
+    const messages = await window.electronAPI.message.list(id);
+    const tail = [...messages].reverse().find((message) => !message.isLocalNotice);
+    if (!canRun() && checkWaiting && current()?.backgroundTask === task && tail?.role === 'user') {
+      const answered = (task.reason === 'question' && !tail.isToolResult)
+        || (task.reason === 'approval' && (tail.backgroundApprovalResult || tail.backgroundApprovalRefresh))
+        || (task.reason === 'delegation' && tail.isToolResult && tail.id.startsWith('background:'));
+      if (answered) await updateBackgroundTask(id, { status: 'running', reason: undefined, reported: undefined });
+    }
+    if (!canRun()) return;
+    await saveBackgroundPrompt(id, task, messages);
+    if (tail?.backgroundFinal) {
+      await finishBackgroundRun(id, { status: 'done' });
+    } else if (tail?.backgroundWait || tail?.isQuestion) {
+      await finishBackgroundRun(id, { status: 'waiting', reason: tail.backgroundWait ?? 'question' });
+    } else if (canRun() && !chat().streamingRuns[id] && !isHolding(useInstallGateStore.getState().jobs)) {
+      if (task.retryAt != null) await updateBackgroundTask(id, { retryAt: undefined });
+      if (!canRun() || chat().streamingRuns[id] || isHolding(useInstallGateStore.getState().jobs)) return;
+      const lastInput = [...messages].reverse().find((message) => message.backgroundApprovalResult
+        || (message.role === 'user' && !message.isToolResult && !message.isLocalNotice));
+      await runAgentLoop(id, conversation.providerId, conversation.modelId, {
+        recoveringBackground: !!tail && (tail.role !== 'user' || !!tail.isToolResult),
+        recoveringApproval: !!lastInput?.backgroundApprovalRefresh,
+      });
+    }
+  } catch (error) {
+    if (canRun()) await finishBackgroundRun(id, classifyBackgroundError(error));
+    else throw error;
+  } finally {
+    startingBackgroundRuns.delete(id);
+  }
 }
 
 /** Human-readable background task list for the `background_status` tool. */
@@ -772,7 +850,7 @@ async function backgroundStatusText(parentConversationId?: string): Promise<stri
       : 'No background tasks.';
   }
   return tasks.slice(0, 10).map((t) =>
-    `- "${t.title}" [${t.status}]${t.status === 'running' ? '' : ' (its result was delivered back here when it finished)'}`,
+    `- "${t.title}" [${t.status}${t.reason ? `: ${t.reason}` : ''}]`,
   ).join('\n');
 }
 
@@ -968,6 +1046,7 @@ async function deliverToConversation(convId: string, content: string, providerId
       role: 'user',
       content,
       ...(attachedImages.length ? { images: attachedImages } : {}),
+      ...(options.recoveringApproval ? { backgroundApprovalRefresh: true } : {}),
       createdAt: Date.now(),
     };
     await window.electronAPI.message.create(userMsg);
@@ -1055,6 +1134,17 @@ function streamRetryDelayMs(error: any, attempt: number): number | null {
     return declared > MAX_RATE_LIMIT_BACKOFF_MS ? null : Math.max(declared, backoff);
   }
   return Math.min(DEFAULT_RATE_LIMIT_BACKOFF_MS * 2 ** attempt, MAX_RATE_LIMIT_BACKOFF_MS);
+}
+
+function classifyBackgroundError(error: any): BackgroundRunOutcome {
+  const message = String(error?.message || error || '').replace(/\[retry-after-ms:\s*\d+\]/gi, '');
+  if (error instanceof ConstraintViolationError) return { status: 'blocked', reason: 'interrupted' };
+  if (/(?:^|\D)(?:400|401|403|404|413|422)(?:\D|$)|invalid api key|invalid_api_key|authentication failed|provider not found|model not found|insufficient_quota/i.test(message)) {
+    return { status: 'blocked', reason: 'configuration' };
+  }
+  const marker = String(error?.message || error || '').match(/\[retry-after-ms:\s*(\d+)\]/i);
+  const delay = marker && Number(marker[1]);
+  return { status: 'retry', delayMs: typeof delay === 'number' && Number.isSafeInteger(delay) ? delay : undefined };
 }
 
 /** Resolve after `ms`, early when the run is aborted — no dangling timers. */
@@ -2528,10 +2618,42 @@ async function runAgentLoop(
   options: SendMessageOptions = {},
   capturedWorkspace?: TaskWorkspace,
 ) {
+  const controller = startRun(convId);
+  const task = useChatStore.getState().conversations.find((c) => c.id === convId)?.backgroundTask;
+  let outcome: BackgroundRunOutcome | undefined;
+  try {
+    if (task && !task.dismissed && task.status !== 'running') {
+      await updateBackgroundTask(convId, {
+        status: 'running', reason: undefined, finishedAt: null, unseen: false,
+        retryAt: undefined, retryCount: undefined, reported: undefined,
+      });
+    }
+    outcome = await runAgentLoopBody(convId, providerId, modelId, controller, options, capturedWorkspace);
+  } catch (error) {
+    if (!task || task.dismissed) throw error;
+    outcome = classifyBackgroundError(error);
+  } finally {
+    if (runControllers.get(convId) === controller) {
+      try {
+        if (task && !task.dismissed && outcome) await finishBackgroundRun(convId, outcome);
+      } finally {
+        if (runControllers.get(convId) === controller) endRun(convId);
+      }
+    }
+  }
+}
+
+async function runAgentLoopBody(
+  convId: string,
+  providerId: string,
+  modelId: string,
+  abortController: AbortController,
+  options: SendMessageOptions,
+  capturedWorkspace?: TaskWorkspace,
+): Promise<BackgroundRunOutcome | undefined> {
   const set = useChatStore.setState;
   const get = useChatStore.getState;
-
-  const abortController = startRun(convId);
+  if (abortController.signal.aborted) return;
   set({ error: null });
   // Browsing another conversation must not revoke ownership of this run. The
   // abort controller is the run identity; activeConversationId is only the UI.
@@ -2544,6 +2666,10 @@ async function runAgentLoop(
 
   const turnStartTime = Date.now();
   const convRecord = get().conversations.find((c) => c.id === convId);
+  const backgroundTask = convRecord?.backgroundTask;
+  if (backgroundTask && providerId === FREE_PROVIDER_ID && useFreeStore.getState().weeklyUsed >= FREE_WEEKLY_TOKEN_LIMIT) {
+    return { status: 'blocked', reason: 'budget' };
+  }
   const previousSession = options.rsiResume ? resumableRsiSession(convId) : undefined;
   const viewMode = useUIStore.getState().viewMode;
   // A conversation that EXISTS decides its own mode. The flag was introduced
@@ -2574,8 +2700,8 @@ async function runAgentLoop(
     records: isMemoryV2Active() ? '' : useMemoryStore.getState().promptBlock(taskWorkspace.rootPath),
     wiki: '',
   };
-  const planMode = get().planMode;
-  const reviewMode = get().reviewMode;
+  const planMode = backgroundTask?.planMode ?? get().planMode;
+  const reviewMode = backgroundTask?.reviewMode ?? get().reviewMode;
   // The conversation record owns its execution protocol: a live RSI run must
   // keep its overlay even if the user browses into another conversation and
   // the global mode selector changes underneath it.
@@ -2621,6 +2747,8 @@ async function runAgentLoop(
   let rsiOutcome: 'completed' | 'stopped' | 'failed' = 'stopped';
   let rsiCause: string | null = null;
   let waitingForUser = false;
+  let backgroundWait: BackgroundReason | undefined;
+  let backgroundInterrupted = false;
   const rsiCostStopReason = (): string | null => {
     const settings = useSettingsStore.getState();
     const cap = settings.maxEpisodeCost * 2;
@@ -2791,6 +2919,10 @@ async function runAgentLoop(
       if (!continuing) stitch = freshStitch();
       const requestMessages = (frame: ComputerFrame | null): ChatMessage[] => {
         const context = [...runtimeContext];
+        if (iteration === 0 && options.recoveringBackground) context.push({
+          type: 'text',
+          text: 'Continue the interrupted task from the saved transcript. Preserve completed work and verify the current state before repeating any tool action whose result is missing.',
+        });
         if (pursuingGoal && goalFollowup) context.push({ type: 'text', text: goalFollowup });
         if (rsiHistory) context.push({ type: 'text', text: rsiHistory });
         if (rsiExecuting) context.push({ type: 'text', text: `${rsiMonitor.context()}\n${rsiRecovery}`.trim() });
@@ -3089,6 +3221,7 @@ async function runAgentLoop(
       // stopping silently with no message and no edit. A turn made purely of
       // native tool calls is NOT this case — it has real work to run below.
       if (!finalContent.trim() && nativeCalls.length === 0) {
+        backgroundInterrupted = true;
         console.warn('[runAgentLoop] empty content', {
           finishReason: finishReason(),
           reasoningLen: finalReasoningContent.length,
@@ -3148,6 +3281,9 @@ async function runAgentLoop(
         cacheHitTokens: stitch.cacheUsageSegments === stitch.segments ? stitch.cacheHitTokens : undefined,
         toolCalls: nativeCalls.length ? nativeCalls : undefined,
         thinkingBlocks: awaitingFinalCapture ? undefined : stitch.thinkingBlocks,
+        ...(backgroundTask && !hasWork && !awaitingFinalCapture && !pursuingGoal && !rsiExecuting
+          && finishReason() !== 'length' && !get().queuedMessages[convId]?.some((message) => message.steer)
+          ? { backgroundFinal: true } : {}),
       };
       await window.electronAPI.message.create(assistantMsg);
       if (ownsRun()) patchRun(convId, { content: '', reasoningContent: '' });
@@ -3209,6 +3345,7 @@ async function runAgentLoop(
         // (Short truncations never reach here: they were stitched seamlessly
         // above. This is the exhausted-budget path.)
         if (finishReason() === 'length') {
+          backgroundInterrupted = true;
           // If there's reasoning content, save it and suggest continuation
           if (finalReasoningContent.trim()) {
             const assistantMsg: Message = {
@@ -3404,7 +3541,7 @@ async function runAgentLoop(
             codeChangesStore.discardMessageApprovals(convId, new Set([assistantMsg.id]));
             return 'Skipped because this execution was stopped.';
           }
-          if (shouldAutoApprove(effectiveApprovalMode(), data.kind)) {
+          if (!options.recoveringApproval && shouldAutoApprove(effectiveApprovalMode(), data.kind)) {
             const outcome = await codeChangesStore.autoApply(id);
             observe(action, outcome.result ?? '', outcome.success);
             shouldContinue = true;
@@ -3526,14 +3663,15 @@ async function runAgentLoop(
               break;
             }
             const title = task.replace(/\s+/g, ' ').slice(0, 50);
-            const childId = await startDetachedRun(task, providerId, modelId, isChatMode, ws);
+            const childId = await startDetachedRun(task, providerId, modelId, isChatMode, ws, {
+              title, source: 'agent', parentConversationId: convId,
+            });
             if (!childId) {
               result = 'Error: the background run could not start (an install may be holding the model).';
               shouldContinue = true;
               break;
             }
-            const { useBackgroundStore } = await import('./background.store');
-            useBackgroundStore.getState().adopt(childId, { title, parentConversationId: convId });
+            backgroundWait = 'delegation';
             result = `Background task started ("${title}"). Its result will arrive here automatically when it finishes — end your turn now unless you have independent work. Do not poll or wait.`;
             // Terminal on purpose: not in INFO_ACTIONS, so this turn ends here.
             break;
@@ -4103,6 +4241,9 @@ async function runAgentLoop(
       // newly active transcript or continue the old loop against a new workspace.
       if (!ownsRun()) break;
 
+      if (askedUser) backgroundWait = 'question';
+      else if (awaitingUserAction) backgroundWait = 'approval';
+
       if (nativeCalls.length) {
         // Every tool_call_id must be answered or the next request is rejected,
         // so fill in any call that fell through without producing a result.
@@ -4114,7 +4255,7 @@ async function runAgentLoop(
         }
         const resultLimit = toolResultLimitForBatch(outcomes.length);
         const toolMsgs: Message[] = [];
-        for (const o of outcomes) {
+        for (const [index, o] of outcomes.entries()) {
           const toolMsg: Message = {
             id: uuidv4(),
             conversationId: convId,
@@ -4125,6 +4266,8 @@ async function runAgentLoop(
             toolCallId: o.call?.id,
             toolName: o.call?.name,
             images: o.image ? [o.image] : undefined,
+            ...(backgroundTask && index === outcomes.length - 1 && (backgroundWait === 'approval' || backgroundWait === 'delegation')
+              ? { backgroundWait } : {}),
           };
           await persistMessage(toolMsg);
           toolMsgs.push(toolMsg);
@@ -4144,6 +4287,7 @@ async function runAgentLoop(
           createdAt: Date.now(),
           isToolResult: true,
           images: outcomes.map((o) => o.image).filter((img): img is string => !!img),
+          ...(backgroundTask && (backgroundWait === 'approval' || backgroundWait === 'delegation') ? { backgroundWait } : {}),
         };
         await persistMessage(toolMsg);
         set((s) => s.activeConversationId === convId ? { messages: [...s.messages, toolMsg] } : {});
@@ -4159,6 +4303,7 @@ async function runAgentLoop(
         if (rsiExecuting && !costBlocked) rsiCause = askedUser ? 'Waiting for the user to answer.' : awaitingUserAction ? 'Waiting for action approval.' : 'Waiting for a delegated action; execution is not complete.';
         break;
       }
+      backgroundWait = undefined;
       if (!rsiCause) await appendSteering();
       if (rsiExecuting) await refreshRsiHistory();
     }
@@ -4172,6 +4317,10 @@ async function runAgentLoop(
       await persistMessage(notice);
       set((s) => s.activeConversationId === convId ? { messages: [...s.messages, notice], continuableConvId: convId } : {});
     }
+    if (abortController.signal.aborted || !ownsRun()) return;
+    if (backgroundWait) return { status: 'waiting', reason: backgroundWait };
+    if (rsiCause) return { status: 'blocked', reason: rsiCause.includes('cost lock') ? 'budget' : 'interrupted' };
+    return backgroundInterrupted ? { status: 'retry' } : { status: 'done' };
   } catch (e: any) {
     rsiOutcome = abortController.signal.aborted ? 'stopped' : 'failed';
     rsiCause = e?.message || String(e);
@@ -4215,7 +4364,7 @@ async function runAgentLoop(
         // Both kinds of interruption stay continuable: a network drop AND a
         // user stop (the stop salvages what arrived; "continue" picks up from
         // it instead of forcing the user to retype "继续"). A stop is still
-        // final for the RUN — no auto-resume happens; only the affordance.
+        // final if the user explicitly stopped this execution.
         interrupted: true,
       };
       await window.electronAPI.message.create(msg);
@@ -4249,12 +4398,12 @@ async function runAgentLoop(
         }));
       }
     }
+    if (!userStopped) return classifyBackgroundError(e);
   } finally {
     if (runControllers.get(convId) === abortController) {
       if (!waitingForUser && useGoalStore.getState().goals[convId]?.status === 'running' && !planMode && !reviewMode && agentMode !== 'rsi') {
         useGoalStore.getState().setStatus(convId, 'paused');
       }
-      endRun(convId);
       rsiSpendBaselines.delete(convId);
       if (rsiOutcome === 'completed' && rsiExecutionSessions.get(convId) === rsiSession) rsiExecutionSessions.delete(convId);
     }
@@ -4353,18 +4502,19 @@ interface ChatStore {
    * could not start. No autoCompact: a single-message transcript never needs
    * it, and autoCompact reads the ACTIVE view's messages (wrong transcript).
    */
-  startBackgroundRun: (content: string, providerId: string, modelId: string) => Promise<string | null>;
+  startBackgroundRun: (content: string, providerId: string, modelId: string, opts?: { title?: string; source?: string }) => Promise<string | null>;
+  resumeBackgroundRun: (id: string, checkWaiting?: boolean) => Promise<void>;
   /**
    * Wake-up after a delegated background task finishes: append its result to
    * the parent conversation and continue that run (unless it is live — then
    * the loop picks the result up next turn). Never starts two runs at once.
    */
-  resumeAfterBackground: (parentConversationId: string, label: string, summary: string) => Promise<void>;
+  resumeAfterBackground: (parentConversationId: string, label: string, summary: string, reportId?: string) => Promise<void>;
   feedToolResults: (conversationId: string, providerId: string, modelId: string, content: string, evidence?: RsiToolEvidence[]) => Promise<void>;
   resendMessage: (messageId: string) => Promise<void>;
   editMessage: (messageId: string, content: string, providerId: string, modelId: string) => Promise<void>;
   /** Stop the agent run of one conversation (defaults to the active one). */
-  stopGeneration: (conversationId?: string) => void;
+  stopGeneration: (conversationId?: string, forInstall?: boolean) => void;
   /** Stop a live run because an install started; it will auto-continue after. */
   holdModelForInstall: (label: string, id?: string, kind?: 'download' | 'tool' | 'model' | 'skill' | 'dep') => void;
   /** Release install hold and auto-continue the held conversation. */
@@ -4487,7 +4637,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       const vm = useUIStore.getState().viewMode;
       const matchesView = vm === 'chat' ? isChatConversation : isWorkConversation;
       const targetConv = get().conversations.find((c) =>
-        isUnarchivedConversation(c) && matchesView(c),
+        !c.backgroundTask && isUnarchivedConversation(c) && matchesView(c),
       );
       if (targetConv) {
         void get().setActiveConversation(targetConv.id);
@@ -4777,7 +4927,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       if (left.length) void useMemoryV2Store.getState().endSession(id, left);
     }
     if (deletingActive) conversationLoadRequest++;
-    if (deletingRunning) get().stopGeneration(id);
+    if (deletingRunning || get().conversations.find((conversation) => conversation.id === id)?.backgroundTask) get().stopGeneration(id);
     await window.electronAPI.conversation.delete(id);
     rsiExecutionSessions.delete(id);
     rsiSpendBaselines.delete(id);
@@ -4814,29 +4964,40 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }));
   },
 
-  startBackgroundRun: async (content, providerId, modelId) => {
-    return startDetachedRun(content, providerId, modelId);
+  startBackgroundRun: (content, providerId, modelId, opts) => {
+    return startDetachedRun(content, providerId, modelId, undefined, undefined, opts);
   },
 
-  resumeAfterBackground: async (parentConversationId, label, summary) => {
+  resumeBackgroundRun,
+
+  resumeAfterBackground: async (parentConversationId, label, summary, reportId) => {
+    const conv = get().conversations.find((c) => c.id === parentConversationId);
+    if (!conv) return;
+    const existing = reportId ? await window.electronAPI.message.list(parentConversationId) : [];
     const msg: Message = {
-      id: uuidv4(),
+      id: reportId ?? uuidv4(),
       conversationId: parentConversationId,
       role: 'user',
       content: `[background task "${label}" finished]\n${summary}`,
       createdAt: Date.now(),
       isToolResult: true,
     };
-    await persistMessage(msg);
-    set((s) => s.activeConversationId === parentConversationId
-      ? { messages: [...s.messages, msg] }
-      : {});
+    const previousIndex = existing.findIndex((message) => message.id === msg.id);
+    if (previousIndex < 0) {
+      await persistMessage(msg);
+      set((s) => s.activeConversationId === parentConversationId && !s.messages.some((message) => message.id === msg.id)
+        ? { messages: [...s.messages, msg] }
+        : {});
+    } else if (existing.slice(previousIndex + 1).some((message) => !message.isLocalNotice)) return;
     // A live run re-reads the transcript next turn; only a quiet parent needs
     // a fresh loop. Either way there is never a second concurrent run.
     if (get().streamingRuns[parentConversationId]) return;
-    const conv = get().conversations.find((c) => c.id === parentConversationId);
-    const providerId = conv?.providerId;
-    const modelId = conv?.modelId;
+    const parent = get().conversations.find((c) => c.id === parentConversationId);
+    const task = parent?.backgroundTask;
+    if (task?.dismissed || task?.status === 'stopped' || task?.status === 'blocked'
+      || (task?.status === 'waiting' && task.reason !== 'delegation')) return;
+    const providerId = parent?.providerId;
+    const modelId = parent?.modelId;
     if (!providerId || !modelId) return;
     void runAgentLoop(parentConversationId, providerId, modelId).catch((e) => {
       console.error(`[background] resume failed for ${parentConversationId}:`, e);
@@ -5022,6 +5183,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       content,
       createdAt: Date.now(),
       isToolResult: true,
+      ...(get().conversations.find((conversation) => conversation.id === conversationId)?.backgroundTask
+        ? { backgroundApprovalResult: true } : {}),
     };
     await window.electronAPI.message.create(toolMsg);
 
@@ -5044,6 +5207,12 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     // result reaches the model — starting a second concurrent loop here would
     // double-stream this conversation.
     if (get().streamingRuns[conversationId]) return;
+    const task = get().conversations.find((conversation) => conversation.id === conversationId)?.backgroundTask;
+    if (task?.dismissed || task?.status === 'stopped') return;
+    if (task && isHolding(useInstallGateStore.getState().jobs)) {
+      await updateBackgroundTask(conversationId, { status: 'running', reason: undefined, reported: undefined });
+      return;
+    }
     await runAgentLoop(conversationId, providerId, modelId, { rsiExecution: resumeRsiExecution(conversationId), rsiResume: true });
   },
 
@@ -5141,8 +5310,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     gate.begin(id, label, kind);
     const convId = get().activeConversationId;
     if (convId && get().streamingRuns[convId]) {
-      get().stopGeneration(convId);
-      gate.markResume(convId);
+      const task = get().conversations.find((conversation) => conversation.id === convId)?.backgroundTask;
+      get().stopGeneration(convId, !!task);
+      if (!task) gate.markResume(convId);
     }
   },
 
@@ -5150,9 +5320,15 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     await maybeResumeAfterInstall();
   },
 
-  stopGeneration: (conversationId) => {
+  stopGeneration: (conversationId, forInstall) => {
     const convId = conversationId ?? get().activeConversationId;
     if (!convId) return;
+    const task = get().conversations.find((conversation) => conversation.id === convId)?.backgroundTask;
+    if (!forInstall && task && !task.dismissed && (task.status === 'running' || task.status === 'waiting')) {
+      void updateBackgroundTask(convId, {
+        status: 'stopped', reason: undefined, retryAt: undefined, retryCount: undefined, reported: undefined,
+      }).catch((error) => console.error('[background] Could not save stop:', error));
+    }
     if (useGoalStore.getState().goals[convId]?.status === 'running') useGoalStore.getState().setStatus(convId, 'paused');
     runControllers.get(convId)?.abort();
     window.electronAPI.chat.stop?.(convId);
@@ -5181,7 +5357,15 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       modelId = sel.id;
     }
     set({ error: null });
-    await deliverToConversation(convId, useLanguageStore.getState().t('continuePrompt'), providerId, modelId, { rsiExecution: resumeRsiExecution(convId), rsiResume: true, keepComposerImages: true, reuseTaskMemory: true });
+    const recoveringApproval = conv.backgroundTask?.status === 'waiting' && conv.backgroundTask.reason === 'approval';
+    if (recoveringApproval) {
+      const { useCodeChangesStore } = await import('./codeChanges.store');
+      if (useCodeChangesStore.getState().changes.some((change) => change.conversationId === convId && change.status === 'pending')) return;
+    }
+    const prompt = useLanguageStore.getState().t(recoveringApproval ? 'restoreBackgroundApprovalPrompt' : 'continuePrompt');
+    await deliverToConversation(convId, prompt, providerId, modelId, {
+      rsiExecution: resumeRsiExecution(convId), rsiResume: true, keepComposerImages: true, reuseTaskMemory: true, recoveringApproval,
+    });
   },
 
   // Drop the tail of the transcript, in storage as well as in memory, so a

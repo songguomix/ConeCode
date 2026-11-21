@@ -20,8 +20,8 @@ export function activateWorkspaceView(view: WorkspaceView): Promise<void> {
     }
     const matches = view === 'chat' ? isChatConversation : isWorkConversation;
     const current = chat.conversations.find((c) => c.id === chat.activeConversationId);
-    if (current && matches(current)) { setViewMode(view); return; }
-    const existing = chat.conversations.find((c) => isUnarchivedConversation(c) && matches(c));
+    if (current && !current.backgroundTask && matches(current)) { setViewMode(view); return; }
+    const existing = chat.conversations.find((c) => !c.backgroundTask && isUnarchivedConversation(c) && matches(c));
     if (existing) { await chat.setActiveConversation(existing.id); return; }
     const root = useWorkspaceStore.getState().rootPath;
     if (view === 'work' && !root) {

@@ -1,7 +1,8 @@
-import { memo, useMemo } from 'react';
-import { FiX, FiChevronRight, FiClock, FiCheck, FiLoader } from 'react-icons/fi';
+import { memo, useCallback, useMemo } from 'react';
+import { FiX, FiChevronRight, FiClock } from 'react-icons/fi';
 import { useBackgroundStore, type BackgroundTask } from '../../stores/background.store';
 import { useUIStore, useLanguageStore } from '../../stores';
+import { BackgroundTaskStatusIcon, backgroundTaskStatusKey } from './backgroundTaskPresentation';
 
 function ago(ts: number): string {
   const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
@@ -22,15 +23,11 @@ const BackgroundTaskRow = memo(function BackgroundTaskRow({ task, age, jump, rem
     <div className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl border border-transparent transition-colors [content-visibility:auto] [contain-intrinsic-height:auto_36px] ${
       task.unseen ? 'bg-[var(--accent-soft)]' : 'hover:bg-[var(--bg-2)]'
     }`}>
-      {task.status === 'running' ? (
-        <FiLoader size={13} className="text-[var(--accent)] animate-spin shrink-0" />
-      ) : (
-        <FiCheck size={13} className="text-[var(--success)] shrink-0" />
-      )}
+      <BackgroundTaskStatusIcon task={task} size={13} />
       <div className="flex-1 min-w-0">
         <p className="text-[13px] text-[var(--text-primary)] truncate">{task.title}</p>
         <p className="text-[11px] text-[var(--text-muted)]">
-          {t(task.status === 'running' ? 'backgroundRunning' : 'backgroundDone')}
+          {t(backgroundTaskStatusKey(task))}
           {' · '}{age}
           {task.unseen ? ` · ${t('backgroundUnseen')}` : ''}
         </p>
@@ -44,7 +41,7 @@ const BackgroundTaskRow = memo(function BackgroundTaskRow({ task, age, jump, rem
       </button>
       <button
         onClick={() => remove(task.conversationId)}
-        title={t('screenshotCancel')}
+        title={t(task.status === 'running' || task.status === 'waiting' ? 'cancel' : 'backgroundRemove')}
         className="w-7 h-7 rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--error)] hover:bg-[var(--bg-3)] transition-colors shrink-0 cursor-pointer"
       >
         <FiX size={13} />
@@ -54,9 +51,8 @@ const BackgroundTaskRow = memo(function BackgroundTaskRow({ task, age, jump, rem
 });
 
 /**
- * OpenCode-style background tasks: runs dispatched from the composer keep
- * going while the user chats elsewhere. Finished-unseen tasks badge the
- * sidebar entry; jump opens the conversation, × cancels/removes.
+ * Lists detached conversations from the Panels menu. Opening a conversation
+ * also closes this overlay so the transcript is visible immediately.
  */
 export default function BackgroundPanel() {
   const tasks = useBackgroundStore((s) => s.tasks);
@@ -66,6 +62,10 @@ export default function BackgroundPanel() {
   const { t } = useLanguageStore();
 
   const list = useMemo(() => Object.values(tasks).sort((a, b) => b.startedAt - a.startedAt), [tasks]);
+  const openConversation = useCallback((id: string) => {
+    jump(id);
+    closeBackground();
+  }, [jump, closeBackground]);
 
   return (
     <>
@@ -77,7 +77,7 @@ export default function BackgroundPanel() {
             {t('backgroundTasks')}
           </span>
           <span className="text-[11px] text-[var(--text-muted)]">{list.length}</span>
-          <button onClick={closeBackground} aria-label={t('screenshotCancel')}
+          <button onClick={closeBackground} aria-label={t('close')}
             className="w-7 h-7 rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:bg-[var(--bg-3)] transition-colors cursor-pointer">
             <FiX size={14} />
           </button>
@@ -93,7 +93,7 @@ export default function BackgroundPanel() {
               key={task.conversationId}
               task={task}
               age={ago(task.finishedAt ?? task.startedAt)}
-              jump={jump}
+              jump={openConversation}
               remove={remove}
             />
           ))}

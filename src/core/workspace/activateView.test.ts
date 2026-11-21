@@ -34,6 +34,17 @@ describe('shared Chat / Work / RSI destination navigation', () => {
     expect(states.chat.setActiveConversation).toHaveBeenCalledWith('work');
     expect(states.chat.newConversation).not.toHaveBeenCalled();
   });
+  it('returns to the ordinary chat history from a background task', async () => {
+    states.chat.conversations = [
+      { id: 'background', rootPath: null, backgroundTask: { status: 'running' } },
+      { id: 'chat', rootPath: null },
+    ];
+    states.chat.activeConversationId = 'background';
+
+    await activateWorkspaceView('chat');
+
+    expect(states.chat.setActiveConversation).toHaveBeenCalledWith('chat');
+  });
   it('keeps the active Chat visible while choosing a Work folder and after cancellation', async () => {
     states.root = null;
     states.chat.conversations = [{ id: 'chat', rootPath: null, isChatMode: true }];

@@ -5,6 +5,7 @@ import { useChatStore, useModelStore, useLanguageStore, useWorkspaceStore, useSe
 import { useMemoryV2Store, isMemoryV2Active } from '../../stores/memoryV2.store';
 import { useScreenshotStore } from '../../stores/screenshot.store';
 import { useBackgroundStore } from '../../stores/background.store';
+import { useCodeChangesStore } from '../../stores/codeChanges.store';
 import { prettyShortcut } from '../../core/screenshot/shortcut';
 import { useInstallGateStore, isHolding } from '../../stores/installGate.store';
 import {
@@ -38,6 +39,13 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
   const stopGeneration = useChatStore((s) => s.stopGeneration);
   const isSavingEdit = useChatStore((s) => activeConversationId ? !!s.messageEdits[activeConversationId] : false);
   const continuableConvId = useChatStore((s) => s.continuableConvId);
+  const waitingForApproval = useBackgroundStore((s) => {
+    const task = activeConversationId ? s.tasks[activeConversationId] : undefined;
+    return task?.status === 'waiting' && task.reason === 'approval';
+  });
+  const hasApproval = useCodeChangesStore((s) => waitingForApproval
+    && s.changes.some((change) => change.conversationId === activeConversationId && change.status === 'pending'));
+  const needsApprovalRequest = waitingForApproval && !hasApproval;
   const continueGeneration = useChatStore((s) => s.continueGeneration);
   const pushNotice = useChatStore((s) => s.pushNotice);
   const planMode = useChatStore((s) => s.planMode);
@@ -365,14 +373,14 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
       : "bg-[color-mix(in_srgb,var(--glass-surface)_60%,transparent)] backdrop-blur-2xl border-t border-[var(--glass-border)] transition-colors"
     }>
       {/* Interrupted-run resume: one click picks up where the reply stopped. */}
-      {continuableConvId === activeConversationId && !!activeConversationId && !isStreaming && !isSavingEdit && !installHolding && (
+      {(needsApprovalRequest || continuableConvId === activeConversationId) && !!activeConversationId && !isStreaming && !isSavingEdit && !installHolding && (
         <div className={`${columnClass} pt-2.5 flex justify-center`}>
           <button
             onClick={() => void continueGeneration()}
             className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-medium bg-[var(--accent-soft)] text-[var(--accent)] border border-[color-mix(in_srgb,var(--accent)_30%,transparent)] hover:bg-[var(--accent)] hover:text-white transition-all shadow-2xs cursor-pointer"
           >
             <FiPlay size={11} />
-            {t('continueOutput')}
+            {t(needsApprovalRequest ? 'restoreBackgroundApproval' : 'continueOutput')}
           </button>
         </div>
       )}
