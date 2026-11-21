@@ -8,6 +8,25 @@ import MessageContent from './MessageContent';
 import AppIcon from '../common/AppIcon';
 import { isHolding, useInstallGateStore } from '../../stores/installGate.store';
 
+const answeredQuestions = new WeakMap<Message[], Set<string>>();
+
+function hasQuestionReply(messages: Message[], id: string): boolean {
+  let answers = answeredQuestions.get(messages);
+  if (!answers) {
+    // Every question bubble observes the same history. Index it once per
+    // transcript revision so streaming updates can test each answer in O(1).
+    answers = new Set();
+    let hasReply = false;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const message = messages[i];
+      if (hasReply && message.isQuestion) answers.add(message.id);
+      if (message.role === 'user' && !message.isToolResult) hasReply = true;
+    }
+    answeredQuestions.set(messages, answers);
+  }
+  return answers.has(id);
+}
+
 /**
  * Memoized: historical rows must not re-parse markdown every time a stream
  * token lands. Props that change (editing, continuation) stay explicit.
@@ -36,32 +55,25 @@ function MessageBubble({
   const [answered, setAnswered] = useState(false);
   const [answerPending, setAnswerPending] = useState(false);
   const answerPendingRef = useRef(false);
-  const sendMessage = useChatStore((s) => s.sendMessage);
-  const hasUserAnswer = useChatStore((s) => {
-    if (!message.isQuestion) return false;
-    const index = s.messages.findIndex((item) => item.id === message.id);
-    return index >= 0 && s.messages.slice(index + 1).some((item) => item.role === 'user' && !item.isToolResult);
-  });
-  const answerBlocked = useChatStore((s) => !!message.isQuestion &&
+  const hasUserAnswer = useChatStore((s) => !!isQuestion && hasQuestionReply(s.messages, message.id));
+  const answerBlocked = useChatStore((s) => !!isQuestion &&
     (s.activeConversationId !== message.conversationId || !!s.streamingRuns[message.conversationId] || !!s.messageEdits[message.conversationId]));
-  const installHolding = useInstallGateStore((s) => !!message.isQuestion && isHolding(s.jobs));
+  const installHolding = useInstallGateStore((s) => !!isQuestion && isHolding(s.jobs));
   const questionAnswered = answered || hasUserAnswer;
-  const editMessage = useChatStore((s) => s.editMessage);
-  const saving = useChatStore((s) => !!s.messageEdits[message.conversationId]);
-  const selectedModel = useModelStore((s) => s.getSelectedModel());
-  const sendWithEnter = useSettingsStore((s) => s.sendWithEnter);
+  const saving = useChatStore((s) => isUser && !!s.messageEdits[message.conversationId]);
+  const selectedModel = useModelStore((s) => editing ? s.getSelectedModel() : undefined);
+  const sendWithEnter = useSettingsStore((s) => editing && s.sendWithEnter);
   const [draft, setDraft] = useState(message.content);
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const composingRef = useRef(false);
   const compositionEndAtRef = useRef(0);
-  const getSelectedModel = useModelStore((s) => s.getSelectedModel);
   const { t } = useLanguageStore();
   // Cost needs live pricing (models load after mount), so subscribe — the
   // memo still holds because models rarely change identity.
-  const pricing = useModelStore((s) =>
-    message.providerId ? s.models.get(message.providerId)?.find((m) => m.id === message.modelId)?.pricing : undefined,
+  const modelInfo = useModelStore((s) =>
+    message.providerId ? s.models.get(message.providerId)?.find((m) => m.id === message.modelId) : undefined,
   );
-  const cost = messageCost(message.promptTokens, message.completionTokens, pricing);
+  const cost = messageCost(message.promptTokens, message.completionTokens, modelInfo?.pricing);
   const cacheHitPercent = message.cacheHitTokens != null && message.promptTokens
     ? Math.round((100 * message.cacheHitTokens) / message.promptTokens)
     : null;
@@ -71,9 +83,6 @@ function MessageBubble({
       ? message.thinkingBlocks.map((b) => b.thinking).filter(Boolean).join('\n\n')
       : '');
   const hasThinking = Boolean(reasoningText || message.thinkingTime);
-  const modelInfo = useModelStore((s) =>
-    message.providerId ? s.models.get(message.providerId)?.find((m) => m.id === message.modelId) : undefined,
-  );
   const isConeCodeOutput = !!(message.isLocalNotice || message.isToolResult || message.role === 'system' || message.role === 'tool' || (!message.modelId && !message.providerId));
   const modelDisplayName = isConeCodeOutput ? 'ConeCode' : modelInfo?.name || message.modelId || 'ConeCode';
 
@@ -142,18 +151,19 @@ function MessageBubble({
 
   const handleSubmitEdit = () => {
     if (!selectedModel || !draft.trim() || saving) return;
-    void editMessage(message.id, draft, selectedModel.providerId, selectedModel.id);
+    void useChatStore.getState().editMessage(message.id, draft, selectedModel.providerId, selectedModel.id);
   };
 
   const handleAnswer = async (answer: string) => {
     if (questionAnswered || answerPendingRef.current || answerBlocked || installHolding) return;
-    const providerId = message.providerId || getSelectedModel()?.providerId || '';
-    const modelId = message.modelId || getSelectedModel()?.id || '';
+    const model = useModelStore.getState().getSelectedModel();
+    const providerId = message.providerId || model?.providerId || '';
+    const modelId = message.modelId || model?.id || '';
     if (!providerId || !modelId) return;
     answerPendingRef.current = true;
     setAnswerPending(true);
     try {
-      await sendMessage(answer, providerId, modelId);
+      await useChatStore.getState().sendMessage(answer, providerId, modelId);
       setAnswered(true);
     } catch {
       // sendMessage exposes the error in the transcript. Keep the options so

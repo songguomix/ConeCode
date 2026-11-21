@@ -1,10 +1,11 @@
 import { useRef, useEffect, useState, useMemo, useCallback, Fragment } from 'react';
-import { FiMap, FiPlay, FiEdit3, FiChevronDown, FiChevronRight, FiX, FiRefreshCw } from 'react-icons/fi';
+import { FiMap, FiPlay, FiEdit3, FiChevronDown, FiChevronRight, FiX } from 'react-icons/fi';
 import { useChatStore, useLanguageStore, useCodeChangesStore, useWorkspaceStore, useModelStore, useSettingsStore, useUIStore } from '../../stores';
 import { orderForDisplay } from '../../stores/chat.store';
+import type { CodeChange } from '../../stores/codeChanges.store';
 import ChatInput from './ChatInput';
 import MessageBubble from './MessageBubble';
-import MessageContent from './MessageContent';
+import StreamingReply from './StreamingReply';
 import MessageChanges from './InlineChanges';
 import CommandApprovalCard from './CommandApprovalCard';
 import QuestionPromptCard from './QuestionPromptCard';
@@ -19,30 +20,23 @@ import { commandsForConversation } from './approvalPresentation';
 import { formatUSD, messageCost } from '../../core/pricing/cost';
 import { completedWorkProcesses } from './workProcess';
 import { responseHealth } from '../../core/model/responseHealth';
+import { useConversationChanges } from './useConversationChanges';
 
 export default function ChatView() {
   const viewMode = useUIStore((s) => s.viewMode);
   const ensureWorkFolder = useChatStore((s) => s.ensureWorkFolder);
   const rawMessages = useChatStore((s) => s.messages);
   const activeConversationId = useChatStore((s) => s.activeConversationId);
-  // This conversation's own live run — other conversations may be streaming
-  // concurrently without affecting what is shown here.
-  const activeRun = useChatStore((s) => (activeConversationId ? s.streamingRuns[activeConversationId] : undefined));
-  const isStreaming = !!activeRun;
-  const streamingContent = activeRun?.content ?? '';
-  const streamingReasoning = activeRun?.reasoningContent ?? '';
-  const streamingStatus = activeRun?.status ?? null;
-  const streamingToolName = activeRun?.toolName ?? null;
-  // While a dropped stream is auto-retrying, the turn is reconnecting — not
-  // thinking. Hide the interrupted attempt's reasoning and the "thinking"
-  // placeholder so only the retry pill (plus any stitched reply text) shows.
-  const isRetrying = !!activeRun?.retry;
+  // Live tokens only update StreamingReply. History and the composer need to
+  // know when a run starts or ends, rather than on every streaming frame.
+  const isStreaming = useChatStore((s) => !!activeConversationId && !!s.streamingRuns[activeConversationId]);
   const error = useChatStore((s) => s.error);
   const clearError = useChatStore((s) => s.clearError);
   const { t } = useLanguageStore();
   const approvalMode = useSettingsStore((s) => s.approvalOverride ?? s.approvalMode);
   const addChange = useCodeChangesStore((s) => s.addChange);
-  const { selectedFile, fileContent } = useWorkspaceStore();
+  const selectedFile = useWorkspaceStore((s) => s.selectedFile);
+  const fileContent = useWorkspaceStore((s) => s.fileContent);
   const planMode = useChatStore((s) => s.planMode);
   const setPlanMode = useChatStore((s) => s.setPlanMode);
   const sendMessage = useChatStore((s) => s.sendMessage);
@@ -61,7 +55,7 @@ export default function ChatView() {
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const onEditMessage = useCallback((id: string) => setEditingMessageId(id), []);
   const onCancelEditMessage = useCallback(() => setEditingMessageId(null), []);
-  const isEditing = rawMessages.some((m) => m.id === editingMessageId);
+  const isEditing = editingMessageId !== null && rawMessages.some((m) => m.id === editingMessageId);
   useEffect(() => {
     setEditingMessageId(null);
     setExpandedProcesses(new Set());
@@ -93,15 +87,19 @@ export default function ChatView() {
   }, [messages, modelTable]);
   // A folded message whose approval card is still unresolved must stay visible:
   // hiding it left the agent waiting on an approval the user could not reach.
-  const changes = useCodeChangesStore((s) => s.changes);
-  const messagesWithChanges = useMemo(
-    () => new Set(changes.map((c) => c.messageId).filter(Boolean) as string[]),
-    [changes],
-  );
-  const awaitingApproval = useMemo(
-    () => new Set(changes.filter((c) => c.status === 'pending').map((c) => c.messageId).filter(Boolean) as string[]),
-    [changes],
-  );
+  const changes = useConversationChanges();
+  const { changesByMessage, awaitingApproval } = useMemo(() => {
+    const changesByMessage = new Map<string, CodeChange[]>();
+    const awaitingApproval = new Set<string>();
+    for (const change of changes) {
+      if (!change.messageId) continue;
+      const existing = changesByMessage.get(change.messageId);
+      if (existing) existing.push(change);
+      else changesByMessage.set(change.messageId, [change]);
+      if (change.status === 'pending') awaitingApproval.add(change.messageId);
+    }
+    return { changesByMessage, awaitingApproval };
+  }, [changes]);
   const workProcesses = useMemo(
     () => viewMode === 'work' ? completedWorkProcesses(messages, isStreaming || !!error, awaitingApproval) : [],
     [viewMode, messages, isStreaming, error, awaitingApproval],
@@ -191,10 +189,10 @@ export default function ChatView() {
     isNearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
   };
 
-  const scrollToBottom = () => {
+  const scrollToBottom = useCallback(() => {
     if (isNewChat || !isNearBottomRef.current) return;
     bottomRef.current?.scrollIntoView({ behavior: 'instant' });
-  };
+  }, [isNewChat]);
 
   useEffect(() => {
     // Reading older messages in one conversation must not disable following a
@@ -225,7 +223,7 @@ export default function ChatView() {
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages, streamingContent, streamingReasoning, isStreaming]);
+  }, [messages, isStreaming, scrollToBottom]);
 
   useEffect(() => {
     const lastMsg = messages[messages.length - 1];
@@ -320,6 +318,7 @@ export default function ChatView() {
           const process = processByMessage.get(msg.id);
           const processOpen = !!process && expandedProcesses.has(process.finalId);
           if (process && !processOpen && process.startId !== msg.id) return null;
+          const attachedChanges = changesByMessage.get(msg.id);
           return (
             <Fragment key={msg.id}>
               {process?.startId === msg.id && (
@@ -362,8 +361,8 @@ export default function ChatView() {
                 onEdit={onEditMessage}
                 onCancelEdit={onCancelEditMessage}
               />
-              {messagesWithChanges.has(msg.id) && (
-                <MessageChanges messageId={msg.id} onReviewCommand={setReviewCommandId} />
+              {attachedChanges && (
+                <MessageChanges changes={attachedChanges} onReviewCommand={setReviewCommandId} />
               )}
               </>}
             </Fragment>
@@ -376,43 +375,8 @@ export default function ChatView() {
           </div>
         )}
 
-        {isStreaming && (
-          <div className={`${streamContinues ? 'mt-1.5' : 'mt-6'}`}>
-            <div className="min-w-0">
-              {/* Auto-retry in progress after a network/model interruption —
-                  a live reconnecting pill instead of a silent freeze. */}
-              {activeRun?.retry && (
-                <div className="mb-3 inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-[color-mix(in_srgb,var(--warning)_30%,transparent)] bg-[color-mix(in_srgb,var(--warning)_10%,transparent)] text-[12px] font-medium text-[var(--warning)] anim-fade">
-                  <FiRefreshCw size={12} className="animate-spin shrink-0" />
-                  <span className="whitespace-nowrap">
-                    {activeRun.retry.max != null
-                      ? `${t('streamRetry')} ${activeRun.retry.attempt}/${activeRun.retry.max}`
-                      : `${t('streamRetryEndless')} · ${activeRun.retry.attempt}`}
-                  </span>
-                  <span className="flex items-center gap-0.5 pb-0.5">
-                    <span className="w-1 h-1 rounded-full bg-current animate-bounce" style={{ animationDelay: '0ms' }} />
-                    <span className="w-1 h-1 rounded-full bg-current animate-bounce" style={{ animationDelay: '150ms' }} />
-                    <span className="w-1 h-1 rounded-full bg-current animate-bounce" style={{ animationDelay: '300ms' }} />
-                  </span>
-                </div>
-              )}
-              {!isRetrying && streamingReasoning && (
-                <details open className="mb-3 rounded-xl border border-[var(--glass-border)] bg-[var(--glass-card)] px-3 py-2">
-                  <summary className="cursor-pointer text-xs font-medium text-[var(--text-secondary)]">{t('thinkingProcess')}</summary>
-                  <div className="mt-2 max-h-72 overflow-y-auto whitespace-pre-wrap break-words text-sm leading-relaxed text-[var(--text-secondary)]">{streamingReasoning}</div>
-                </details>
-              )}
-              {streamingContent
-                ? <MessageContent content={streamingContent} streaming />
-                : !isRetrying && (
-                  <span className="text-[15px] text-[var(--text-muted)] anim-caret">
-                    {streamingToolName
-                      ? `${t('callingTool')} ${streamingToolName}...`
-                      : streamingStatus === 'thinking' ? t('thinking') + '...' : '...'}
-                  </span>
-                )}
-            </div>
-          </div>
+        {isStreaming && activeConversationId && (
+          <StreamingReply conversationId={activeConversationId} continues={streamContinues} onUpdate={scrollToBottom} />
         )}
 
         {error && (

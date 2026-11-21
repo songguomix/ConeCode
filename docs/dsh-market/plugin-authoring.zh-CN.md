@@ -2,6 +2,8 @@
 
 从一个能执行的命令开始。仓库中的 `conecode-hello-dsh` 是标准 DSH 包，包含清单、Cordis 补丁和一个 JavaScript 入口。把它导入市场后，输入名字「松果」，命令会返回「你好，松果！」。[完整示例](../../examples/dsh-plugins/hello-dsh)
 
+开发 ConeCode 专用的 Node 插件时，参阅 [原生插件协议 v1 开发文档](native-plugin-protocol.zh-CN.md)。
+
 ## 运行第一个插件
 
 1. 使用桌面版 ConeCode。开发仓库可在项目根目录执行 `npm ci`、`npm run dev`。DSH 内置宿主首次安装需要能访问 npm 仓库，或者已有对应包的 npm 缓存。
@@ -86,11 +88,11 @@ ConeCode 内置宿主的基线为 DSH `0.2.2-rc.1`。官方 Web 使用本机安�
 | Skill | `ctx.skills.register(...)` 或 `ctx.skills.registerProvider(...)` | 在「运行」中列出 Skill 并打开正文，验证动态 provider 的 `list()` 和 `get(candidate)` |
 | DSH 模型适配器 | 插件注入 `llm`，在官方 DSH LLM 服务上注册 provider | 由另一个插件调用 `ctx.llm.listProviders()` 查看注册名，卸载后再检查一次。DSH Web 提供官方模型设置界面 |
 | 持久化 | `ctx.storageDomain.open(spec)` | 在 profile 内保存数据，重启运行时后读取；在 Cordis 作用域释放时关闭 domain |
-| 原生插件 | `conecode.plugin.json` 的 `conecode.apiVersion: 1`、`entry`、`capabilities` 和入口导出的 `activate(api, config)` | 仅请求用到的服务。返回的清理函数应释放插件创建的资源 |
+| 原生插件 | `conecode.plugin.json` 的 `conecode.apiVersion: 1`、`entry` 和入口导出的 `activate(api, config)` | 在 `capabilities` 记录用到的服务。返回的清理函数应释放插件创建的资源 |
 
 配置编辑器每个框对应一个行 ID，填写该行的配置对象。插件拥有定时器、订阅或文件句柄时，用 Cordis `ctx.effect` 或原生插件的清理函数释放资源。保存配置、禁用和更新都可能重新创建实例。卸载时可以清理插件的私有数据目录。通过 `storageDomain` 写入共享后端的数据，应由插件按自己的数据模型管理。普通配置会保存为可读 JSON，凭据请使用对应宿主的凭据机制。[存储示例和接口说明](plugin-authoring.md) · [原生插件完整示例](../../examples/native-plugins/hello-conecode)
 
-## 分发与收录
+## DSH 包分发与收录
 
 - **本地开发**。直接导入插件目录。通过 `npm pack --dry-run` 检查清单、全部补丁、编译后的入口和客户端资源是否随包发布。用户默认禁用依赖生命周期脚本，建议在发布前编译产物。
 - **Git**。在「导入仓库」填写公开 HTTPS 仓库或 `github:owner/repo`，可填写标签、分支或提交。monorepo 填写包含插件清单的子目录。市场预览解析后的提交，确认后安装该提交。
@@ -122,7 +124,7 @@ ConeCode 内置宿主的基线为 DSH `0.2.2-rc.1`。官方 Web 使用本机安�
 | 修改代码或配置后行为仍旧 | 确认当前 profile、安装版本和实例 ID。代码变更后安装新版本，配置变更后重新运行该行的贡献 |
 | Web 主题安装成功 | 打开 DSH Web 设置并切换主题，确认页面实际变化。`dsh-theme@1.0.1` 实测可列出 30 款主题，切换 `forest` 后样式立即应用 |
 
-在本仓库根目录可以复现示例和真实插件回归。先构建 worker，然后用 Electron 内置的 Node 执行。以下为 macOS/Linux 的 shell 命令，Windows 可在 PowerShell 中用 `$env:变量名 = '1'` 设置同名环境变量。
+在本仓库根目录可以复现 DSH 示例和真实插件回归。先构建 worker，然后用 Electron 内置的 Node 执行。以下为 macOS/Linux 的 shell 命令，Windows 可在 PowerShell 中用 `$env:变量名 = '1'` 设置同名环境变量。
 
 ```sh
 npm run build

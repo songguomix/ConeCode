@@ -29,7 +29,7 @@ certification badges, download counts or ratings.
 
 Choose **Install in DSH Web** on an npm version's detail page to run a theme, client module, or plugin that needs the full Web profile. **Sources & runtime → Open DSH Web** reopens it. ConeCode verifies the selected npm archive and installs it through the local official `dsh` command. Install DeepSeek Harness Desktop or a compatible CLI with its package manager. Each ConeCode profile gets its own `official-web` home. The browser connects to a loopback listener, and DSH Web manages the plugins in that home. Host-side checks and badges below refer to the embedded ConeCode worker. The official runtime enforces its own package compatibility rules.
 
-The Chinese authoring guide walks through local installation, configuration, publishing and both runtime choices. [开放插件开发指南](plugin-authoring.zh-CN.md)
+The developer guides cover DSH packages and the ConeCode-native v1 manifest, API, lifecycle and verification steps. [开放插件开发指南](plugin-authoring.zh-CN.md) · [ConeCode 原生插件协议](native-plugin-protocol.zh-CN.md)
 
 ## Run
 

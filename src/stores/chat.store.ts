@@ -17,7 +17,7 @@ import { useFreeStore } from './free.store';
 import type { MemoryEntry } from '../core/memory/memory';
 import { isVolatileMemory } from '../core/memory/durability';
 import { formatMemoryFiles } from '../core/memory/memoryFiles';
-import { agentModePrompt, RSI_COST_LOCK_PROMPT, type AgentMode } from '../core/agents/modePrompts';
+import { agentModePrompt, RSI_COST_LOCK_PROMPT, RSI_UI_DESIGN_PROMPT, type AgentMode } from '../core/agents/modePrompts';
 import {
   defaultRsiState, isRsiConversation, rsiDirectionPrompt, readRsiProgress, rsiWorkspaceDir,
   type RsiConversationState, type RsiDirectionConfig, type RsiRunRef,
@@ -68,6 +68,7 @@ import { normalizeWebUrl, isLocalUrl, parseResultRef } from '../core/browser/pol
 import { toSample, checkBreaches, describeBreach, formatBytes, DEFAULT_THRESHOLDS } from '../core/monitor/perf';
 import { useMonitorStore } from './monitor.store';
 import {
+  ConstraintViolationError,
   gptDetector,
   hardConstraintInjector,
   postGenerationGuard,
@@ -241,9 +242,8 @@ export interface StreamRunState {
 
 const EMPTY_RUN: StreamRunState = { content: '', reasoningContent: '', status: null, toolName: null, retry: null, streamedTokens: 0 };
 
-// Token deltas arrive far faster than a frame. A setState per chunk re-renders
-// the whole transcript (markdown re-parse + every MessageBubble). Buffer
-// text/reasoning appends and flush once per animation frame instead.
+// Token deltas arrive faster than a frame. Flush all runs together so live
+// replies and store subscribers see one update per animation frame.
 type RunDelta = {
   text: string;
   reasoning: string;
@@ -309,7 +309,7 @@ function flushRunDeltas() {
       }
       runs[convId] = next;
     }
-    return changed ? { streamingRuns: runs } : ({} as any);
+    return changed ? { streamingRuns: runs } : s;
   });
 }
 
@@ -332,7 +332,7 @@ function startRun(convId: string): AbortController {
 function patchRun(convId: string, patch: Partial<StreamRunState>) {
   useChatStore.setState((s) => {
     const current = s.streamingRuns[convId];
-    if (!current) return {} as any; // run already ended — drop late chunks
+    if (!current) return s; // run already ended — drop late chunks
     const next: StreamRunState = { ...current, ...patch };
     if (patch.streamedTokens === undefined && (patch.content !== undefined || patch.reasoningContent !== undefined)) {
       next.streamedTokens = estimateTokens(next.content) + estimateTokens(next.reasoningContent);
@@ -2118,11 +2118,37 @@ ${parallelRule}
   return systemMessages;
 }
 
+type RsiDesignReference = { path: string; content: string };
+
+async function readRsiDesignReference(rootPath: string): Promise<RsiDesignReference | null> {
+  const fs = window.electronAPI?.fs;
+  const root = await fs?.realpath?.(rootPath);
+  if (!root) return null;
+  const separator = root.startsWith('/') ? '/' : '\\';
+  const canonicalPrefix = root.endsWith(separator) ? root : root + separator;
+  const filePrefix = rootPath.endsWith('/') || (separator === '\\' && rootPath.endsWith('\\'))
+    ? rootPath : rootPath + separator;
+  // Read only a small project brief. Context formatting applies a separate,
+  // user-configured limit to the text sent to the model.
+  const maxDesignBytes = 256 * 1024;
+  for (const filename of ['DESIGN.md', 'design.md']) {
+    const path = filePrefix + filename;
+    const realPath = await fs.realpath(path);
+    if (!realPath?.startsWith(canonicalPrefix)) continue;
+    const stat = await fs.stat(realPath);
+    if (!stat?.isFile || stat.size > maxDesignBytes) continue;
+    const content = await fs.readFile(realPath);
+    if (content?.trim() && !content.includes('\0')) return { path, content };
+  }
+  return null;
+}
+
 function buildRuntimeContext(
   ws: TaskWorkspace,
   isChatMode: boolean,
   now: Date,
   memory: TaskMemoryContext,
+  rsiDesign: RsiDesignReference | null,
 ): ContentPart[] {
   const { autoIncludeFileContext, maxContextFileSize } = useSettingsStore.getState();
   const localDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
@@ -2132,7 +2158,10 @@ Environment: ${platformLabel()} · ${localDate} ${localTime}
 Workspace: ${isChatMode ? 'None (Chat Mode)' : describeRoots(ws)}
 Open file: ${isChatMode ? 'None' : (ws.selectedFile || 'None')}` }];
 
-  if (!isChatMode && autoIncludeFileContext && ws.selectedFile && ws.fileContent != null) {
+  if (rsiDesign) {
+    parts.push({ type: 'text', text: formatContextFile('UI design requirements', rsiDesign.path, rsiDesign.content, maxContextFileSize) });
+  }
+  if (!isChatMode && autoIncludeFileContext && ws.selectedFile && ws.selectedFile !== rsiDesign?.path && ws.fileContent != null) {
     if (ws.selectedFileIsImage) {
       parts.push({ type: 'text', text: `[Open image: ${ws.selectedFile}]` });
       parts.push({ type: 'image_url', image_url: { url: ws.fileContent, detail: 'auto' } });
@@ -2143,7 +2172,7 @@ Open file: ${isChatMode ? 'None' : (ws.selectedFile || 'None')}` }];
   if (!isChatMode) {
     for (const file of ws.contextFiles) {
       // Explicitly attached images already ride the transcript's user message.
-      if (file.isImage && file.dataUrl) continue;
+      if (file.path === rsiDesign?.path || (file.isImage && file.dataUrl)) continue;
       parts.push({ type: 'text', text: formatContextFile('Attached', file.path, file.content, maxContextFileSize) });
     }
     if (memory.records) parts.push({ type: 'text', text: memory.records });
@@ -2545,7 +2574,6 @@ async function runAgentLoop(
     records: isMemoryV2Active() ? '' : useMemoryStore.getState().promptBlock(taskWorkspace.rootPath),
     wiki: '',
   };
-  const runtimeContext = buildRuntimeContext(taskWorkspace, isChatMode, new Date(turnStartTime), taskMemory);
   const planMode = get().planMode;
   const reviewMode = get().reviewMode;
   // The conversation record owns its execution protocol: a live RSI run must
@@ -2553,6 +2581,12 @@ async function runAgentLoop(
   // the global mode selector changes underneath it.
   const agentMode: AgentMode = convRecord?.agentMode ?? get().agentMode;
   const reasoningEffort = get().reasoningEffort;
+  const useRsiDesign = convRecord?.agentMode === 'rsi' && !isChatMode;
+  const rsiDesign = useRsiDesign && taskWorkspace.rootPath
+    ? await readRsiDesignReference(taskWorkspace.rootPath).catch(() => null)
+    : null;
+  if (!ownsRun() || abortController.signal.aborted) return;
+  const runtimeContext = buildRuntimeContext(taskWorkspace, isChatMode, new Date(turnStartTime), taskMemory, rsiDesign);
   // A dedicated RSI conversation carries its own direction config; it is
   // injected after the mode overlay so the protocol always sees the frozen
   // goal inputs and its per-conversation archive path.
@@ -2655,6 +2689,7 @@ async function runAgentLoop(
     /** Raw accumulated segment texts (normalized once, on the totals). */
     rawContent: string;
     rawReasoning: string;
+    usedGptConstraints: boolean;
     promptTokens: number;
     completionTokens: number;
     tokens: number;
@@ -2666,6 +2701,7 @@ async function runAgentLoop(
   }
   const freshStitch = (): StitchState => ({
     active: false, forIteration: -1, rawContent: '', rawReasoning: '',
+    usedGptConstraints: false,
     promptTokens: 0, completionTokens: 0, tokens: 0, cacheHitTokens: 0, cacheUsageSegments: 0, thinkingBlocks: undefined, segments: 0,
   });
   let stitch = freshStitch();
@@ -2735,6 +2771,7 @@ async function runAgentLoop(
           agentMode,
           isChatMode,
         ),
+        ...(useRsiDesign ? [{ role: 'system' as const, content: RSI_UI_DESIGN_PROMPT }] : []),
         // This conversation's own RSI direction (objective, metrics, scope,
         // constraints) and its isolated archive path — after the mode overlay
         // so it is never diluted by other protocol text.
@@ -2920,6 +2957,7 @@ async function runAgentLoop(
               // The interrupted attempt's thinking is discarded, not stitched:
               // only streamed reply text resumes across a retry.
               rawReasoning: '',
+              usedGptConstraints: requestUsedGptConstraints,
               promptTokens: 0,
               completionTokens: 0,
               tokens: 0,
@@ -2984,6 +3022,7 @@ async function runAgentLoop(
       stitch.rawReasoning += segRawReasoning
         ? (stitch.rawReasoning ? '\n' : '') + segRawReasoning
         : '';
+      stitch.usedGptConstraints ||= requestUsedGptConstraints;
       stitch.promptTokens += authoritative.promptTokens || 0;
       stitch.completionTokens += authoritative.completionTokens || 0;
       stitch.tokens += authoritative.tokens || 0;
@@ -3002,10 +3041,6 @@ async function runAgentLoop(
         .filter((s) => s && s.trim())
         .join('\n');
 
-      if (requestUsedGptConstraints && getGptConstraintStatus(providerId, modelId) === 'ENABLED' && finalContent.trim()) {
-        postGenerationGuard.enforce(finalContent, 'ENABLED');
-      }
-
       // Some models (e.g. Xiaomi mimo-v2.5-pro) put their ENTIRE reply — including
       // the ```json action — into reasoning_content and leave content empty. If
       // content is empty but reasoning has text, promote the reasoning so the
@@ -3016,6 +3051,12 @@ async function runAgentLoop(
       if (!finalContent.trim() && finalReasoningContent.trim() && nativeCalls.length === 0) {
         finalContent = normalizeBareJsonActions(normalizeToolCalls(finalReasoningContent));
         finalReasoningContent = '';
+      }
+
+      // A model selection can change while this conversation streams. Guard
+      // the reply using the constraints applied to its accumulated segments.
+      if (stitch.usedGptConstraints && finalContent.trim()) {
+        postGenerationGuard.enforce(finalContent, 'ENABLED');
       }
 
       // Ground-truth reasoning detection: if this turn produced any reasoning (a
@@ -4149,8 +4190,8 @@ async function runAgentLoop(
     // buffer missing its tail ("输出一半就没了"). Flush first so the salvaged
     // partial includes everything that actually arrived.
     flushRunDeltas();
-    const partial = runBuffer().content;
-    const partialReasoning = runBuffer().reasoningContent;
+    // Rejected output must stay out of the transcript and future requests.
+    const { content: partial, reasoningContent: partialReasoning } = e instanceof ConstraintViolationError ? EMPTY_RUN : runBuffer();
     console.warn('[runAgentLoop] stream interrupted', {
       name: e?.name, message: e?.message, userStopped,
       partialLen: partial.length, partialReasoningLen: partialReasoning.length,
@@ -4338,9 +4379,10 @@ interface ChatStore {
   /**
    * One-click resume: sends a "continue where you stopped" turn into the
    * stalled conversation. The prompt is persisted as a normal user message so
-   * the transcript stays honest about what happened.
+   * the transcript stays honest about what happened. An explicit picker model
+   * replaces the previous model for this conversation.
    */
-  continueGeneration: (conversationId?: string) => Promise<void>;
+  continueGeneration: (conversationId?: string, model?: { providerId: string; id: string }) => Promise<void>;
   compactConversation: (providerId: string, modelId: string) => Promise<void>;
   pushNotice: (markdown: string, providerId?: string, modelId?: string) => Promise<void>;
   /** Delete `messageId` and every message after it (checkpoint rollback). */
@@ -5119,15 +5161,15 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
   clearError: () => set({ error: null }),
 
-  continueGeneration: async (conversationId) => {
+  continueGeneration: async (conversationId, model) => {
     const convId = conversationId ?? get().activeConversationId;
     if (!convId) return;
     if (get().streamingRuns[convId] || get().messageEdits[convId]) return;
     if (isHolding(useInstallGateStore.getState().jobs)) return;
-    if (!get().conversations.some((c) => c.id === convId)) return;
     const conv = get().conversations.find((c) => c.id === convId);
-    let providerId = conv?.providerId;
-    let modelId = conv?.modelId;
+    if (!conv) return;
+    let providerId = model?.providerId ?? conv.providerId;
+    let modelId = model?.id ?? conv.modelId;
     if (!providerId || !modelId) {
       const { useModelStore } = await import('./model.store');
       const sel = useModelStore.getState().getSelectedModel();

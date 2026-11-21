@@ -3,10 +3,8 @@ import { createPortal } from 'react-dom';
 import { FiFile, FiMonitor, FiX, FiPlus } from 'react-icons/fi';
 import { useUIStore, useWorkspaceStore, useLanguageStore, usePreviewStore, useAiHighlightsStore } from '../../stores';
 
-// Native traffic lights float over the top-left on macOS (Electron
-// trafficLightPosition x:14 y:12 ≈ 60px wide), so the tab strip needs a left
-// pad to keep its first tab clickable when no sidebar covers them. Other
-// platforms get a true zero.
+// Native macOS traffic lights overlap the left editor when the sidebar is closed.
+// The preview dock is on the right, beyond the window controls.
 const IS_MAC = typeof navigator !== 'undefined' &&
   (/Mac/.test(navigator.platform || '') || /Macintosh/.test(navigator.userAgent || ''));
 
@@ -33,6 +31,7 @@ export default function WorkbenchTabs({ active, subtitle, actions }: Props) {
   const aiLines = useAiHighlightsStore((s) => s.lines);
   const previewOpen = useUIStore((s) => s.previewOpen);
   const sidebarOpen = useUIStore((s) => s.sidebarOpen);
+  const windowControlsInset = active === 'code' && !sidebarOpen && IS_MAC ? 74 : undefined;
   const closePreview = useUIStore((s) => s.closePreview);
   const setWorkbenchTab = useUIStore((s) => s.setWorkbenchTab);
   const previewState = usePreviewStore((s) => s.state);
@@ -73,7 +72,7 @@ export default function WorkbenchTabs({ active, subtitle, actions }: Props) {
   return (
     <div
       className="flex items-center bg-[color-mix(in_srgb,var(--glass-surface)_80%,transparent)] backdrop-blur-xl border-b border-[var(--glass-border)] shrink-0 min-w-0"
-      style={{ WebkitAppRegion: 'drag', ...(!sidebarOpen && IS_MAC ? { paddingLeft: 74 } : null) } as any}
+      style={{ WebkitAppRegion: 'drag', paddingLeft: windowControlsInset } as React.CSSProperties}
     >
       <div ref={stripRef} className="flex items-center shrink min-w-0 overflow-x-auto" role="tablist" style={{ WebkitAppRegion: 'no-drag' } as any}>
         {openTabs.map((path) => {

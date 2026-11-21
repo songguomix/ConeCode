@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { FiArrowLeft, FiChevronRight, FiMessageSquare, FiUsers, FiX } from 'react-icons/fi';
 import { useChatStore, useLanguageStore, useUIStore } from '../../stores';
 import { useSubAgentHistory } from '../../stores/subAgents.store';
@@ -31,7 +31,26 @@ function RunStatus({ status }: { status: SubAgentRun['status'] }) {
   );
 }
 
-function Transcript({ run }: { run: SubAgentRun }) {
+const TranscriptEntry = memo(function TranscriptEntry({ message }: { message: SubAgentRun['messages'][number] }) {
+  const { t } = useLanguageStore();
+  return message.role === 'tool' ? (
+    <details className="rounded-lg border border-[var(--glass-border)] bg-[var(--bg-1)] px-3 py-2">
+      <summary className="cursor-pointer text-xs font-medium text-[var(--text-secondary)]">
+        {t('toolResult')}{message.name && <code className="ml-2">{message.name}</code>}
+      </summary>
+      <pre className="mt-2 whitespace-pre-wrap font-mono text-xs leading-relaxed">{message.content}</pre>
+    </details>
+  ) : (
+    <div>
+      <h3 className="mb-1 flex items-center gap-1.5 text-xs font-medium text-[var(--text-secondary)]">
+        <FiUsers size={13} aria-hidden="true" />{t('subAgent')}
+      </h3>
+      <MessageContent content={message.content} toolCalls={message.toolCalls} />
+    </div>
+  );
+});
+
+const Transcript = memo(function Transcript({ run }: { run: SubAgentRun }) {
   const { t } = useLanguageStore();
   return (
     <div className="space-y-4 p-4 text-[var(--text-primary)] [overflow-wrap:anywhere] select-text">
@@ -42,25 +61,32 @@ function Transcript({ run }: { run: SubAgentRun }) {
         </div>
         <p className="whitespace-pre-wrap text-sm leading-relaxed">{run.task}</p>
       </section>
-      {run.messages.map((message, index) => message.role === 'tool' ? (
-        <details key={index} className="rounded-lg border border-[var(--glass-border)] bg-[var(--bg-1)] px-3 py-2">
-          <summary className="cursor-pointer text-xs font-medium text-[var(--text-secondary)]">
-            {t('toolResult')}{message.name && <code className="ml-2">{message.name}</code>}
-          </summary>
-          <pre className="mt-2 whitespace-pre-wrap font-mono text-xs leading-relaxed">{message.content}</pre>
-        </details>
-      ) : (
-        <div key={index}>
-          <h3 className="mb-1 flex items-center gap-1.5 text-xs font-medium text-[var(--text-secondary)]">
-            <FiUsers size={13} aria-hidden="true" />{t('subAgent')}
-          </h3>
-          <MessageContent content={message.content} toolCalls={message.toolCalls} />
-        </div>
-      ))}
+      {run.messages.map((message, index) => <TranscriptEntry key={index} message={message} />)}
       {run.detail && <p className="whitespace-pre-wrap text-sm leading-relaxed text-[var(--text-secondary)]">{run.detail}</p>}
     </div>
   );
-}
+});
+
+const RunRow = memo(function RunRow({ id, task, startedAt, status, time, select }: Pick<SubAgentRun, 'id' | 'task' | 'startedAt' | 'status'> & {
+  time: Intl.DateTimeFormat;
+  select: (id: string) => void;
+}) {
+  return (
+    <li className="[content-visibility:auto] [contain-intrinsic-height:auto_80px]">
+      <button type="button" onClick={() => select(id)} title={task}
+        className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-[var(--bg-2)]">
+        <span className="min-w-0 flex-1">
+          <span className="line-clamp-2 text-sm font-medium text-[var(--text-primary)] [overflow-wrap:anywhere]">{task}</span>
+          <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+            <RunStatus status={status} />
+            <time className="text-[11px] text-[var(--text-muted)]">{time.format(startedAt)}</time>
+          </span>
+        </span>
+        <FiChevronRight size={14} className="shrink-0 text-[var(--text-muted)]" aria-hidden="true" />
+      </button>
+    </li>
+  );
+});
 
 export default function SubAgentPanel() {
   const { t, locale } = useLanguageStore();
@@ -73,8 +99,11 @@ export default function SubAgentPanel() {
   useEffect(() => { dialog.current?.showModal(); }, []);
 
   const titles = useMemo(() => new Map(conversations.map((c) => [c.id, c.title])), [conversations]);
+  const selected = selectedId === null ? undefined : runs.find((run) => run.id === selectedId && titles.has(run.conversationId));
+  const showingList = !selected;
   const groups = useMemo(() => {
     const byConversation = new Map<string, SubAgentRun[]>();
+    if (!showingList) return byConversation;
     for (const run of [...runs].sort((a, b) => b.startedAt - a.startedAt)) {
       if (!titles.has(run.conversationId)) continue;
       const existing = byConversation.get(run.conversationId);
@@ -82,8 +111,7 @@ export default function SubAgentPanel() {
       else byConversation.set(run.conversationId, [run]);
     }
     return byConversation;
-  }, [runs, titles]);
-  const selected = runs.find((run) => run.id === selectedId && titles.has(run.conversationId));
+  }, [runs, titles, showingList]);
   const time = useMemo(() => new Intl.DateTimeFormat(locale === 'zhHant' ? 'zh-Hant' : locale, {
     year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
   }), [locale]);
@@ -130,19 +158,7 @@ export default function SubAgentPanel() {
                     <span className="truncate" title={titles.get(conversationId)}>{titles.get(conversationId)}</span>
                   </h3>
                   <ul>{children.map((run) => (
-                    <li key={run.id}>
-                      <button type="button" onClick={() => setSelectedId(run.id)} title={run.task}
-                        className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-[var(--bg-2)]">
-                        <span className="min-w-0 flex-1">
-                          <span className="line-clamp-2 text-sm font-medium text-[var(--text-primary)] [overflow-wrap:anywhere]">{run.task}</span>
-                          <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
-                            <RunStatus status={run.status} />
-                            <time className="text-[11px] text-[var(--text-muted)]">{time.format(run.startedAt)}</time>
-                          </span>
-                        </span>
-                        <FiChevronRight size={14} className="shrink-0 text-[var(--text-muted)]" aria-hidden="true" />
-                      </button>
-                    </li>
+                    <RunRow key={run.id} id={run.id} status={run.status} task={run.task} startedAt={run.startedAt} time={time} select={setSelectedId} />
                   ))}</ul>
                 </section>
               ))}

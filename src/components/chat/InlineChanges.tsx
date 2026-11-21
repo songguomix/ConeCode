@@ -1,4 +1,5 @@
 import { memo, useMemo, useState } from 'react';
+import { shallow } from 'zustand/shallow';
 import { FiCheck, FiX, FiRotateCcw, FiTerminal, FiTrash, FiCopy, FiMove, FiEdit, FiFilePlus, FiAlertTriangle } from 'react-icons/fi';
 import { useCodeChangesStore, useLanguageStore, useChatStore } from '../../stores';
 import { checkpointRewindIndex, type CodeChange } from '../../stores/codeChanges.store';
@@ -40,24 +41,24 @@ function opColor(change: CodeChange) {
  * File diffs stay inline. Commands only leave a compact status row here and are
  * reviewed in the single dialog owned by ChatView, keeping the transcript small.
  */
-export default memo(MessageChanges);
+export default memo(MessageChanges, (previous, next) =>
+  previous.onReviewCommand === next.onReviewCommand && shallow(previous.changes, next.changes));
 
 function MessageChanges({
-  messageId,
+  changes,
   onReviewCommand,
 }: {
-  messageId: string;
+  changes: CodeChange[];
   onReviewCommand: (changeId: string) => void;
 }) {
-  const changes = useCodeChangesStore((s) => s.changes);
   const applyChange = useCodeChangesStore((s) => s.applyChange);
   const revertChange = useCodeChangesStore((s) => s.revertChange);
   const { t } = useLanguageStore();
   const [busy, setBusy] = useState(false);
 
   const mine = useMemo(
-    () => changes.filter((c) => c.messageId === messageId).sort((a, b) => a.createdAt - b.createdAt),
-    [changes, messageId],
+    () => [...changes].sort((a, b) => a.createdAt - b.createdAt),
+    [changes],
   );
   if (mine.length === 0) return null;
 

@@ -174,6 +174,76 @@ describe('Cordis runtime host', () => {
     }
   });
 
+  it.each([
+    ['named activate', 'export { start as activate };'],
+    ['default object', 'export default { activate: start };'],
+    ['default function', 'export default start;'],
+  ])('loads the native v1 facade through a %s export', async (_label, moduleExport) => {
+    const dir = tempDir();
+    const entry = path.join(dir, 'index.mjs');
+    fs.writeFileSync(entry, `
+      function start(api, config) {
+        api.tools.register({
+          name: 'inspect_native_api',
+          execute() {
+            return {
+              plugin: api.plugin,
+              config,
+              commands: typeof api.commands.register,
+              skills: typeof api.skills.registerProvider,
+              logger: typeof api.logger.info,
+            };
+          },
+        });
+      }
+      ${moduleExport}
+    `);
+    const host = new RuntimeHost();
+    try {
+      const spec = { ...nativeSpec(), packageDir: dir, nativeEntryPath: entry };
+      expect((await host.load(spec)).status).toBe('loaded');
+      expect(await host.invokeTool(spec.id, 'native', 'inspect_native_api', {})).toMatchObject({
+        ok: true,
+        value: {
+          plugin: { id: spec.id, name: spec.name }, config: {},
+          commands: 'function', skills: 'function', logger: 'function',
+        },
+      });
+    } finally {
+      await host.dispose();
+    }
+  });
+
+  it('aborts native skill providers even if the plugin disposer throws', async () => {
+    const dir = tempDir();
+    const entry = path.join(dir, 'index.mjs');
+    fs.writeFileSync(entry, `
+      import { writeFileSync } from 'node:fs';
+      export function activate(api) {
+        api.skills.registerProvider(({ signal }) => {
+          signal.addEventListener('abort', () => writeFileSync(new URL('./provider-aborted', import.meta.url), ''), { once: true });
+          return {
+            name: 'native-provider',
+            list: () => [{ name: 'dynamic-skill' }],
+            get: (candidate) => ({ ...candidate, content: 'Dynamic skill' }),
+          };
+        });
+        return () => { throw new Error('native disposer failed'); };
+      }
+    `);
+    const host = new RuntimeHost();
+    try {
+      const spec = { ...nativeSpec(), packageDir: dir, nativeEntryPath: entry };
+      expect((await host.load(spec)).status).toBe('loaded');
+      expect(await host.getSkill(spec.id, 'dynamic-skill')).toMatchObject({ content: 'Dynamic skill' });
+      await host.unload(spec.id);
+      expect(fs.existsSync(path.join(dir, 'provider-aborted'))).toBe(true);
+      expect(await host.listSkills()).toEqual([]);
+    } finally {
+      await host.dispose();
+    }
+  });
+
   it('reports an activation throw as load-failed and leaves no contribution behind', async () => {
     const dir = tempDir();
     fs.writeFileSync(path.join(dir, 'broken.mjs'), `

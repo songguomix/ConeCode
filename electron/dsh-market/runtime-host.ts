@@ -442,12 +442,17 @@ export class RuntimeHost {
 
   private async unloadRows(plugin: PluginRuntime): Promise<void> {
     for (const row of plugin.rows.reverse()) {
-      try {
-        if (row.nativeDispose) await withTimeout(Promise.resolve(row.nativeDispose()), 10_000, 'disposing native plugin');
-        if (row.fiber) await withTimeout(Promise.resolve(row.fiber.dispose()), 10_000, 'unloading row');
-        if (row.hostFiber) await withTimeout(Promise.resolve(row.hostFiber.dispose()), 10_000, 'disposing row host');
-      } catch (error) {
-        this.log(`[${plugin.spec.name}] cleanup warning: ${errorText(error)}`, 'warn');
+      for (const [label, dispose] of [
+        ['disposing native plugin', () => row.nativeDispose?.()],
+        ['unloading row', () => row.fiber?.dispose()],
+        ['disposing row host', () => row.hostFiber?.dispose()],
+      ] as const) {
+        try {
+          const task = dispose();
+          if (task !== undefined) await withTimeout(Promise.resolve(task), 10_000, label);
+        } catch (error) {
+          this.log(`[${plugin.spec.name}] cleanup warning: ${errorText(error)}`, 'warn');
+        }
       }
       row.contributions = emptyContributions();
     }

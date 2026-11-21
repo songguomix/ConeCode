@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { memo, useCallback, useState, useEffect, useRef, useMemo } from 'react';
 import {
   FiActivity,
   FiAlertTriangle,
@@ -48,6 +48,18 @@ import './rsi-layout.css';
 
 const isAiSide = (m: Message) => m.role === 'assistant' || m.role === 'tool';
 
+const TranscriptHistory = memo(function TranscriptHistory({ messages }: { messages: Message[] }) {
+  return messages.map((message, index) => (
+    <MessageBubble
+      key={message.id}
+      message={message}
+      isContinuation={index > 0 && isAiSide(messages[index - 1]) === isAiSide(message)}
+    />
+  ));
+});
+
+const GithubControls = memo(SyncView);
+
 /**
  * Owns the center column while agentMode is 'rsi'. Provides high-density status,
  * visual pipeline progression, and autonomous recursive evolution.
@@ -58,14 +70,14 @@ export default function RsiView() {
   const { t } = useLanguageStore();
   const sendMessage = useChatStore((s) => s.sendMessage);
   const stopGeneration = useChatStore((s) => s.stopGeneration);
-  const continuableConvId = useChatStore((s) => s.continuableConvId);
+  const canContinue = useChatStore((s) => s.activeConversationId !== null && s.continuableConvId === s.activeConversationId);
   const continueGeneration = useChatStore((s) => s.continueGeneration);
   const chatError = useChatStore((s) => s.error);
   const clearChatError = useChatStore((s) => s.clearError);
   const activeConversationId = useChatStore((s) => s.activeConversationId);
-  const streamingRuns = useChatStore((s) => s.streamingRuns);
+  const activeRun = useChatStore((s) => s.activeConversationId ? s.streamingRuns[s.activeConversationId] : undefined);
   const rawMessages = useChatStore((s) => s.messages);
-  const conversations = useChatStore((s) => s.conversations);
+  const conv = useChatStore((s) => s.conversations.find((c) => c.id === s.activeConversationId));
 
   const modelsMap = useModelStore((s) => s.models);
   const selectModel = useModelStore((s) => s.selectModel);
@@ -86,6 +98,7 @@ export default function RsiView() {
 
   const [activeTab, setActiveTab] = useState<'console' | 'direction' | 'pipeline'>('console');
   const [directionOpened, setDirectionOpened] = useState(false);
+  const onDirectionSaved = useCallback(() => setActiveTab((tab) => tab === 'direction' ? 'console' : tab), []);
   const [startingConversationId, setStartingConversationId] = useState<string | null>(null);
   const startLockRef = useRef(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -139,11 +152,9 @@ export default function RsiView() {
   }, [refresh]);
 
   const isMac = platform === 'darwin';
-  const activeRun = activeConversationId ? streamingRuns[activeConversationId] : undefined;
   const running = !!activeRun;
   const busy = startingConversationId === activeConversationId && startingConversationId !== null;
 
-  const conv = conversations.find((c) => c.id === activeConversationId);
   const rsi = conv && isRsiConversation(conv) ? conv.rsi : null;
   const lastRun = rsi?.runs[rsi.runs.length - 1];
   const rsiConfig = rsi?.directionConfig ?? null;
@@ -302,8 +313,8 @@ export default function RsiView() {
       changedApproval = true;
       useSettingsStore.setState({ approvalOverride: 'fullAuto' });
 
-      if ((continuableConvId && continuableConvId === activeConversationId) || danglingRequest) {
-        await continueGeneration();
+      if (canContinue || danglingRequest) {
+        await continueGeneration(targetId, model);
         return;
       }
 
@@ -544,15 +555,7 @@ export default function RsiView() {
                   accessibilityStatus={!isMac ? t('rsiAccessibilityNotRequired') : t(accessibility ? 'rsiGranted' : 'rsiRequired')}
                   onTabChange={setActiveTab}
                 />
-              ) : (
-                orderedMessages.map((msg, i) => (
-                  <MessageBubble
-                    key={msg.id}
-                    message={msg}
-                    isContinuation={i > 0 && isAiSide(orderedMessages[i - 1]) === isAiSide(msg)}
-                  />
-                ))
-              )}
+              ) : <TranscriptHistory messages={orderedMessages} />}
 
               {running && (
                 <div className="mt-3 min-w-0">
@@ -596,7 +599,7 @@ export default function RsiView() {
           <div className="max-w-[900px] mx-auto w-full px-4">
             {workspaceHeader}
             <div className="max-w-[840px] mx-auto w-full">
-              <RsiDirectionPanel key={activeConversationId} onSaved={() => setActiveTab((tab) => tab === 'direction' ? 'console' : tab)} />
+              <RsiDirectionPanel key={activeConversationId} onSaved={onDirectionSaved} />
             </div>
           </div>
         </div>
@@ -891,7 +894,7 @@ export default function RsiView() {
 
               {githubOn && (
                 <div className="border-t border-[var(--glass-border)] p-3 bg-[color-mix(in_srgb,var(--glass-card)_40%,transparent)] min-w-0">
-                  <SyncView />
+                  <GithubControls />
                 </div>
               )}
             </div>
@@ -939,7 +942,7 @@ export default function RsiView() {
         )}
 
         {/* Continuable banner */}
-        {!!activeConversationId && continuableConvId === activeConversationId && !running && !danglingRequest && (
+        {canContinue && !running && !danglingRequest && (
           <div className="max-w-[900px] mx-auto w-full px-4 mb-1.5">
             <button
               type="button"

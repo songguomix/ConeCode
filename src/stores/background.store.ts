@@ -73,8 +73,14 @@ async function wakeParent(task: BackgroundTask): Promise<void> {
   let summary = '(the background run produced no output)';
   try {
     const msgs = ((await (window as any).electronAPI?.message?.list?.(task.conversationId)) || []) as any[];
-    const lastAssistant = [...msgs].reverse().find((m) => m?.role === 'assistant' && String(m.content || '').trim());
-    if (lastAssistant) summary = String(lastAssistant.content).trim().slice(0, 4000);
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const message = msgs[i];
+      if (message?.role !== 'assistant') continue;
+      const content = String(message.content || '').trim();
+      if (!content) continue;
+      summary = content.slice(0, 4000);
+      break;
+    }
     const last = msgs[msgs.length - 1];
     if (last?.isQuestion) {
       summary += '\n\nNOTE: the background run is waiting for the user to answer a question — ask them before continuing.';
@@ -95,6 +101,33 @@ async function wakeParent(task: BackgroundTask): Promise<void> {
   } catch {}
 }
 
+function reconcileTasks(ids: Iterable<string>): void {
+  const current = useBackgroundStore.getState().tasks;
+  const runs = useChatStore.getState().streamingRuns;
+  const now = Date.now();
+  let tasks = current;
+  const finished: BackgroundTask[] = [];
+  for (const id of ids) {
+    const task = current[id];
+    if (task?.status !== 'running') continue;
+    if (runs[id]) {
+      if (task.observed) continue;
+      if (tasks === current) tasks = { ...current };
+      tasks[id] = { ...task, observed: true };
+    } else if (task.observed || now - task.startedAt >= UNOBSERVED_TIMEOUT_MS) {
+      if (tasks === current) tasks = { ...current };
+      tasks[id] = { ...task, status: 'done', finishedAt: now, unseen: true };
+      finished.push(tasks[id]);
+    }
+  }
+  if (tasks !== current) useBackgroundStore.setState({ tasks });
+  // Publish the new state first so nested updates cannot notify or wake twice.
+  for (const task of finished) {
+    notifyDone(task);
+    if (task.parentConversationId) void wakeParent(task);
+  }
+}
+
 export const useBackgroundStore = create<BackgroundStore>((set, get) => ({
   tasks: {},
 
@@ -106,7 +139,6 @@ export const useBackgroundStore = create<BackgroundStore>((set, get) => ({
     const id = await useChatStore.getState().startBackgroundRun(text, model.providerId, model.id);
     if (!id) return null;
     get().register(id, opts?.title || text.replace(/\s+/g, ' ').slice(0, 50), opts?.source || 'chat');
-    get().sync();
     return id;
   },
 
@@ -119,7 +151,7 @@ export const useBackgroundStore = create<BackgroundStore>((set, get) => ({
           conversationId,
           title,
           status: 'running',
-          observed: false,
+          observed: !!useChatStore.getState().streamingRuns[conversationId],
           startedAt: Date.now(),
           finishedAt: null,
           unseen: false,
@@ -132,33 +164,10 @@ export const useBackgroundStore = create<BackgroundStore>((set, get) => ({
 
   adopt: (conversationId, opts) => {
     get().register(conversationId, opts.title, 'agent', opts.parentConversationId);
-    get().sync();
   },
 
   sync: () => {
-    const runs = useChatStore.getState().streamingRuns;
-    const now = Date.now();
-    let changed = false;
-    const tasks = { ...get().tasks };
-    for (const [id, task] of Object.entries(tasks)) {
-      if (task.status !== 'running') continue;
-      if ((runs as Record<string, unknown>)[id]) {
-        if (!task.observed) {
-          tasks[id] = { ...task, observed: true };
-          changed = true;
-        }
-        continue;
-      }
-      if (!task.observed && now - task.startedAt < UNOBSERVED_TIMEOUT_MS) continue;
-      tasks[id] = { ...task, status: 'done', finishedAt: now, unseen: true };
-      changed = true;
-      notifyDone(tasks[id]);
-      // Agent-delegated runs wake their parent: the result goes back into
-      // that conversation and its run resumes. Fire and forget — the status
-      // above is already committed, so a second sync can never double-wake.
-      if (task.parentConversationId) void wakeParent(tasks[id]);
-    }
-    if (changed) set({ tasks });
+    reconcileTasks(Object.keys(get().tasks));
   },
 
   markSeen: (conversationId) => {
@@ -192,6 +201,46 @@ export const useBackgroundStore = create<BackgroundStore>((set, get) => ({
 
   init: () => {
     get().sync();
-    return useChatStore.subscribe(() => get().sync());
+    const unsubscribeChat = useChatStore.subscribe((state, previous) => {
+      const runs = state.streamingRuns;
+      const previousRuns = previous.streamingRuns;
+      if (runs === previousRuns) return;
+      // Streaming text changes every frame. Compare run membership without
+      // visiting completed tasks or publishing an unchanged task list.
+      const tasks = get().tasks;
+      const changed: string[] = [];
+      for (const id in runs) {
+        if (!previousRuns[id] && tasks[id]?.status === 'running') changed.push(id);
+      }
+      for (const id in previousRuns) {
+        if (!runs[id] && tasks[id]?.status === 'running') changed.push(id);
+      }
+      if (changed.length) reconcileTasks(changed);
+    });
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const scheduleExpiry = () => {
+      let deadline = Infinity;
+      for (const task of Object.values(get().tasks)) {
+        if (task.status === 'running' && !task.observed) {
+          deadline = Math.min(deadline, task.startedAt + UNOBSERVED_TIMEOUT_MS);
+        }
+      }
+      clearTimeout(timer);
+      timer = Number.isFinite(deadline) ? setTimeout(() => {
+        const tasks = get().tasks;
+        get().sync();
+        if (tasks === get().tasks) scheduleExpiry();
+      }, Math.max(0, deadline - Date.now())) : undefined;
+    };
+    const unsubscribeTasks = useBackgroundStore.subscribe((state, previous) => {
+      if (state.tasks !== previous.tasks) scheduleExpiry();
+    });
+    scheduleExpiry();
+    return () => {
+      unsubscribeChat();
+      unsubscribeTasks();
+      clearTimeout(timer);
+    };
   },
 }));

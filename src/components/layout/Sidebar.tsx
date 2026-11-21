@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { ReactNode } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { FiPlus, FiSettings, FiTrash2, FiGlobe, FiEdit3, FiMenu, FiTerminal, FiFileText, FiSmartphone, FiMonitor, FiCpu, FiGrid, FiShield, FiGitBranch, FiLoader, FiMessageSquare, FiBriefcase, FiChevronDown, FiChevronRight, FiClock, FiUsers, FiShare2, FiX, FiZap, FiPackage, FiArchive, FiCornerUpLeft } from 'react-icons/fi';
 import { useChatStore, useUIStore, useLanguageStore, usePreviewStore, useComputerStore, useModelStore, useCodeChangesStore, useWorkspaceStore, useAiHighlightsStore, useSettingsStore, LOCALES, type Locale } from '../../stores';
 import { useBackgroundStore } from '../../stores/background.store';
@@ -12,6 +13,7 @@ import HandoffPanel from '../handoff/HandoffPanel';
 import { mostUrgentDot, type DotKind } from './panelDot';
 import { rsiSidebarLayout } from './rsiLayout';
 import RsiFolderHint from './RsiFolderHint';
+import { indexSidebarChanges } from './sidebarChanges';
 
 interface PanelItem {
   key: string;
@@ -83,10 +85,7 @@ export default function Sidebar() {
   // token flushes that only rewrite streamingRuns[...].content don't re-render
   // the sidebar. Object.keys() alone allocated a new array every store tick.
   const runningKey = useChatStore((s) => Object.keys(s.streamingRuns).join('\0'));
-  const runningConversationIds = useMemo(
-    () => (runningKey ? runningKey.split('\0') : []),
-    [runningKey],
-  );
+  const runningConversationIds = useMemo(() => new Set(runningKey ? runningKey.split('\0') : []), [runningKey]);
   const setActiveConversation = useChatStore((s) => s.setActiveConversation);
   const closeFolderGroup = useChatStore((s) => s.closeFolderGroup);
   const setConversationArchived = useChatStore((s) => s.setConversationArchived);
@@ -119,11 +118,21 @@ export default function Sidebar() {
   const toggleBackground = useUIStore((s) => s.toggleBackground);
   const subAgentsOpen = useUIStore((s) => s.subAgentsOpen);
   const toggleSubAgents = useUIStore((s) => s.toggleSubAgents);
-  const bgTasks = useBackgroundStore((s) => s.tasks);
-  const bgRunning = Object.values(bgTasks).some((task) => task.status === 'running');
-  const bgUnseen = Object.values(bgTasks).filter((task) => task.unseen).length;
+  const { bgRunning, bgUnseen } = useBackgroundStore(useShallow((s) => {
+    let bgRunning = false;
+    let bgUnseen = 0;
+    for (const task of Object.values(s.tasks)) {
+      bgRunning ||= task.status === 'running';
+      if (task.unseen) bgUnseen++;
+    }
+    return { bgRunning, bgUnseen };
+  }));
   const { locale, setLocale, t } = useLanguageStore();
   const changes = useCodeChangesStore((s) => s.changes);
+  const highlightedFiles = useAiHighlightsStore(useShallow((s) =>
+    Object.keys(s.lines).filter((path) => s.lines[path].length > 0),
+  ));
+  const changesByConversation = useMemo(() => indexSidebarChanges(changes, highlightedFiles), [changes, highlightedFiles]);
   const rootPath = useWorkspaceStore((s) => s.rootPath);
   const extraRoots = useWorkspaceStore((s) => s.extraRoots);
   const workProjectPaths = useUIStore((s) => s.workProjectPaths);
@@ -198,26 +207,6 @@ export default function Sidebar() {
   // above all the agent holding the real mouse, stay visible on the trigger.
   const triggerDot = mostUrgentDot(panels.map((p) => p.dot));
   const anyPanelOpen = panels.some((p) => p.open);
-
-  const changedFileNames = (conversationId: string) => Array.from(new Set(
-    changes
-      .filter((change) => change.conversationId === conversationId && !change.filePath.startsWith('['))
-      .map((change) => change.filePath.split('/').pop() || change.filePath),
-  )).slice(0, 2);
-
-  // Green AI marks currently live in the editor, grouped per file. A chat row
-  // gets the dot when any file it touched still carries AI-written lines.
-  const aiLines = useAiHighlightsStore((s) => s.lines);
-  const aiCountFor = (conversationId: string) => {
-    const touched = new Set(
-      changes
-        .filter((c) => c.conversationId === conversationId && (c.kind === 'edit' || c.kind === 'create'))
-        .map((c) => c.filePath),
-    );
-    let n = 0;
-    for (const f of touched) n += aiLines[f]?.length ?? 0;
-    return n;
-  };
 
   const handleRename = (id: string) => {
     if (editTitle.trim()) {
@@ -309,9 +298,10 @@ export default function Sidebar() {
   const renderConvRow = (conv: typeof conversations[number], isWork = false, isRsi = false) => {
     const isArchived = !isUnarchivedConversation(conv);
     const archiveAction = t(isArchived ? 'restoreConversation' : 'archiveConversation');
-    const isRunning = runningConversationIds.includes(conv.id) || (isRsi && conv.rsi?.status === 'running');
+    const isRunning = runningConversationIds.has(conv.id) || (isRsi && conv.rsi?.status === 'running');
     const isCompleted = isRsi && conv.rsi?.status === 'completed';
     const isFailed = isRsi && conv.rsi?.status === 'failed';
+    const changeSummary = isWork && !isRsi ? changesByConversation.get(conv.id) : undefined;
     const openConversation = () => {
       if (editingId === conv.id) return;
       if (isWork && conv.rootPath && !isRsi && !isArchived) {
@@ -374,7 +364,7 @@ export default function Sidebar() {
                   RSI
                 </span>
               )}
-              {isWork && !isRsi && aiCountFor(conv.id) > 0 && (
+              {changeSummary?.hasAiChanges && (
                 <span className="w-1.5 h-1.5 rounded-full bg-[var(--success)] shrink-0" title={t('aiChanges')} />
               )}
               {isRunning && (
@@ -390,9 +380,9 @@ export default function Sidebar() {
               <div className="mt-0.5 truncate text-[10px] font-normal text-[var(--text-muted)]" title={conv.rootPath}>
                 {folderDisplayName(conv.rootPath)}
               </div>
-            ) : isWork && !isRsi && changedFileNames(conv.id).length > 0 && (
+            ) : changeSummary && changeSummary.fileNames.length > 0 && (
               <div className="mt-0.5 truncate text-[10px] font-normal text-[var(--text-muted)]">
-                {changedFileNames(conv.id).join(', ')}
+                {changeSummary.fileNames.join(', ')}
               </div>
             )}
           </div>

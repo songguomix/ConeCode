@@ -70,9 +70,17 @@ function prependToContent(existing: string | ContentPart[], block: string): stri
 
 function contentContainsOverride(content: string | ContentPart[]): boolean {
   if (typeof content === 'string') {
-    return content.includes('<system_override');
+    return content.includes(WRAPPED_GPT_HARD_CONSTRAINTS);
   }
-  return content.some((part) => part.type === 'text' && part.text.includes('<system_override'));
+  return content.some((part) => part.type === 'text' && part.text.includes(WRAPPED_GPT_HARD_CONSTRAINTS));
+}
+
+function contentStartsWithOverride(content: string | ContentPart[]): boolean {
+  if (typeof content === 'string') {
+    return content === WRAPPED_GPT_HARD_CONSTRAINTS || content.startsWith(`${WRAPPED_GPT_HARD_CONSTRAINTS}\n\n`);
+  }
+  const first = content[0];
+  return first?.type === 'text' && first.text === WRAPPED_GPT_HARD_CONSTRAINTS;
 }
 
 /**
@@ -82,7 +90,8 @@ function contentContainsOverride(content: string | ContentPart[]): boolean {
  */
 export class HardConstraintInjector {
   hasInjectedConstraints(messages: ChatMessage[]): boolean {
-    return messages.some((msg) => contentContainsOverride(msg.content));
+    return messages.some(({ role, content }) =>
+      (role === 'system' || role === 'developer') && contentContainsOverride(content));
   }
 
   inject(params: InjectConstraintsParams): ChatMessage[] {
@@ -90,16 +99,18 @@ export class HardConstraintInjector {
       return params.messages;
     }
 
-    if (this.hasInjectedConstraints(params.messages)) {
+    const detector = params.detector ?? gptDetector;
+    const isReasoning = detector.isReasoningSeriesModel(params.modelName);
+    const useFirstMessage = isReasoning && params.supportsSystem === false;
+    const first = params.messages[0];
+    if (this.hasInjectedConstraints(params.messages) || (useFirstMessage && first && contentStartsWithOverride(first.content))) {
       return params.messages;
     }
 
-    const detector = params.detector ?? gptDetector;
-    const isReasoning = detector.isReasoningSeriesModel(params.modelName);
     const cloned = params.messages.map((m) => ({ ...m }));
 
     if (isReasoning) {
-      if (params.supportsSystem === false) {
+      if (useFirstMessage) {
         if (cloned.length === 0) {
           return [{ role: 'user', content: WRAPPED_GPT_HARD_CONSTRAINTS }];
         }

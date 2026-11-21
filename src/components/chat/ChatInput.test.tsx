@@ -18,6 +18,7 @@ vi.mock('../../stores/installGate.store', async (importOriginal) => {
 import ChatInput from './ChatInput';
 import MessageBubble from './MessageBubble';
 import QuestionPromptCard from './QuestionPromptCard';
+import StreamingReply from './StreamingReply';
 import { useChatStore, useLanguageStore, useWorkspaceStore } from '../../stores';
 import { useInstallGateStore } from '../../stores/installGate.store';
 import type { Message } from '../../types';
@@ -47,6 +48,29 @@ describe('question replies', () => {
     expect(bubble).toMatch(/<button\b[^>]*disabled=""[^>]*>Proceed<\/button>/);
     expect(card).toMatch(/<button\b[^>]*disabled=""[^>]*><span>Proceed<\/span><\/button>/);
   });
+
+  it('keeps a question open after a tool result and closes it after an actual reply', () => {
+    const toolResult: Message = { id: 'tool', conversationId: 'test', role: 'user', isToolResult: true, content: 'Tool output', createdAt: 1 };
+    useChatStore.setState({ messages: [question, toolResult] });
+    expect(renderToStaticMarkup(<MessageBubble message={question} />)).toContain('Proceed');
+
+    const reply: Message = { id: 'reply', conversationId: 'test', role: 'user', content: 'Proceed', createdAt: 2 };
+    useChatStore.setState({ messages: [question, toolResult, reply] });
+    expect(renderToStaticMarkup(<MessageBubble message={question} />)).toContain('Answered');
+  });
+});
+
+it('shows only the selected streaming reply and hides interrupted reasoning during retry', () => {
+  useChatStore.setState({ streamingRuns: {
+    test: { content: 'Stitched answer', reasoningContent: 'Interrupted reasoning', status: 'writing', toolName: null, retry: { attempt: 1, max: 3 } },
+    other: { content: 'Background answer', reasoningContent: '', status: 'writing', toolName: null, retry: null },
+  } });
+
+  const markup = renderToStaticMarkup(<StreamingReply conversationId="test" continues={false} onUpdate={() => {}} />);
+  expect(markup).toContain('Stitched answer');
+  expect(markup).toContain('1/3');
+  expect(markup).not.toContain('Interrupted reasoning');
+  expect(markup).not.toContain('Background answer');
 });
 
 function sendButton() {

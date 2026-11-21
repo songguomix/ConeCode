@@ -4,9 +4,9 @@
  * Contract (apiVersion 1):
  *   export async function activate(api, config) -> optional dispose()
  *
- * `api` exposes only the host services declared in conecode.plugin.json. Every
- * registration returns a disposer; returning one from activate is optional but
- * recommended. The host also removes all registrations on disable/uninstall.
+ * `api` exposes tools, commands, skills, a logger and plugin identity. The
+ * manifest describes the services this sample uses. Each registration returns
+ * a disposer. The host withdraws the plugin's contributions when it unloads.
  */
 
 export async function activate(api, config = {}) {

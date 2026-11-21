@@ -1,6 +1,7 @@
+import { memo, useMemo } from 'react';
 import { FiX, FiChevronRight, FiClock, FiCheck, FiLoader } from 'react-icons/fi';
-import { useBackgroundStore } from '../../stores/background.store';
-import { useChatStore, useUIStore, useLanguageStore } from '../../stores';
+import { useBackgroundStore, type BackgroundTask } from '../../stores/background.store';
+import { useUIStore, useLanguageStore } from '../../stores';
 
 function ago(ts: number): string {
   const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
@@ -9,6 +10,48 @@ function ago(ts: number): string {
   if (m < 60) return `${m}m`;
   return `${Math.floor(m / 60)}h`;
 }
+
+const BackgroundTaskRow = memo(function BackgroundTaskRow({ task, age, jump, remove }: {
+  task: BackgroundTask;
+  age: string;
+  jump: (id: string) => void;
+  remove: (id: string) => void;
+}) {
+  const { t } = useLanguageStore();
+  return (
+    <div className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl border border-transparent transition-colors [content-visibility:auto] [contain-intrinsic-height:auto_36px] ${
+      task.unseen ? 'bg-[var(--accent-soft)]' : 'hover:bg-[var(--bg-2)]'
+    }`}>
+      {task.status === 'running' ? (
+        <FiLoader size={13} className="text-[var(--accent)] animate-spin shrink-0" />
+      ) : (
+        <FiCheck size={13} className="text-[var(--success)] shrink-0" />
+      )}
+      <div className="flex-1 min-w-0">
+        <p className="text-[13px] text-[var(--text-primary)] truncate">{task.title}</p>
+        <p className="text-[11px] text-[var(--text-muted)]">
+          {t(task.status === 'running' ? 'backgroundRunning' : 'backgroundDone')}
+          {' · '}{age}
+          {task.unseen ? ` · ${t('backgroundUnseen')}` : ''}
+        </p>
+      </div>
+      <button
+        onClick={() => jump(task.conversationId)}
+        title={t('backgroundJump')}
+        className="w-7 h-7 rounded-lg flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-3)] hover:text-[var(--text-primary)] transition-colors shrink-0 cursor-pointer"
+      >
+        <FiChevronRight size={14} />
+      </button>
+      <button
+        onClick={() => remove(task.conversationId)}
+        title={t('screenshotCancel')}
+        className="w-7 h-7 rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--error)] hover:bg-[var(--bg-3)] transition-colors shrink-0 cursor-pointer"
+      >
+        <FiX size={13} />
+      </button>
+    </div>
+  );
+});
 
 /**
  * OpenCode-style background tasks: runs dispatched from the composer keep
@@ -20,10 +63,9 @@ export default function BackgroundPanel() {
   const jump = useBackgroundStore((s) => s.jump);
   const remove = useBackgroundStore((s) => s.remove);
   const closeBackground = useUIStore((s) => s.closeBackground);
-  const stopGeneration = useChatStore((s) => s.stopGeneration);
   const { t } = useLanguageStore();
 
-  const list = Object.values(tasks).sort((a, b) => b.startedAt - a.startedAt);
+  const list = useMemo(() => Object.values(tasks).sort((a, b) => b.startedAt - a.startedAt), [tasks]);
 
   return (
     <>
@@ -47,42 +89,13 @@ export default function BackgroundPanel() {
             </p>
           )}
           {list.map((task) => (
-            <div key={task.conversationId}
-              className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl border border-transparent transition-colors ${
-                task.unseen ? 'bg-[var(--accent-soft)]' : 'hover:bg-[var(--bg-2)]'
-              }`}>
-              {task.status === 'running' ? (
-                <FiLoader size={13} className="text-[var(--accent)] animate-spin shrink-0" />
-              ) : (
-                <FiCheck size={13} className="text-[var(--success)] shrink-0" />
-              )}
-              <div className="flex-1 min-w-0">
-                <p className="text-[13px] text-[var(--text-primary)] truncate">{task.title}</p>
-                <p className="text-[11px] text-[var(--text-muted)]">
-                  {t(task.status === 'running' ? 'backgroundRunning' : 'backgroundDone')}
-                  {' · '}
-                  {ago(task.status === 'running' ? task.startedAt : task.finishedAt ?? task.startedAt)}
-                  {task.unseen ? ` · ${t('backgroundUnseen')}` : ''}
-                </p>
-              </div>
-              <button
-                onClick={() => jump(task.conversationId)}
-                title={t('backgroundJump')}
-                className="w-7 h-7 rounded-lg flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-3)] hover:text-[var(--text-primary)] transition-colors shrink-0 cursor-pointer"
-              >
-                <FiChevronRight size={14} />
-              </button>
-              <button
-                onClick={() => {
-                  if (task.status === 'running') stopGeneration(task.conversationId);
-                  remove(task.conversationId);
-                }}
-                title={t('screenshotCancel')}
-                className="w-7 h-7 rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--error)] hover:bg-[var(--bg-3)] transition-colors shrink-0 cursor-pointer"
-              >
-                <FiX size={13} />
-              </button>
-            </div>
+            <BackgroundTaskRow
+              key={task.conversationId}
+              task={task}
+              age={ago(task.finishedAt ?? task.startedAt)}
+              jump={jump}
+              remove={remove}
+            />
           ))}
         </div>
       </div>

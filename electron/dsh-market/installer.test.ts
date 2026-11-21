@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { PackageInstaller } from './installer';
+import { PackageInstaller, readNativeManifest } from './installer';
 import { MarketStateStore } from './state';
 import { RuntimeHost } from './runtime-host';
 
@@ -20,6 +20,19 @@ afterEach(() => {
 });
 
 describe('native package lifecycle', () => {
+  it('accepts optional v1 metadata and rejects an unknown protocol version', () => {
+    const dir = tempDir();
+    fs.writeFileSync(path.join(dir, 'index.mjs'), 'export function activate() {}');
+    const writeManifest = (apiVersion: number) => fs.writeFileSync(path.join(dir, 'conecode.plugin.json'), JSON.stringify({
+      name: 'native-test', version: '1.2.3', conecode: { plugin: true, apiVersion, entry: './index.mjs' },
+    }));
+
+    writeManifest(1);
+    expect(readNativeManifest(dir)).toMatchObject({ apiVersion: 1, capabilities: [], entry: 'index.mjs' });
+    writeManifest(2);
+    expect(() => readNativeManifest(dir)).toThrow('unsupported apiVersion 2');
+  });
+
   it('prepares, swaps in, loads and removes a bundled native plugin without npm', async () => {
     const root = tempDir();
     const state = new MarketStateStore(root);

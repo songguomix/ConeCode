@@ -56,12 +56,22 @@ export function useSubAgentHistory() {
     let open = true;
     let reading = true;
     const changes = new Map<string, SubAgentRun | null>(transient);
+    let pending = new Map<string, SubAgentRun | null>();
+    let frame: number | undefined;
+    const flush = () => {
+      frame = undefined;
+      const updates = pending;
+      pending = new Map();
+      setRuns((previous) => [
+        ...previous.filter((run) => !updates.has(run.id)),
+        ...Array.from(updates.values()).filter((run): run is SubAgentRun => run !== null),
+      ]);
+    };
     const onUpdate: Listener = (id, run) => {
       if (reading) changes.set(id, run);
-      setRuns((previous) => {
-        const remaining = previous.filter((r) => r.id !== id);
-        return run ? [...remaining, run] : remaining;
-      });
+      pending.delete(id);
+      pending.set(id, run);
+      frame ??= requestAnimationFrame(flush);
     };
     listeners.add(onUpdate);
     setRuns(Array.from(transient.values()));
@@ -71,6 +81,10 @@ export function useSubAgentHistory() {
       try {
         const history = await window.electronAPI.message.subAgentHistory();
         if (!open) return;
+        // The merged history already includes the updates received while loading.
+        if (frame !== undefined) cancelAnimationFrame(frame);
+        frame = undefined;
+        pending.clear();
         setRuns(mergeHistory(history, changes));
       } catch {
         if (open) setError(true);
@@ -84,6 +98,7 @@ export function useSubAgentHistory() {
     return () => {
       open = false;
       listeners.delete(onUpdate);
+      if (frame !== undefined) cancelAnimationFrame(frame);
     };
   }, [request]);
 

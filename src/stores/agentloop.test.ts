@@ -180,6 +180,52 @@ describe('runAgentLoop with native tool calling', () => {
     expect(confirm).toHaveBeenCalledTimes(1);
   });
 
+  it('guards a stitched reply that started with constraints before the model selection changed', async () => {
+    const gpt = { ...model, id: 'gpt-4o' };
+    const other = { ...model, id: 'other-model' };
+    window.electronAPI.app.confirmGptConstraints = vi.fn().mockResolvedValue('enable');
+    useModelStore.setState({ models: new Map([['p1', [gpt, other]]]) });
+    useModelStore.getState().selectModel(gpt.id, gpt.providerId);
+    await Promise.resolve();
+
+    queued = [
+      { choices: [{ message: { role: 'assistant', content: '```js\n' }, finish_reason: 'length' }] },
+      textResponse('// TODO: implement the function\n```'),
+    ];
+    const stream = window.electronAPI.chat.stream;
+    window.electronAPI.chat.stream = async (params) => {
+      const response = await stream(params);
+      if (streamCalls.length === 1) useModelStore.getState().selectModel(other.id, other.providerId);
+      return response;
+    };
+
+    await useChatStore.getState().sendMessage('Implement the function.', gpt.providerId, gpt.id);
+
+    expect(streamCalls).toHaveLength(2);
+    expect(JSON.stringify(streamCalls[0].messages)).toContain('GPT_MODEL_DETECTED');
+    expect(JSON.stringify(streamCalls[1].messages)).not.toContain('GPT_MODEL_DETECTED');
+    expect(useChatStore.getState().error).toContain('NO_STANDALONE_TODO');
+    expect(created.filter((message) => message.role === 'assistant' && !message.isLocalNotice)).toEqual([]);
+  });
+
+  it('guards code promoted from reasoning-only output before it enters the transcript', async () => {
+    const gpt = { ...model, id: 'gpt-4o' };
+    window.electronAPI.app.confirmGptConstraints = vi.fn().mockResolvedValue('enable');
+    useModelStore.setState({ models: new Map([['p1', [gpt]]]) });
+    useModelStore.getState().selectModel(gpt.id, gpt.providerId);
+    await Promise.resolve();
+    queued = [{ choices: [{
+      message: { role: 'assistant', content: '', reasoning_content: '```js\n// FIXME: implement the function\n```' },
+      finish_reason: 'stop',
+    }] }];
+
+    await useChatStore.getState().sendMessage('Implement the function.', gpt.providerId, gpt.id);
+
+    expect(JSON.stringify(streamCalls[0].messages)).toContain('GPT_MODEL_DETECTED');
+    expect(useChatStore.getState().error).toContain('NO_STANDALONE_TODO');
+    expect(created.filter((message) => message.role === 'assistant' && !message.isLocalNotice)).toEqual([]);
+  });
+
   it.each(['native', 'prompt'] as const)('records %s child turns under the parent message without exposing its reads to the parent model', async (mode) => {
     useSettingsStore.setState({ toolCallMode: mode });
     const record = vi.fn<typeof window.electronAPI.message.recordSubAgent>().mockResolvedValue(true);

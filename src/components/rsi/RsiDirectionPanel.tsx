@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useRef } from 'react';
+import { memo, useEffect, useState, useMemo, useRef } from 'react';
 import {
   FiCheck,
   FiSliders,
@@ -201,13 +201,11 @@ interface RsiDirectionPanelProps {
  * only (updateRsiDirection is scoped by stable id) and are persisted, so they
  * survive restarts and never leak into another session's config.
  */
-export default function RsiDirectionPanel({ onSaved }: RsiDirectionPanelProps) {
+function RsiDirectionPanel({ onSaved }: RsiDirectionPanelProps) {
   const { t, locale } = useLanguageStore();
-  const conversations = useChatStore((s) => s.conversations);
-  const activeConversationId = useChatStore((s) => s.activeConversationId);
+  const conv = useChatStore((s) => s.conversations.find((c) => c.id === s.activeConversationId));
   const updateRsiDirection = useChatStore((s) => s.updateRsiDirection);
 
-  const conv = conversations.find((c) => c.id === activeConversationId);
   const rsi = conv && isRsiConversation(conv) ? conv.rsi : null;
 
   // Local draft so typing never writes to disk per keystroke; reset when the
@@ -482,3 +480,5 @@ export default function RsiDirectionPanel({ onSaved }: RsiDirectionPanelProps) {
     </fieldset>
   );
 }
+
+export default memo(RsiDirectionPanel);

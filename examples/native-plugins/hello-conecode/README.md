@@ -1,8 +1,9 @@
 # hello-conecode
 
 The minimum runnable **ConeCode-native** plugin. It is intentionally small and
-is labeled as a first-party sample in the market — it is not community
-compatibility evidence.
+is labeled as a first-party sample in the market. See the [native plugin protocol
+reference (Chinese)](../../../docs/dsh-market/native-plugin-protocol.zh-CN.md)
+for the manifest and host API.
 
 ## Manifest
 
@@ -14,17 +15,20 @@ DeepSeek Harness packages.
 
 | Kind | Name | Verified behavior |
 |---|---|---|
-| Tool | `hello_conecode` | Returns a deterministic greeting object. |
-| Command | `/hello [name]` | Returns a host command result. |
+| Tool | `hello_conecode` | Returns a greeting object with plugin version and timestamp. |
+| Command | `hello` | Accepts a name and returns a host command result in the market's Run panel. |
 | Skill | `hello-conecode` | Registers a readable Markdown skill. |
+
+The market displays the command as `/hello`. The chat tool bridge also exposes
+the command to the model with an `input` argument.
 
 ## Lifecycle
 
-`activate(api, config)` receives only the services declared in the manifest.
-Every registration returns a disposer; the returned function is invoked on
-disable/uninstall, and the host additionally removes every registration owned
-by the plugin. There are no hidden stubs: asking for an undeclared host
-capability fails the load with a named capability error.
+`activate(api, config)` receives `tools`, `commands`, `skills`, `logger`, and the
+plugin identity. The manifest describes the services the sample uses, and the
+sample supplies the `Hello` default when the saved configuration lacks a valid
+greeting. Every registration returns a disposer. ConeCode calls the cleanup
+function and withdraws the plugin's contributions when the plugin unloads.
 
 ## Install
 
@@ -34,6 +38,8 @@ profile; the original directory is never modified.
 
 ## Package as a local plugin
 
-The folder can be zipped and shared as-is. A native plugin does not need npm;
-if it ships dependencies, add a normal `package.json` and the installer will
-run `npm install --ignore-scripts` inside the copied plugin directory.
+Share the folder or zip it for distribution. Recipients extract the archive and
+import the directory containing `conecode.plugin.json`. This sample runs with its
+manifest and entry file. If your plugin uses npm dependencies, declare them in
+the `dependencies` field of `package.json`. ConeCode installs those dependencies
+in the copied directory with lifecycle scripts disabled by default.

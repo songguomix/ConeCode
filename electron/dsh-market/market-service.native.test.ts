@@ -49,17 +49,22 @@ describe.skipIf(!workerBuilt)('DshMarketService native flow', () => {
     expect(installed.contributions.tools.map((tool) => tool.name)).toEqual(['hello_conecode']);
 
     const tool = await service.invokeTool('default', 'hello-conecode', 'hello_conecode', { name: 'Ada' });
-    expect(tool.ok).toBe(true);
-    expect((tool.value as any).message).toContain('Ada');
+    expect(tool).toMatchObject({ ok: true, value: { message: 'Hello, Ada!' } });
     const command = await service.invokeCommand('default', 'hello-conecode', 'hello', 'ConeCode');
-    expect(command.ok).toBe(true);
+    expect(command).toMatchObject({ ok: true, value: { kind: 'success', text: expect.stringContaining('Hello, ConeCode') } });
+    expect(await service.listSkills()).toContainEqual(expect.objectContaining({
+      pluginId: installed.id, rowId: 'native', name: 'hello-conecode', hasContent: true,
+    }));
+    expect(await service.getSkill(installed.id, 'hello-conecode', 'native')).toContain('# Hello ConeCode');
     await service.saveConfig('default', installed.id, { native: { greeting: 'Welcome' } });
     expect((await service.invokeTool('default', installed.id, 'hello_conecode', { name: 'Ada' })).value)
       .toMatchObject({ message: 'Welcome, Ada!' });
 
     const chatTools = await service.listChatTools();
     expect(chatTools.some((tool) => tool.name === 'hello_conecode')).toBe(true);
-    expect(chatTools.some((tool) => tool.name === 'hello')).toBe(true);
+    const chatCommand = chatTools.find((tool) => tool.name === 'hello');
+    expect(chatCommand).toBeDefined();
+    expect(await service.callChatTool(chatCommand!.server, 'hello', { input: 'Ada' })).toContain('Welcome, Ada');
 
     await service.setEnabled('default', 'hello-conecode', false);
     let state = await service.snapshot();

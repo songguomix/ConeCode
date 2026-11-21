@@ -2,6 +2,8 @@
 
 For an installable DSH command and a walkthrough covering development, packaging and catalog distribution, see the [Chinese developer guide](plugin-authoring.zh-CN.md) and the [sample package](../../examples/dsh-plugins/hello-dsh).
 
+For the ConeCode-native manifest, host API, and compatibility tests, see the [native plugin protocol reference (Chinese)](native-plugin-protocol.zh-CN.md).
+
 ConeCode loads two formats through the embedded worker:
 
 - **DSH bundle** — a real `package.json` with `dsh.bundle.patch` (the DSH format).
@@ -73,15 +75,21 @@ export async function activate(api, config = {}) {
 
 Rules:
 
-- Only declared host capabilities are provided. An undeclared service access fails;
-  the host does not inject empty stubs.
+- The v1 host provides `tools`, `commands`, `skills`, `logger`, and the `plugin`
+  identity. Use `conecode.capabilities` to describe the services your plugin
+  uses. The field is manifest metadata and the Node worker runs plugin code with
+  the application's OS permissions.
 - Every `register` returns a disposer. The returned `activate` disposer is optional
   but recommended; the host also removes all contributions owned by the plugin on
   disable/uninstall.
 - `apiVersion` is currently `1`. An unknown version is rejected at install time.
-- There is no renderer UI API yet; native plugins contribute host-side tools,
-  commands and skills. Browser UI extension is listed as a separate, unsupported
-  capability rather than faked.
+- Native plugins apply defaults and validate the saved `native` row's configuration
+  in `activate`. `conecode.config` describes the plugin's settings.
+- Use **Plugin Market → Installed → Run** to execute `hello_conecode` and the
+  `hello` command. The market displays the command as `/hello` and exposes it to
+  the model through the chat tool bridge. The chat composer's slash menu has its
+  own command registry. Native v1 integrations run on the host and contribute
+  tools, commands, and skills.
 
 ## Durable plugin storage
 
@@ -187,11 +195,14 @@ For published npm packages, **Install in DSH Web** installs the selected version
 
 ## Packaging and install expectations
 
-- npm: build `lib/`/`dist/` before publishing. Installation uses exact versions.
-- Git: pin a 40-character commit. `prepare` scripts are off unless the user
+- DSH npm: build `lib/`/`dist/` before publishing. Installation uses exact versions.
+- DSH Git: pin a 40-character commit. `prepare` scripts are off unless the user
   explicitly allows dependency scripts.
-- Local: the folder is copied into the profile; modifications to the original
-  directory do not affect the installed copy.
+- DSH local folder: the installer copies the folder into the active profile.
+- Native: use **Sources → Import local folder** or install the bundled example
+  from Discover. To distribute a native plugin, share the directory or an archive
+  that users can unpack before importing. ConeCode copies the folder into the
+  profile. Import a new plugin version to update the installed copy.
 - Keep `dsh.bundle.patch` rows referencing the package name, not a relative path,
   so Node resolves the installed package.
-- Use the host's credentials service for secrets. The local market stores ordinary config as visible JSON.
+- DSH plugins can request the host's `credentials` service. The local market stores ordinary config as visible JSON.

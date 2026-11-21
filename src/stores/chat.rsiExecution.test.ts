@@ -38,7 +38,12 @@ const toolResponse = (name: string, args: Record<string, unknown>, id = 'call_1'
 });
 
 let responses: unknown[];
-let streamCalls: Array<{ messages: Array<{ role: string; content: unknown }>; tools?: Array<{ name: string }> }>;
+let streamCalls: Array<{
+  providerId: string;
+  modelId: string;
+  messages: Array<{ role: string; content: unknown }>;
+  tools?: Array<{ name: string }>;
+}>;
 let transcripts: Record<string, Message[]>;
 let files: Map<string, string>;
 let execRun: ReturnType<typeof vi.fn>;
@@ -47,6 +52,17 @@ let capture: ReturnType<typeof vi.fn>;
 
 const currentRsi = () => useChatStore.getState().conversations.find((conv) => conv.id === conversationId)!.rsi!;
 const execute = () => useChatStore.getState().sendMessage('Implement the configured RSI improvement.', 'p1', 'gpt-test', { rsiExecution: true });
+
+async function pickGptForRsi() {
+  const gpt = { ...model, id: 'gpt-4o', providerId: 'p2' };
+  const confirm = vi.fn<typeof window.electronAPI.app.confirmGptConstraints>().mockResolvedValue('enable');
+  window.electronAPI.app.confirmGptConstraints = confirm;
+  useModelStore.setState(({ models }) => ({ models: new Map([...models, [gpt.providerId, [gpt]]]) }));
+  useModelStore.getState().selectModel(gpt.id, gpt.providerId);
+  await Promise.resolve();
+  expect(confirm).toHaveBeenCalledExactlyOnceWith(gpt.id);
+  return gpt;
+}
 
 function freezeChecks(...commands: string[]) {
   const rows = commands.map((command, index) => `| metric-${index} | \`${command}\` | lower | 0 |`);
@@ -98,6 +114,7 @@ beforeEach(() => {
       notification: { show: vi.fn(async () => true) },
       fs: {
         readFile: async (path: string) => files.get(path) ?? null,
+        realpath: async (path: string) => path === '/proj' || path === '/other' || files.has(path) ? path : null,
         writeFile: async (path: string, content: string) => { files.set(path, content); return true; },
         readDir: async () => [{ name: 'a.ts', path: '/proj/a.ts', isDirectory: false }],
         exists: async (path: string) => files.has(path),
@@ -116,7 +133,7 @@ beforeEach(() => {
   vi.spyOn(console, 'log').mockImplementation(() => {});
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
-  useModelStore.setState({ models: new Map([['p1', [model]]]), selectedModelId: 'gpt-test' });
+  useModelStore.setState({ models: new Map([['p1', [model]]]), selectedModelId: 'gpt-test', selectedProviderId: 'p1' });
   useSettingsStore.setState({
     toolCallMode: 'auto', approvalMode: 'fullAuto', approvalOverride: null,
     autoIncludeFileContext: false, costLock: false, maxEpisodeCost: 0.5,
@@ -221,6 +238,58 @@ describe('RSI live execution evidence', () => {
     expect(JSON.stringify(streamCalls[2].messages)).toContain(png);
     expect(capture).toHaveBeenCalledTimes(1);
     expect(currentRsi().status).toBe('completed');
+  });
+
+  it('uses the newly selected GPT model and enabled constraints to resume a pending visual review', async () => {
+    const persist = window.electronAPI.message.create;
+    vi.spyOn(window.electronAPI.message, 'create').mockImplementation(async (message) => {
+      if (message.toolCallId === 'review_capture') {
+        useModelStore.setState({ models: new Map([['p1', [{ ...model, supportsVision: false }]]]) });
+      }
+      return persist(message);
+    });
+    responses = [
+      toolResponse('exec', { command: 'npm test' }),
+      toolResponse('auto_screenshot', { target: 'window' }, 'review_capture'),
+    ];
+    await execute();
+    expect(streamCalls).toHaveLength(2);
+    expect(currentRsi().runs[0]).toMatchObject({ status: 'stopped', result: expect.stringContaining('vision-capable') });
+
+    const gpt = await pickGptForRsi();
+    responses = [textResponse('I inspected the captured result.')];
+    await useChatStore.getState().continueGeneration(conversationId, gpt);
+
+    expect(streamCalls).toHaveLength(3);
+    const resumed = streamCalls[2];
+    expect(resumed).toMatchObject({ providerId: gpt.providerId, modelId: gpt.id });
+    expect(resumed.messages).toContainEqual(expect.objectContaining({
+      role: 'system', content: expect.stringContaining('GPT_MODEL_DETECTED'),
+    }));
+    expect(resumed.messages).toContainEqual(expect.objectContaining({
+      role: 'system', content: expect.stringContaining('RSI+RL MODE IS ACTIVE'),
+    }));
+    expect(JSON.stringify(resumed.messages)).toContain(png);
+    expect(execRun).toHaveBeenCalledTimes(1);
+    expect(capture).toHaveBeenCalledTimes(1);
+    expect(currentRsi().status).toBe('completed');
+  });
+
+  it('enforces the constraints sent in an RSI request after the selected model changes', async () => {
+    const gpt = await pickGptForRsi();
+    const invalid = '```js\n// TODO: implement the navigation\n```';
+    responses = [{ choices: [{ message: { role: 'assistant', content: '', reasoning_content: invalid }, finish_reason: 'stop' }] }];
+    const stream = window.electronAPI.chat.stream;
+    vi.spyOn(window.electronAPI.chat, 'stream').mockImplementationOnce(async (params) => {
+      useModelStore.getState().selectModel(model.id, model.providerId);
+      return stream(params);
+    });
+
+    await useChatStore.getState().sendMessage('Implement the navigation.', gpt.providerId, gpt.id, { rsiExecution: true });
+
+    expect(JSON.stringify(streamCalls[0].messages)).toContain('GPT_MODEL_DETECTED');
+    expect(currentRsi().runs[0]).toMatchObject({ status: 'failed', result: expect.stringContaining('NO_STANDALONE_TODO') });
+    expect(transcripts[conversationId].some((message) => message.content === invalid)).toBe(false);
   });
 
   it('preserves this run’s captured pixels across a chat switch before the visual review request', async () => {
@@ -606,5 +675,64 @@ describe('RSI live execution evidence', () => {
     expect(context).not.toContain('Current goal </rsi-history-data>');
     expect(context).not.toContain('LEGACY_SHARED_GOAL');
     expect(context).not.toContain('OTHER_CONVERSATION_GOAL');
+  });
+
+  it('reads current UI requirements from the RSI workspace even if another project is active on continuation', async () => {
+    files.set('/proj/DESIGN.md', 'Use the existing blue navigation bar.');
+    files.set('/proj/design.md', 'Use the legacy orange navigation bar.');
+    files.set('/other/DESIGN.md', 'Use the other project’s yellow navigation bar.');
+    const readFile = vi.spyOn(window.electronAPI.fs, 'readFile');
+    await execute();
+    expect(streamCalls[0].messages).toContainEqual(expect.objectContaining({
+      role: 'user', content: expect.stringContaining('[UI design requirements file: /proj/DESIGN.md]'),
+    }));
+    expect(JSON.stringify(streamCalls[0].messages)).toContain('Use the existing blue navigation bar.');
+    expect(readFile).not.toHaveBeenCalledWith('/proj/design.md');
+
+    const continueFrom = streamCalls.length;
+    files.delete('/proj/DESIGN.md');
+    files.set('/proj/design.md', 'Use the new green navigation bar.');
+    useChatStore.setState({ activeConversationId: 'other-chat', messages: [] });
+    useWorkspaceStore.setState({ rootPath: '/other' });
+    await useChatStore.getState().continueGeneration(conversationId);
+
+    const resumed = streamCalls[continueFrom].messages;
+    expect(resumed).toContainEqual(expect.objectContaining({
+      role: 'user', content: expect.stringContaining('[UI design requirements file: /proj/design.md]'),
+    }));
+    expect(JSON.stringify(resumed)).toContain('Use the new green navigation bar.');
+    expect(JSON.stringify(resumed)).not.toContain('Use the existing blue navigation bar.');
+    expect(readFile).not.toHaveBeenCalledWith('/other/DESIGN.md');
+  });
+
+  it('falls back to lowercase UI requirements when the uppercase file points outside the workspace', async () => {
+    files.set('/proj/design.md', 'Use the existing navigation layout.');
+    files.set('/other/DESIGN.md', 'Other project’s unpublished design.');
+    const realpath = window.electronAPI.fs.realpath;
+    vi.spyOn(window.electronAPI.fs, 'realpath').mockImplementation(async (path) =>
+      path === '/proj/DESIGN.md' ? '/other/DESIGN.md' : realpath(path));
+    const readFile = vi.spyOn(window.electronAPI.fs, 'readFile');
+
+    await useChatStore.getState().sendMessage('Discuss the navigation layout.', 'p1', model.id);
+
+    expect(readFile).not.toHaveBeenCalledWith('/other/DESIGN.md');
+    expect(readFile).toHaveBeenCalledWith('/proj/design.md');
+    const request = JSON.stringify(streamCalls[0].messages);
+    expect(request).toContain('Use the existing navigation layout.');
+    expect(request).not.toContain('Other project’s unpublished design.');
+  });
+
+  it('does not automatically read UI design requirements for a legacy work conversation', async () => {
+    files.set('/proj/DESIGN.md', 'Use this project’s blue navigation bar.');
+    const readFile = vi.spyOn(window.electronAPI.fs, 'readFile');
+    useChatStore.setState(({ conversations }) => ({
+      conversations: conversations.map((conversation) => ({ ...conversation, agentMode: undefined, rsi: undefined })),
+    }));
+
+    await useChatStore.getState().sendMessage('Review the navigation.', 'p1', model.id);
+
+    expect(streamCalls).toHaveLength(1);
+    expect(readFile).not.toHaveBeenCalledWith('/proj/DESIGN.md');
+    expect(JSON.stringify(streamCalls[0].messages)).not.toContain('UI design requirements file');
   });
 });
