@@ -23,7 +23,6 @@ import { useLanguageStore } from '../../stores/language.store';
 import { useModelStore } from '../../stores/model.store';
 import { useProviderStore } from '../../stores/provider.store';
 import { usePluginStore } from '../../stores/plugin.store';
-import { useSettingsStore } from '../../stores/settings.store';
 import { useCodeChangesStore } from '../../stores/codeChanges.store';
 import { useUIStore } from '../../stores/ui.store';
 import { useWorkspaceStore } from '../../stores/workspace.store';
@@ -292,8 +291,6 @@ export default function RsiView() {
     setStartingConversationId(targetId);
     setActionError(null);
     const stillActive = () => useChatStore.getState().activeConversationId === targetId;
-    const previousApproval = useSettingsStore.getState().approvalOverride;
-    let changedApproval = false;
     try {
       await refresh();
       if (!stillActive()) return;
@@ -310,8 +307,6 @@ export default function RsiView() {
         return;
       await st.setEnabled(true);
       if (!stillActive()) return;
-      changedApproval = true;
-      useSettingsStore.setState({ approvalOverride: 'fullAuto' });
 
       if (canContinue || danglingRequest) {
         await continueGeneration(targetId, model);
@@ -330,9 +325,6 @@ export default function RsiView() {
     } catch (error) {
       if (stillActive()) setActionError(error instanceof Error ? error.message : t('rsiOperationFailed'));
     } finally {
-      if (changedApproval && useSettingsStore.getState().approvalOverride === 'fullAuto') {
-        useSettingsStore.setState({ approvalOverride: previousApproval });
-      }
       startLockRef.current = false;
       setStartingConversationId(null);
     }

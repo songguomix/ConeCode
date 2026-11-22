@@ -105,10 +105,14 @@ describe('model context limits', () => {
     expect(useModelStore.getState().models.get('provider-a')?.[0]).toMatchObject({
       contextWindow: 32_000,
       autoContextWindow: 256_000,
+      hasContextWindowOverride: true,
     });
 
     useModelStore.getState().setModelLimits('provider-a', 'shared-model', { contextWindow: null });
-    expect(useModelStore.getState().models.get('provider-a')?.[0].contextWindow).toBe(256_000);
+    expect(useModelStore.getState().models.get('provider-a')?.[0]).toMatchObject({
+      contextWindow: 256_000,
+      hasContextWindowOverride: false,
+    });
   });
 
   it('loads every provider in one refresh and restores favorites and recents', async () => {

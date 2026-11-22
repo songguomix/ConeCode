@@ -228,6 +228,8 @@ function resumeRsiExecution(convId: string): boolean {
 
 /** Live streaming state of one conversation's agent run. */
 export interface StreamRunState {
+  /** Temporary approval policy for this RSI execution only. */
+  rsiAutoApproval?: boolean;
   content: string;
   reasoningContent: string;
   status: 'thinking' | 'writing' | null;
@@ -2490,6 +2492,7 @@ async function autoCompactIfNeeded(convId: string, providerId: string, modelId: 
   const contextWindow = effectiveContextWindow(
     runModel?.contextWindow,
     useSettingsStore.getState().fullContext,
+    runModel?.hasContextWindowOverride,
   );
   // Only what is actually SENT counts toward the window: messages an earlier
   // compaction already folded into a summary are no longer part of the request,
@@ -2728,12 +2731,21 @@ async function runAgentLoopBody(
   const rsiSession: RsiExecutionSession = previousSession?.workspace.rootPath === taskWorkspace.rootPath ? previousSession : {
     runId: null, workspace: taskWorkspace, monitor: new RsiExecutionMonitor(taskWorkspace.rootPath ?? undefined), spendUsd: 0,
   };
-  let rsiRunId = rsiExecuting ? await beginRsiRun(convId).catch(() => null) : null;
-  const rsiMonitor = rsiSession.monitor;
-  if (rsiExecuting) {
+  let rsiRunId: string | null = null;
+  const startRsiExecution = async () => {
+    if (!ownsRun() || abortController.signal.aborted) return;
+    rsiExecuting = true;
+    if (!options.recoveringApproval) {
+      patchRun(convId, { rsiAutoApproval: true });
+    }
+    rsiRunId = await beginRsiRun(convId);
+    if (!ownsRun() || abortController.signal.aborted) {
+      return;
+    }
     rsiSession.runId = rsiRunId;
     rsiExecutionSessions.set(convId, rsiSession);
-  }
+  };
+  const rsiMonitor = rsiSession.monitor;
   let rsiRecovery = '';
   let rsiHistory = '';
   const refreshRsiHistory = async () => {
@@ -2839,6 +2851,8 @@ async function runAgentLoopBody(
   let turnRetries = 0;
   let goalFollowup = '';
   try {
+    if (rsiExecuting) await startRsiExecution();
+    if (!ownsRun() || abortController.signal.aborted) return;
     if (agentMode === 'rsi') {
       const initialMessages = get().activeConversationId === convId ? get().messages : await window.electronAPI.message.list(convId);
       const models = useModelStore.getState().models;
@@ -3387,10 +3401,11 @@ async function runAgentLoopBody(
 
       rsiRecovery = '';
       if (agentMode === 'rsi' && !rsiExecuting && !planMode && !reviewMode && pending.some((entry) => entry.action && ['exec', 'edit_file', 'create_file', 'create_dir', 'delete', 'rename', 'copy'].includes(entry.action.action))) {
-        rsiExecuting = true;
-        rsiRunId = await beginRsiRun(convId).catch(() => null);
-        rsiSession.runId = rsiRunId;
-        rsiExecutionSessions.set(convId, rsiSession);
+        await startRsiExecution();
+        if (!ownsRun() || abortController.signal.aborted) {
+          rsiOutcome = 'stopped';
+          break;
+        }
       }
       const costBlocked = rsiCostStopReason();
       if (costBlocked) rsiCause = costBlocked;
@@ -3541,7 +3556,8 @@ async function runAgentLoopBody(
             codeChangesStore.discardMessageApprovals(convId, new Set([assistantMsg.id]));
             return 'Skipped because this execution was stopped.';
           }
-          if (!options.recoveringApproval && shouldAutoApprove(effectiveApprovalMode(), data.kind)) {
+          const approvalMode = runBuffer().rsiAutoApproval ? 'fullAuto' : effectiveApprovalMode();
+          if (!options.recoveringApproval && shouldAutoApprove(approvalMode, data.kind)) {
             const outcome = await codeChangesStore.autoApply(id);
             observe(action, outcome.result ?? '', outcome.success);
             shouldContinue = true;
@@ -4410,7 +4426,9 @@ async function runAgentLoopBody(
     // Close the RSI run record with the real outcome — completed, user-stopped
     // or failed with its cause. A superseded run still finalizes its own id.
     if (rsiRunId) {
-      await finalizeRsiRun(convId, rsiRunId, rsiOutcome, rsiCause).catch(() => {});
+      await finalizeRsiRun(convId, rsiRunId, rsiOutcome, rsiCause).catch((error) => {
+        console.error(`[RSI] Could not finalize run ${rsiRunId} for ${convId}:`, error);
+      });
     }
   }
 }

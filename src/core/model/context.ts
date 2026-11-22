@@ -12,7 +12,8 @@ export const DEFAULT_CONTEXT_TOKENS = 256_000;
 export function effectiveContextWindow(
   modelWindow: number | undefined | null,
   fullContext: boolean,
+  hasOverride = false,
 ): number {
   const w = modelWindow && modelWindow > 0 ? modelWindow : DEFAULT_CONTEXT_TOKENS;
-  return fullContext ? w : Math.min(w, DEFAULT_CONTEXT_TOKENS);
+  return fullContext || hasOverride ? w : Math.min(w, DEFAULT_CONTEXT_TOKENS);
 }

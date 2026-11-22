@@ -29,6 +29,7 @@ export interface AIModel {
   // be reset back to "auto". Only set once the model has passed through the
   // override layer; treat a missing value as "same as the effective limit".
   autoContextWindow?: number;
+  hasContextWindowOverride?: boolean;
   autoMaxOutputTokens?: number;
 }
 

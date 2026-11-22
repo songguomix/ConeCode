@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { FiShield } from 'react-icons/fi';
+import { useChatStore } from '../../stores/chat.store';
 import { useSettingsStore, useLanguageStore, useUIStore } from '../../stores';
 
 const APPROVAL_MODES = [
@@ -32,7 +33,9 @@ export default function GovernanceIsland({ compact = false }: GovernanceIslandPr
   const rootRef = useRef<HTMLDivElement>(null);
 
   const baseApproval = useSettingsStore((s) => s.approvalMode);
-  const overrideApproval = useSettingsStore((s) => s.approvalOverride);
+  const globalOverride = useSettingsStore((s) => s.approvalOverride);
+  const rsiAutoApproval = useChatStore((s) => !!s.activeConversationId && s.streamingRuns[s.activeConversationId]?.rsiAutoApproval === true);
+  const overrideApproval = rsiAutoApproval ? 'fullAuto' : globalOverride;
   const sandboxMode = useSettingsStore((s) => s.sandboxMode);
   const sandboxAllowNetwork = useSettingsStore((s) => s.sandboxAllowNetwork);
   const updateSettings = useSettingsStore((s) => s.updateSettings);
@@ -42,7 +45,7 @@ export default function GovernanceIsland({ compact = false }: GovernanceIslandPr
 
   // Unattended runs (RSI / Autopilot) borrow the switch temporarily.
   const effectiveApproval: ApprovalMode = overrideApproval ?? baseApproval;
-  const overridden = !!overrideApproval && overrideApproval !== baseApproval;
+  const overridden = rsiAutoApproval || (!!overrideApproval && overrideApproval !== baseApproval);
 
   // A stale or hand-edited settings blob can carry a value that is no longer
   // (or never was) a real mode — fall back rather than crash on labelKey.

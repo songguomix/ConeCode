@@ -46,12 +46,14 @@ let streamCalls: Array<{
 }>;
 let transcripts: Record<string, Message[]>;
 let files: Map<string, string>;
-let execRun: ReturnType<typeof vi.fn>;
+let execRun: ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<{ success: boolean; stdout: string; stderr: string; exitCode: number }>>>;
 const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6R8sAAAAASUVORK5CYII=';
 let capture: ReturnType<typeof vi.fn>;
 
 const currentRsi = () => useChatStore.getState().conversations.find((conv) => conv.id === conversationId)!.rsi!;
-const execute = () => useChatStore.getState().sendMessage('Implement the configured RSI improvement.', 'p1', 'gpt-test', { rsiExecution: true });
+const execute = (recoveringApproval = false) => useChatStore.getState().sendMessage(
+  'Implement the configured RSI improvement.', 'p1', 'gpt-test', { rsiExecution: true, recoveringApproval },
+);
 
 async function pickGptForRsi() {
   const gpt = { ...model, id: 'gpt-4o', providerId: 'p2' };
@@ -370,7 +372,7 @@ describe('RSI live execution evidence', () => {
     freezeChecks('npm test');
     useSettingsStore.setState({ approvalMode: 'suggest', approvalOverride: null });
     responses = [toolResponse('exec', { command: 'npm test', cwd: '/proj/other' })];
-    await execute();
+    await execute(true);
     await useCodeChangesStore.getState().applyChange(useCodeChangesStore.getState().changes[0].id);
     await vi.waitFor(() => expect(currentRsi().runs[1]).toMatchObject({
       status: 'stopped', result: expect.stringContaining('npm test'),
@@ -387,13 +389,12 @@ describe('RSI live execution evidence', () => {
       toolResponse('exec', { command: 'npm run build' }, 'build'),
       textResponse('Both checks passed.'),
     ];
-    await execute();
+    await execute(true);
     useChatStore.setState({ activeConversationId: 'other-chat', messages: [] });
     useWorkspaceStore.setState({ rootPath: '/other' });
     const changes = () => useCodeChangesStore.getState().changes;
     await useCodeChangesStore.getState().applyChange(changes()[0].id);
-    await vi.waitFor(() => expect(changes()[0]).toMatchObject({ newCode: 'npm run build', cwd: '/proj', status: 'pending' }));
-    await useCodeChangesStore.getState().applyChange(changes()[0].id);
+    await vi.waitFor(() => expect(changes()[0]).toMatchObject({ newCode: 'npm run build', cwd: '/proj', status: 'applied' }));
     await vi.waitFor(() => expect(currentRsi().runs.slice(-1)[0]).toMatchObject({ status: 'stopped', result: expect.stringContaining('auto_screenshot') }));
     expect(capture).not.toHaveBeenCalled();
 
@@ -438,19 +439,12 @@ describe('RSI live execution evidence', () => {
       if (operation === 'rename') files.delete(src);
       return true;
     });
-    if (operation === 'rename') useSettingsStore.setState({ approvalMode: 'suggest', approvalOverride: null });
+    useSettingsStore.setState({ approvalMode: 'suggest', approvalOverride: null });
     responses = [
       toolResponse('exec', { command: 'npm test' }, 'before_restore'),
       toolResponse(operation, args, 'restore'),
     ];
     await execute();
-    if (operation === 'rename') {
-      const changes = () => useCodeChangesStore.getState().changes;
-      await useCodeChangesStore.getState().applyChange(changes()[0].id);
-      await vi.waitFor(() => expect(changes()[0]).toMatchObject({ kind: 'rename', status: 'pending' }));
-      await useCodeChangesStore.getState().applyChange(changes()[0].id);
-      await vi.waitFor(() => expect(currentRsi().runs[2]?.status).toBe('stopped'));
-    }
     expect(files.get(destination)).toBe('export const restored = 1;');
     const runs = currentRsi().runs;
     expect(runs[runs.length - 1]).toMatchObject({ status: 'stopped', result: expect.stringContaining('verification') });
@@ -458,6 +452,7 @@ describe('RSI live execution evidence', () => {
   });
 
   it('starts a run lazily when a typed request actually executes a command', async () => {
+    useSettingsStore.setState({ approvalMode: 'suggest', approvalOverride: null });
     responses = [toolResponse('exec', { command: 'npm test' }), textResponse('Verified.')];
     await useChatStore.getState().sendMessage('Run the RSI verification now.', 'p1', 'gpt-test');
 
@@ -465,6 +460,29 @@ describe('RSI live execution evidence', () => {
     expect(streamCalls).toHaveLength(3);
     expect(currentRsi().runs).toHaveLength(1);
     expect(currentRsi().runs[0].status).toBe('completed');
+  });
+
+  it.each(['answer', 'continue'] as const)('restores unattended approval on RSI %s', async (resume) => {
+    useSettingsStore.setState({ approvalMode: 'suggest', approvalOverride: null });
+    responses = [toolResponse('ask_user', { question: 'Which scope should I verify?' })];
+    await execute();
+    expect(currentRsi().runs[0].status).toBe('stopped');
+    expect(useChatStore.getState().streamingRuns[conversationId]).toBeUndefined();
+
+    const original = execRun.getMockImplementation()!;
+    execRun.mockImplementation(async () => {
+      expect(useChatStore.getState().streamingRuns[conversationId]?.rsiAutoApproval).toBe(true);
+      expect(useSettingsStore.getState()).toMatchObject({ approvalMode: 'suggest', approvalOverride: null });
+      return original();
+    });
+    responses = [toolResponse('exec', { command: 'npm test' }), textResponse('Verified.')];
+    if (resume === 'answer') await useChatStore.getState().sendMessage('Verify the configured scope.', 'p1', 'gpt-test');
+    else await useChatStore.getState().continueGeneration(conversationId);
+
+    expect(execRun).toHaveBeenCalledTimes(1);
+    expect(currentRsi().runs.map((run) => run.status)).toEqual(['stopped', 'completed']);
+    expect(useCodeChangesStore.getState().changes.some((change) => change.status === 'pending')).toBe(false);
+    expect(useChatStore.getState().streamingRuns[conversationId]).toBeUndefined();
   });
 
   it('stops before another model turn after the same command fails three times', async () => {
@@ -519,7 +537,7 @@ describe('RSI live execution evidence', () => {
   it('leaves a pending command approval unexecuted and records an incomplete run', async () => {
     useSettingsStore.setState({ approvalMode: 'suggest', approvalOverride: null });
     responses = [toolResponse('exec', { command: 'npm test' }), textResponse('Should not be requested.')];
-    await execute();
+    await execute(true);
 
     expect(streamCalls).toHaveLength(1);
     expect(execRun).not.toHaveBeenCalled();
@@ -532,7 +550,7 @@ describe('RSI live execution evidence', () => {
   it('retains passing command evidence when manual approval resumes the run', async () => {
     useSettingsStore.setState({ approvalMode: 'suggest', approvalOverride: null });
     responses = [toolResponse('exec', { command: 'npm test' }), textResponse('The approved check passed.')];
-    await execute();
+    await execute(true);
     const pending = useCodeChangesStore.getState().changes[0];
     expect(pending.status).toBe('pending');
 
