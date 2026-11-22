@@ -52,6 +52,7 @@ import {
   toolActionLabel,
   validateToolArgs,
   type McpToolInfo,
+  DELEGATION_TOOLS,
 } from '../core/tools/definitions';
 import {
   validateComputerRequest,
@@ -228,6 +229,8 @@ function resumeRsiExecution(convId: string): boolean {
 
 /** Live streaming state of one conversation's agent run. */
 export interface StreamRunState {
+  /** Temporary approval policy for this RSI execution only. */
+  rsiAutoApproval?: boolean;
   content: string;
   reasoningContent: string;
   status: 'thinking' | 'writing' | null;
@@ -734,7 +737,7 @@ async function startDetachedRun(
   const extraRoots = workspace.extraRoots.map((root) => root.path);
   const title = opts?.title || content.trim().replace(/\s+/g, ' ').slice(0, 50);
   const parent = chat.conversations.find((conversation) => conversation.id === opts?.parentConversationId);
-  const agentMode = parent?.agentMode ?? chat.agentMode;
+  const agentMode = opts?.parentConversationId ? 'standard' : chat.agentMode;
   const backgroundTask: BackgroundTaskRecord = {
     status: 'running',
     startedAt: Date.now(),
@@ -2045,6 +2048,7 @@ function buildSystemMessages(
   workspace: TaskWorkspace = useWorkspaceStore.getState(),
   agentMode: AgentMode = 'standard',
   isChatMode = useUIStore.getState().viewMode === 'chat',
+  delegatedWorker = false,
 ): ChatMessage[] {
   const settings = useSettingsStore.getState();
   const ws = workspace;
@@ -2056,6 +2060,7 @@ function buildSystemMessages(
     projectOpen: !isChatMode && !!ws.rootPath,
     isChatMode,
     disabledPlugins: usePluginStore.getState().disabled,
+    delegatedWorker,
   });
 
   // With native function calling the API carries the tool schemas, so the prompt
@@ -2177,6 +2182,13 @@ ${parallelRule}
       content: goal.status === 'running'
         ? `ACTIVE LONG-RUNNING GOAL:\n${goal.text}\n\nKeep pursuing this outcome across turns until it is verifiably complete. Preserve all normal sandbox and approval boundaries. After each subtask, immediately execute the next one without asking to continue. Update the checklist as you work. Audit the entire goal and report concrete verification before ending the final reply with [GOAL_COMPLETE] on its own line. For a genuine blocking question use ask_user.`
         : `PAUSED GOAL:\n${goal.text}\n\nThe user paused this goal. Answer steering or status questions, but do not autonomously advance the goal until it is resumed.`,
+    });
+  }
+
+  if (delegatedWorker) {
+    systemMessages.push({
+      role: 'system',
+      content: 'You are a delegated worker. Complete only the assigned task directly, within the existing sandbox and approval rules. Do not spawn agents or start background tasks. Return concise results, verification, and any blockers to the parent conversation.',
     });
   }
 
@@ -2379,7 +2391,7 @@ async function investigateSubAgent(
 
   const sys = `You are a focused research sub-agent inside ConeCode. Investigate the assigned task using ONLY read-only tools, then return a concise findings report.
 
-${howToCall} You may NOT edit files, create files, or run commands.
+${howToCall} Stay within the assigned task. You may NOT delegate, edit files, create files, or run commands.
 
 Workspace root: ${describeRoots(ws)}`;
   const messages: ChatMessage[] = [
@@ -2490,6 +2502,7 @@ async function autoCompactIfNeeded(convId: string, providerId: string, modelId: 
   const contextWindow = effectiveContextWindow(
     runModel?.contextWindow,
     useSettingsStore.getState().fullContext,
+    runModel?.hasContextWindowOverride,
   );
   // Only what is actually SENT counts toward the window: messages an earlier
   // compaction already folded into a summary are no longer part of the request,
@@ -2705,9 +2718,10 @@ async function runAgentLoopBody(
   // The conversation record owns its execution protocol: a live RSI run must
   // keep its overlay even if the user browses into another conversation and
   // the global mode selector changes underneath it.
-  const agentMode: AgentMode = convRecord?.agentMode ?? get().agentMode;
+  const delegatedWorker = Boolean(backgroundTask?.parentConversationId);
+  const agentMode: AgentMode = delegatedWorker ? 'standard' : convRecord?.agentMode ?? get().agentMode;
   const reasoningEffort = get().reasoningEffort;
-  const useRsiDesign = convRecord?.agentMode === 'rsi' && !isChatMode;
+  const useRsiDesign = agentMode === 'rsi' && convRecord?.agentMode === 'rsi' && !isChatMode;
   const rsiDesign = useRsiDesign && taskWorkspace.rootPath
     ? await readRsiDesignReference(taskWorkspace.rootPath).catch(() => null)
     : null;
@@ -2728,12 +2742,21 @@ async function runAgentLoopBody(
   const rsiSession: RsiExecutionSession = previousSession?.workspace.rootPath === taskWorkspace.rootPath ? previousSession : {
     runId: null, workspace: taskWorkspace, monitor: new RsiExecutionMonitor(taskWorkspace.rootPath ?? undefined), spendUsd: 0,
   };
-  let rsiRunId = rsiExecuting ? await beginRsiRun(convId).catch(() => null) : null;
-  const rsiMonitor = rsiSession.monitor;
-  if (rsiExecuting) {
+  let rsiRunId: string | null = null;
+  const startRsiExecution = async () => {
+    if (!ownsRun() || abortController.signal.aborted) return;
+    rsiExecuting = true;
+    if (!options.recoveringApproval) {
+      patchRun(convId, { rsiAutoApproval: true });
+    }
+    rsiRunId = await beginRsiRun(convId);
+    if (!ownsRun() || abortController.signal.aborted) {
+      return;
+    }
     rsiSession.runId = rsiRunId;
     rsiExecutionSessions.set(convId, rsiSession);
-  }
+  };
+  const rsiMonitor = rsiSession.monitor;
   let rsiRecovery = '';
   let rsiHistory = '';
   const refreshRsiHistory = async () => {
@@ -2839,6 +2862,8 @@ async function runAgentLoopBody(
   let turnRetries = 0;
   let goalFollowup = '';
   try {
+    if (rsiExecuting) await startRsiExecution();
+    if (!ownsRun() || abortController.signal.aborted) return;
     if (agentMode === 'rsi') {
       const initialMessages = get().activeConversationId === convId ? get().messages : await window.electronAPI.message.list(convId);
       const models = useModelStore.getState().models;
@@ -2876,6 +2901,7 @@ async function runAgentLoopBody(
             projectOpen: !isChatMode && !!taskWorkspace.rootPath,
             isChatMode,
             disabledPlugins: usePluginStore.getState().disabled,
+            delegatedWorker,
           })
         : [];
       const useNativeTools = toolset.length > 0;
@@ -2886,7 +2912,7 @@ async function runAgentLoopBody(
         ? get().messages
         : await window.electronAPI.message.list(convId);
       if (abortController.signal.aborted || !ownsRun()) break;
-      const turnGoal = useGoalStore.getState().goals[convId];
+      const turnGoal = delegatedWorker ? undefined : useGoalStore.getState().goals[convId];
       const pursuingGoal = turnGoal?.status === 'running' && agentMode !== 'rsi' && !planMode && !reviewMode;
       const allMessages: ChatMessage[] = [
         ...buildSystemMessages(
@@ -2898,6 +2924,7 @@ async function runAgentLoopBody(
           taskWorkspace,
           agentMode,
           isChatMode,
+          delegatedWorker,
         ),
         ...(useRsiDesign ? [{ role: 'system' as const, content: RSI_UI_DESIGN_PROMPT }] : []),
         // This conversation's own RSI direction (objective, metrics, scope,
@@ -3387,10 +3414,11 @@ async function runAgentLoopBody(
 
       rsiRecovery = '';
       if (agentMode === 'rsi' && !rsiExecuting && !planMode && !reviewMode && pending.some((entry) => entry.action && ['exec', 'edit_file', 'create_file', 'create_dir', 'delete', 'rename', 'copy'].includes(entry.action.action))) {
-        rsiExecuting = true;
-        rsiRunId = await beginRsiRun(convId).catch(() => null);
-        rsiSession.runId = rsiRunId;
-        rsiExecutionSessions.set(convId, rsiSession);
+        await startRsiExecution();
+        if (!ownsRun() || abortController.signal.aborted) {
+          rsiOutcome = 'stopped';
+          break;
+        }
       }
       const costBlocked = rsiCostStopReason();
       if (costBlocked) rsiCause = costBlocked;
@@ -3482,6 +3510,12 @@ async function runAgentLoopBody(
         }
         const action = entry.action;
 
+        if (delegatedWorker && DELEGATION_TOOLS.has(action.action)) {
+          outcomes.push({ call, label: toolActionLabel(action), result: 'Error: delegated workers cannot delegate. Complete the assigned task directly.' });
+          shouldContinue = true;
+          continue;
+        }
+
         if (action.action === 'ask_user') {
           if (action.question) {
             const questionMsg: Message = {
@@ -3541,7 +3575,8 @@ async function runAgentLoopBody(
             codeChangesStore.discardMessageApprovals(convId, new Set([assistantMsg.id]));
             return 'Skipped because this execution was stopped.';
           }
-          if (!options.recoveringApproval && shouldAutoApprove(effectiveApprovalMode(), data.kind)) {
+          const approvalMode = runBuffer().rsiAutoApproval ? 'fullAuto' : effectiveApprovalMode();
+          if (!options.recoveringApproval && shouldAutoApprove(approvalMode, data.kind)) {
             const outcome = await codeChangesStore.autoApply(id);
             observe(action, outcome.result ?? '', outcome.success);
             shouldContinue = true;
@@ -3697,7 +3732,8 @@ async function runAgentLoopBody(
                 status: (valid.includes(tdo.status as TodoStatus) ? tdo.status : 'pending') as TodoStatus,
               }));
             if (pursuingGoal) useGoalStore.getState().setPendingTodos(convId, todos.filter(item => item.status !== 'completed').length);
-            useTodosStore.getState().setTodos(todos);
+            // Detached work must not replace the checklist shown for another conversation.
+            if (get().activeConversationId === convId) useTodosStore.getState().setTodos(todos);
             const done = todos.filter((tdo) => tdo.status === 'completed').length;
             result = `${useLanguageStore.getState().t('todoUpdated')} (${done}/${todos.length})`;
             break;
@@ -4298,7 +4334,9 @@ async function runAgentLoopBody(
         set((s) => s.activeConversationId === convId ? { messages: [...s.messages, questionToShow!] } : {});
       }
 
-      if (askedUser || awaitingUserAction || !shouldContinue) {
+      const continueGoal = pursuingGoal && useGoalStore.getState().goals[convId]?.status === 'running';
+      const waitingForDelegate = continueGoal && backgroundWait === 'delegation';
+      if (askedUser || awaitingUserAction || waitingForDelegate || costBlocked || (!shouldContinue && !continueGoal)) {
         waitingForUser = !costBlocked;
         if (rsiExecuting && !costBlocked) rsiCause = askedUser ? 'Waiting for the user to answer.' : awaitingUserAction ? 'Waiting for action approval.' : 'Waiting for a delegated action; execution is not complete.';
         break;
@@ -4410,7 +4448,9 @@ async function runAgentLoopBody(
     // Close the RSI run record with the real outcome — completed, user-stopped
     // or failed with its cause. A superseded run still finalizes its own id.
     if (rsiRunId) {
-      await finalizeRsiRun(convId, rsiRunId, rsiOutcome, rsiCause).catch(() => {});
+      await finalizeRsiRun(convId, rsiRunId, rsiOutcome, rsiCause).catch((error) => {
+        console.error(`[RSI] Could not finalize run ${rsiRunId} for ${convId}:`, error);
+      });
     }
   }
 }
@@ -4992,6 +5032,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     // A live run re-reads the transcript next turn; only a quiet parent needs
     // a fresh loop. Either way there is never a second concurrent run.
     if (get().streamingRuns[parentConversationId]) return;
+    if (useGoalStore.getState().goals[parentConversationId]?.status === 'paused') return;
     const parent = get().conversations.find((c) => c.id === parentConversationId);
     const task = parent?.backgroundTask;
     if (task?.dismissed || task?.status === 'stopped' || task?.status === 'blocked'

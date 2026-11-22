@@ -717,6 +717,8 @@ export const CHAT_MODE_TOOLS = new Set([
   'generate_image',
 ]);
 
+export const DELEGATION_TOOLS: ReadonlySet<string> = new Set(['spawn_agent', 'run_background']);
+
 export function buildToolset(
   opts: {
     planMode?: boolean;
@@ -726,20 +728,25 @@ export function buildToolset(
     projectOpen?: boolean;
     isChatMode?: boolean;
     disabledPlugins?: string[];
+    delegatedWorker?: boolean;
   } = {},
 ): ToolDefinition[] {
   const isImageGenDisabled = opts.disabledPlugins?.includes('image-gen');
   const isAutoScreenshotDisabled = opts.disabledPlugins?.includes('auto-screenshot');
 
+  const availableBuiltins = opts.delegatedWorker
+    ? BUILTIN_TOOLS.filter((tool) => !DELEGATION_TOOLS.has(tool.name))
+    : BUILTIN_TOOLS;
+
   if (opts.isChatMode) {
     // In Chat Mode, chat is strictly for conversation and technical Q&A.
     // Workspace read/write/exec tools are excluded.
-    return BUILTIN_TOOLS
+    return availableBuiltins
       .filter((tl) => CHAT_MODE_TOOLS.has(tl.name))
       .filter((tl) => tl.name !== 'generate_image' || !isImageGenDisabled);
   }
 
-  const builtins = (opts.planMode ? BUILTIN_TOOLS.filter((tl) => PLAN_MODE_TOOLS.has(tl.name)) : BUILTIN_TOOLS)
+  const builtins = (opts.planMode ? availableBuiltins.filter((tl) => PLAN_MODE_TOOLS.has(tl.name)) : availableBuiltins)
     // Driving the screen is opt-in. While it's off the tool isn't advertised at
     // all — offering it would spend tokens on every turn and invite the model to
     // attempt something that can only fail.

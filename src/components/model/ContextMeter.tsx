@@ -76,7 +76,7 @@ export default function ContextMeter() {
   const convoTokens = messageTokens + liveTokens;
   const used = convoTokens + fileTokens + SYSTEM_PROMPT_TOKENS;
   const fullContext = useSettingsStore((s) => s.fullContext);
-  const window = effectiveContextWindow(selectedModel?.contextWindow, fullContext);
+  const window = effectiveContextWindow(selectedModel?.contextWindow, fullContext, selectedModel?.hasContextWindowOverride);
   const pct = window > 0 ? Math.min(used / window, 1) : 0;
   const remaining = Math.max(0, window - used);
   const remainingPct = window > 0 ? Math.round((1 - pct) * 100) : 0;

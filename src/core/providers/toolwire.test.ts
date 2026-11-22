@@ -1,3 +1,5 @@
+import { CustomAdapter } from './custom.adapter';
+import { DeepSeekAdapter } from './deepseek.adapter';
 import { describe, it, expect, vi } from 'vitest';
 import { OpenAIAdapter } from './openai.adapter';
 import { OpenRouterAdapter } from './openrouter.adapter';
@@ -37,6 +39,22 @@ const exchange: ChatMessage[] = [
   { role: 'tool', content: 'file body', tool_call_id: 'c1', name: 'read_file' },
   { role: 'assistant', content: 'done' },
 ];
+
+describe('OpenAI-compatible model context discovery', () => {
+  it.each([
+    ['deepseek', DeepSeekAdapter, 128_000],
+    ['custom', CustomAdapter, 32_000],
+  ] as const)('uses the %s fallback only when /models omits a context window', async (type, Adapter, fallback) => {
+    const adapter = new Adapter({ ...config, type });
+    vi.spyOn(adapter as unknown as { fetchWithTimeout: () => Promise<Response> }, 'fetchWithTimeout')
+      .mockResolvedValue(Response.json({ data: [
+        { id: 'deepseek-chat' },
+        { id: 'deepseek-reasoner' },
+        { id: 'declared', context_window: 8_192 },
+      ] }));
+    expect((await adapter.listModels()).map((model) => model.contextWindow)).toEqual([fallback, fallback, 8_192]);
+  });
+});
 
 describe('OpenAI wire format', () => {
   it('reads context and output limits from common API metadata shapes', () => {

@@ -1,5 +1,11 @@
 import { OpenAIAdapter } from './openai.adapter';
 
-// Plain OpenAI-compatible endpoint. Inherits listModels/send/stream from
-// OpenAIAdapter with no overrides.
-export class CustomAdapter extends OpenAIAdapter {}
+import type { AIModel } from '../../types';
+
+export class CustomAdapter extends OpenAIAdapter {
+  protected override mapListModel(m: any): AIModel {
+    return this.mapModel(m, {
+      contextWindow: this.detectContextWindow(m) ?? 32_000,
+    });
+  }
+}

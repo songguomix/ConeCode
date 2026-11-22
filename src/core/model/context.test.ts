@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_CONTEXT_TOKENS, effectiveContextWindow } from './context';
 
 describe('context budget', () => {
+  it('uses a manual context window above the budget cap with full context disabled', () => {
+    expect(effectiveContextWindow(1_000_000, false, true)).toBe(1_000_000);
+  });
+
   it('defaults to 256K', () => {
     expect(DEFAULT_CONTEXT_TOKENS).toBe(256_000);
     expect(effectiveContextWindow(undefined, false)).toBe(256_000);

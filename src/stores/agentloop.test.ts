@@ -647,14 +647,15 @@ describe('runAgentLoop with native tool calling', () => {
     try {
       queued = [
         textResponse('Finished the first item.'),
-        toolCallResponse('read_file', { path: '/proj/a.ts' }),
-        textResponse('Verified the second item against the file contents.\n[GOAL_COMPLETE]'),
+        toolCallResponse('edit_file', { path: '/proj/a.ts', content: 'file body' }),
+        textResponse('Verified the second item against the tool result.\n[GOAL_COMPLETE]'),
       ];
       await useChatStore.getState().sendMessage('Finish both items', 'p1', 'gpt-test');
       expect(streamCalls).toHaveLength(3);
       expect(useGoalStore.getState().goals.conv1.status).toBe('completed');
       const messages = useChatStore.getState().messages;
-      expect(messages[messages.length - 1]?.content).toBe('Verified the second item against the file contents.');
+      expect(messages.some((message) => message.content.includes('No change: the edit'))).toBe(true);
+      expect(messages[messages.length - 1]?.content).toBe('Verified the second item against the tool result.');
     } finally {
       useChatStore.setState({ agentMode: 'standard' });
       useGoalStore.getState().clearGoal('conv1');

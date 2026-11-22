@@ -5,6 +5,7 @@ import { useModelStore } from './model.store';
 import { useSettingsStore } from './settings.store';
 import { useWorkspaceStore } from './workspace.store';
 import { useTodosStore } from './todos.store';
+import { useGoalStore } from './goal.store';
 import { useMemoryStore } from './memory.store';
 import { useCodeChangesStore } from './codeChanges.store';
 import { useUIStore } from './ui.store';
@@ -15,6 +16,7 @@ import type { AIModel, Conversation, Message } from '../types';
 // detached, completion wakes the parent with the child's result.
 
 let streamCalls: any[];
+let todosAtStream: ReturnType<typeof useTodosStore.getState>['todos'][];
 let queued: any[];
 let created: Message[];
 let transcripts: Record<string, Message[]>;
@@ -56,6 +58,7 @@ function lastMessage(id: string): Message | undefined {
 
 function installStubs() {
   streamCalls = [];
+  todosAtStream = [];
   queued = [];
   created = [];
   transcripts = {};
@@ -67,6 +70,7 @@ function installStubs() {
       chat: {
         stream: async (params: any) => {
           streamCalls.push(params);
+          todosAtStream.push(useTodosStore.getState().todos);
           return queued.shift() ?? textResponse('done');
         },
         stop: async () => true,
@@ -119,12 +123,14 @@ function resetStores() {
   useUIStore.setState({ viewMode: 'work' });
   useWorkspaceStore.setState({ rootPath: '/proj', mcpTools: [], contextFiles: [], selectedFile: null, fileContent: null, agentsMd: null });
   useTodosStore.getState().clearTodos();
+  useGoalStore.getState().clearGoal('conv1');
   useChatStore.setState({
     messages: [],
     conversations: [parent],
     activeConversationId: 'conv1',
     isStreaming: false,
     planMode: false,
+    agentMode: 'standard',
     error: null,
     messageEdits: {},
     streamingRuns: {},
@@ -202,6 +208,52 @@ describe('agent background delegation', () => {
     const live = useChatStore.getState().messages;
     expect(live[live.length - 1].content).toContain('file is ready');
     expect(created.some((m) => String(m.content).includes('file is ready'))).toBe(true);
+  });
+
+  it('records a worker report without waking a paused goal', async () => {
+    useGoalStore.getState().setGoal('conv1', 'Check the file');
+    useChatStore.getState().stopGeneration('conv1');
+
+    await useChatStore.getState().resumeAfterBackground('conv1', 'file check', 'The worker finished.');
+
+    expect(lastMessage('conv1')?.content).toContain('The worker finished.');
+    expect(useGoalStore.getState().goals.conv1?.status).toBe('paused');
+    expect(streamCalls).toHaveLength(0);
+    expect(useChatStore.getState().streamingRuns.conv1).toBeUndefined();
+  });
+
+  it('resumes a goal after its worker finishes directly without changing the parent checklist', async () => {
+    useChatStore.setState({ agentMode: 'goal' });
+    const parentTodos = [{ content: 'Verify the file', status: 'in_progress' }];
+    queued = [
+      toolCallResponse('update_todos', { todos: parentTodos }),
+      toolCallResponse('run_background', { task: 'Check /proj/a.ts' }),
+      toolCallResponse('spawn_agent', { task: 'Check the file for me' }),
+      textResponse('```json\n{"action":"run_background","task":"Delegate again"}\n```'),
+      toolCallResponse('update_todos', { todos: [{ content: 'Worker check', status: 'completed' }] }),
+      toolCallResponse('read_file', { path: '/proj/a.ts' }),
+      textResponse('Child checked the file directly.'),
+      textResponse('Premature completion.\n[GOAL_COMPLETE]'),
+      toolCallResponse('update_todos', { todos: [{ content: 'Verify the file', status: 'completed' }] }),
+      textResponse('Verified the file using the worker findings.\n[GOAL_COMPLETE]'),
+    ];
+    await useChatStore.getState().sendMessage('Verify the file', 'p1', 'gpt-test');
+    await vi.waitFor(() => expect(useGoalStore.getState().goals.conv1?.status).toBe('completed'));
+
+    expect([...conversations.keys()]).toEqual(['conv1', 'child1']);
+    expect(streamCalls.map((call) => call.conversationId)).toEqual([
+      'conv1', 'conv1', 'child1', 'child1', 'child1', 'child1', 'child1', 'conv1', 'conv1', 'conv1',
+    ]);
+    const firstWorkerCall = streamCalls[2];
+    expect(firstWorkerCall.tools.map((tool: { name: string }) => tool.name)).not.toContain('spawn_agent');
+    expect(firstWorkerCall.tools.map((tool: { name: string }) => tool.name)).not.toContain('run_background');
+    expect(JSON.stringify(firstWorkerCall.messages)).toContain('Complete only the assigned task directly');
+    expect(JSON.stringify(firstWorkerCall.messages)).not.toContain('ACTIVE LONG-RUNNING GOAL');
+    expect(transcripts.child1.filter((message) => message.isToolResult && message.content.includes('cannot delegate'))).toHaveLength(2);
+    expect(lastMessage('child1')?.content).toBe('Child checked the file directly.');
+    expect(JSON.stringify(streamCalls[7].messages)).toContain('Child checked the file directly.');
+    expect(todosAtStream[7]).toEqual(parentTodos);
+    expect(lastMessage('conv1')?.content).toBe('Verified the file using the worker findings.');
   });
 
   it('tells the parent when the child stalls on approval', async () => {

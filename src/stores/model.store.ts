@@ -118,6 +118,7 @@ function applyLimitOverrides(models: AIModel[], overrides: Record<string, LimitO
       autoContextWindow,
       autoMaxOutputTokens,
       contextWindow: o?.contextWindow ?? autoContextWindow,
+      hasContextWindowOverride: o?.contextWindow !== undefined,
       // Max output is API-owned: the provider's declared value is always the
       // effective one, so a legacy hand-typed cap can no longer shadow it.
       maxOutputTokens: autoMaxOutputTokens,
