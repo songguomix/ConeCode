@@ -322,7 +322,12 @@ export function pruneArchive(archive: ParetoCandidate[]): ParetoCandidate[] {
 export function toExperimentRecord(
   input: EpisodeInput, outcome: EpisodeOutcome, timestamp = Date.now(),
 ): import('./rsiTree').ExperimentRecord {
-  const metrics = Object.fromEntries(input.result.metrics.map((metric) => [metric.id, scaledDelta(metric)]));
+  const metrics: Record<string, number> = {};
+  for (const metric of input.result.metrics) {
+    if (!metric.id.trim()) continue;
+    const scaled = scaledDelta(metric);
+    if (Number.isFinite(scaled)) metrics[metric.id] = scaled;
+  }
   return {
     id: input.candidate.id,
     parentId: input.parentId,
@@ -330,7 +335,7 @@ export function toExperimentRecord(
     candidateId: input.candidate.id,
     module: input.candidate.module,
     strategyId: input.strategyId,
-    externalPass: input.result.externalPass,
+    externalPass: input.result.externalPass && input.retentionPassed !== false,
     metrics,
     reward: outcome.reward,
     costUsd: Math.max(0, input.costUsd),
@@ -395,7 +400,7 @@ export function evaluateStop(input: StopInput, epsilon = 1e-3): StopOutcome {
   // continuation. It reports "no better candidate within budget".
   let isLocalPlateau = false;
   if (input.acceptedCount >= 1 && input.consecutiveNonImproving >= PLATEAU_WINDOW) {
-    const hist = input.rewardHistory.filter((r) => r !== REWARD_FAIL);
+    const hist = input.rewardHistory.filter((r) => Number.isFinite(r) && r !== REWARD_FAIL);
     if (hist.length >= PLATEAU_WINDOW + 1) {
       const tail = hist.slice(-PLATEAU_WINDOW);
       const priorBest = Math.max(...hist.slice(0, -PLATEAU_WINDOW));
@@ -409,7 +414,8 @@ export function evaluateStop(input: StopInput, epsilon = 1e-3): StopOutcome {
       // No accepted history to compare against beyond the window: still stop
       // rather than churn, but label it plainly.
       isLocalPlateau = true;
-      reasons.push('local-plateau');
+      const narrow = isModuleConcentrated(input.recentModules);
+      reasons.push(narrow ? 'local-plateau-narrow-search' : 'local-plateau');
     }
   }
   const shouldStop = reasons.length > 0;

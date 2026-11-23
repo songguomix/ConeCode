@@ -83,6 +83,10 @@ export class OpenAIAdapter extends BaseAdapter {
       max_tokens: params.maxTokens,
     };
     if (params.reasoningEffort) body.reasoning_effort = params.reasoningEffort;
+    if (this.config.type === 'openai' && params.conversationId
+      && /^https:\/\/api\.openai\.com(?:\/|$)/i.test(this.config.baseUrl)) {
+      body.prompt_cache_key = params.conversationId;
+    }
     this.applyTools(body, params);
     return body;
   }

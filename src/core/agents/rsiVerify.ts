@@ -78,9 +78,16 @@ export interface VitestSummary {
   skipped: number;
 }
 
+const ANSI_ESCAPE = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
+
+function stripAnsi(output: string): string {
+  return output.replace(ANSI_ESCAPE, '');
+}
+
 /** Parse the trailing "Tests  X failed | Y passed | Z skipped (N)" line. Null when absent. */
 export function parseVitestSummary(output: string): VitestSummary | null {
-  const lines = output.split('\n').filter((l) => /^\s*Tests\s+/.test(l));
+  const clean = stripAnsi(output);
+  const lines = clean.split('\n').filter((l) => /^\s*Tests\s+/.test(l));
   if (!lines.length) return null;
   const last = lines[lines.length - 1];
   const num = (re: RegExp): number => {
@@ -92,7 +99,7 @@ export function parseVitestSummary(output: string): VitestSummary | null {
 
 /** Count "error TSNNNN" lines. Empty output (clean tsc run) → 0 errors. */
 export function parseTscOutput(output: string): { errors: number } {
-  const m = output.match(/error TS\d+/g);
+  const m = stripAnsi(output).match(/error TS\d+/g);
   return { errors: m ? m.length : 0 };
 }
 

@@ -162,6 +162,10 @@ export interface SendMessageOptions {
 }
 const taskMemoryByConversation = new Map<string, TaskMemoryContext>();
 const rsiSpendBaselines = new Map<string, number>();
+// Stabilize auto reasoning effort per conversation so short follow-ups do not
+// downgrade thinking config mid-session and invalidate Anthropic/KV caches.
+const autoEffortByConversation = new Map<string, { modelKey: string; effort: 'low' | 'medium' | 'high' }>();
+const EFFORT_RANK: Record<'low' | 'medium' | 'high', number> = { low: 0, medium: 1, high: 2 };
 type TaskWorkspaceContext = Pick<WorkspaceSnapshot,
   'rootPath' | 'extraRoots' | 'selectedFile' | 'fileContent' | 'selectedFileIsImage' |
   'contextFiles' | 'agentsMd' | 'agentsMdPath' | 'memoryFiles'>;
@@ -1515,14 +1519,16 @@ export function contextMessagesForUsage(messages: Message[]): Message[] {
 // ---------------------------------------------------------------------------
 
 /** Maximum number of long tool results to retain verbatim in one request. */
-export const TOOL_RESULTS_KEPT_LIVE = 8;
+export const TOOL_RESULTS_KEPT_LIVE = 10;
 const TOOL_RESULTS_EVICTION_BATCH = 4;
 const ELIDED_TOOL_HEAD = 400;
 const ELIDED_TOOL_TAIL = 200;
+/** Only count substantial tool outputs toward eviction so small reads don't bust KV cache. */
+const ELIDED_TOOL_MIN_CHARS = 2400;
 
 /** Collapse one old tool result to its head and tail. */
 export function elideOldToolResult(text: string): string {
-  if (!text || text.length <= ELIDED_TOOL_HEAD + ELIDED_TOOL_TAIL) return text;
+  if (!text || text.length <= ELIDED_TOOL_MIN_CHARS) return text;
   const omitted = text.length - ELIDED_TOOL_HEAD - ELIDED_TOOL_TAIL;
   return (
     text.slice(0, ELIDED_TOOL_HEAD) +
@@ -1554,7 +1560,10 @@ function modelVisibleContent(message: Message, costLock: boolean): string {
   );
 }
 
-export function buildApiMessages(messages: Message[]): ChatMessage[] {
+export function buildApiMessages(messages: Message[], runtimeContext?: {
+  afterMessageId?: string;
+  message: ChatMessage;
+}): ChatMessage[] {
   // Compaction shrinks what the MODEL sees; the transcript keeps everything.
   const costLock = useSettingsStore.getState().costLock === true;
   const live = contextMessagesForUsage(messages).map((message) => {
@@ -1570,7 +1579,7 @@ export function buildApiMessages(messages: Message[]): ChatMessage[] {
   // every new tool call. Short results already fit in a stub and cost no slot.
   const longResults = live.filter((m) =>
     (m.role === 'tool' || (m.role === 'user' && m.isToolResult))
-    && m.content.length > ELIDED_TOOL_HEAD + ELIDED_TOOL_TAIL,
+    && m.content.length > ELIDED_TOOL_MIN_CHARS,
   );
   const dropped = Math.max(0, Math.ceil(
     (longResults.length - TOOL_RESULTS_KEPT_LIVE) / TOOL_RESULTS_EVICTION_BATCH,
@@ -1591,6 +1600,8 @@ export function buildApiMessages(messages: Message[]): ChatMessage[] {
   const out: ChatMessage[] = [];
   const pendingToolReplies = new Set<string>();
   const batchImages: string[] = [];
+  const contextAnchor = runtimeContext ? live.findIndex((message) => message.id === runtimeContext.afterMessageId) : -1;
+  let contextIndex = runtimeContext && runtimeContext.afterMessageId === undefined ? 0 : undefined;
 
   // Only the last few chat images go over the wire; everything older is
   // described in text instead of re-sent.
@@ -1599,6 +1610,10 @@ export function buildApiMessages(messages: Message[]): ChatMessage[] {
   );
 
   for (let idx = 0; idx < live.length; idx++) {
+    // Never put workspace context between a native tool call and its replies.
+    if (contextAnchor >= 0 && idx > contextAnchor && contextIndex === undefined && pendingToolReplies.size === 0) {
+      contextIndex = out.length;
+    }
     const m = live[idx];
     // A compaction summary goes in as SYSTEM context, not as an assistant turn.
     // As an assistant turn it is the first message once everything before it is
@@ -1682,6 +1697,7 @@ export function buildApiMessages(messages: Message[]): ChatMessage[] {
       ...(m.role === 'assistant' && idx !== lastAssistantIdx ? {} : { reasoning_content: m.reasoning_content }),
     });
   }
+  if (runtimeContext) out.splice(contextIndex ?? out.length, 0, runtimeContext.message);
   return out;
 }
 
@@ -2293,10 +2309,10 @@ function formatContextFile(label: string, path: string, content: string, limit: 
 }
 
 /** Cache the transcript up to its last block, before request-only observations. */
-function markHistoryBoundary(messages: ChatMessage[]): ChatMessage[] {
+function markHistoryBoundary(messages: ChatMessage[], runtimeContext?: ChatMessage): ChatMessage[] {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
-    if (message.role === 'system') continue;
+    if (message.role === 'system' || message === runtimeContext) continue;
     const hasContent = typeof message.content === 'string' ? message.content.trim() : message.content.length;
     if (message.role === 'tool' || message.tool_calls?.length || hasContent) {
       return messages.map((item, index) => index === i
@@ -2305,6 +2321,13 @@ function markHistoryBoundary(messages: ChatMessage[]): ChatMessage[] {
     }
   }
   return messages;
+}
+
+function runtimeMessageContent(parts: ContentPart[]): ChatMessage['content'] {
+  // Plain text keeps text-only OpenAI-compatible gateways on their existing
+  // wire format. Use content parts only when there is a real image.
+  const textParts = parts.filter((part): part is Extract<ContentPart, { type: 'text' }> => part.type === 'text');
+  return textParts.length === parts.length ? textParts.map((part) => part.text).join('\n\n') : parts;
 }
 
 // Read-only tools a research sub-agent is allowed to use.
@@ -2727,6 +2750,12 @@ async function runAgentLoopBody(
     : null;
   if (!ownsRun() || abortController.signal.aborted) return;
   const runtimeContext = buildRuntimeContext(taskWorkspace, isChatMode, new Date(turnStartTime), taskMemory, rsiDesign);
+  // Retain user data at the initial transcript boundary as tool results are
+  // appended. The stable prefix includes that data without replaying it at the tail.
+  const stableContext: ChatMessage | undefined = runtimeContext.length > 1
+    ? { role: 'user', content: runtimeMessageContent(runtimeContext) }
+    : undefined;
+  let runtimeContextAnchor: string | undefined;
   // A dedicated RSI conversation carries its own direction config; it is
   // injected after the mode overlay so the protocol always sees the frozen
   // goal inputs and its per-conversation archive path.
@@ -2914,6 +2943,14 @@ async function runAgentLoopBody(
       if (abortController.signal.aborted || !ownsRun()) break;
       const turnGoal = delegatedWorker ? undefined : useGoalStore.getState().goals[convId];
       const pursuingGoal = turnGoal?.status === 'running' && agentMode !== 'rsi' && !planMode && !reviewMode;
+      if (iteration === 0 && stableContext) {
+        const visibleHistory = contextMessagesForUsage(conversationMessages);
+        runtimeContextAnchor = visibleHistory[visibleHistory.length - 1]?.id;
+      }
+      const history = buildApiMessages(conversationMessages, stableContext && {
+        afterMessageId: runtimeContextAnchor,
+        message: stableContext,
+      });
       const allMessages: ChatMessage[] = [
         ...buildSystemMessages(
           modelName,
@@ -2934,7 +2971,7 @@ async function runAgentLoopBody(
         // Local UI notices (/help, /diff output, etc.) are shown in the
         // transcript but must not be replayed to the model as context; tool
         // calls and their results are re-linked into a protocol-valid exchange.
-        ...markHistoryBoundary(buildApiMessages(conversationMessages)),
+        ...markHistoryBoundary(history, stableContext),
       ];
       const baseMessages = allMessages;
 
@@ -2945,7 +2982,7 @@ async function runAgentLoopBody(
       const continuing = stitch.active && stitch.forIteration === iteration;
       if (!continuing) stitch = freshStitch();
       const requestMessages = (frame: ComputerFrame | null): ChatMessage[] => {
-        const context = [...runtimeContext];
+        const context: ContentPart[] = iteration === 0 && !stableContext ? [...runtimeContext] : [];
         if (iteration === 0 && options.recoveringBackground) context.push({
           type: 'text',
           text: 'Continue the interrupted task from the saved transcript. Preserve completed work and verify the current state before repeating any tool action whose result is missing.',
@@ -2953,16 +2990,14 @@ async function runAgentLoopBody(
         if (pursuingGoal && goalFollowup) context.push({ type: 'text', text: goalFollowup });
         if (rsiHistory) context.push({ type: 'text', text: rsiHistory });
         if (rsiExecuting) context.push({ type: 'text', text: `${rsiMonitor.context()}\n${rsiRecovery}`.trim() });
-        const textParts = context.filter((part): part is Extract<ContentPart, { type: 'text' }> => part.type === 'text');
-        // Plain text keeps text-only OpenAI-compatible gateways on their
-        // existing wire format. Use content parts only for a real image.
-        const tail: ChatMessage[] = [{
-          role: 'user',
-          // Keep attachments, recalled memory and RSI evidence visible even
-          // on a tool follow-up. Only repeatable environment metadata can go.
-          runtimeContext: context.length === 1,
-          content: textParts.length === context.length ? textParts.map((part) => part.text).join('\n\n') : context,
-        }];
+        const tail: ChatMessage[] = [];
+        if (context.length > 0) {
+          tail.push({
+            role: 'user',
+            runtimeContext: context.length === 1 && context[0] === runtimeContext[0],
+            content: runtimeMessageContent(context),
+          });
+        }
         if (frame) {
           tail.push({ role: 'user', content: screenshotParts([frame.dataUrl]) });
         }
@@ -3038,8 +3073,20 @@ async function runAgentLoopBody(
             messages: request,
             ...(observedFrame && { computerFrameId: observedFrame.frameId }),
             // Auto intensity resolves per-turn from the user's ask (codex-style),
-            // then clamps to the levels the selected model actually declares.
-            reasoningEffort: resolveEffort(reasoningEffort, lastUserText(conversationMessages), selectedModel?.reasoningEfforts),
+            // ratcheting monotonically within a conversation so short follow-ups
+            // never downgrade thinking config and bust Anthropic/KV caches.
+            reasoningEffort: (() => {
+              const resolved = resolveEffort(reasoningEffort, lastUserText(conversationMessages), selectedModel?.reasoningEfforts);
+              if (reasoningEffort !== 'auto') return resolved;
+              const hasPriorAssistant = conversationMessages.some((m) => m.role === 'assistant' && !m.isLocalNotice);
+              const previous = hasPriorAssistant ? autoEffortByConversation.get(convId) : undefined;
+              const prev = previous?.modelKey === sessionKey ? previous.effort : undefined;
+              const chosen = prev && EFFORT_RANK[prev] > EFFORT_RANK[resolved]
+                ? resolveEffort(prev, '', selectedModel?.reasoningEfforts)
+                : resolved;
+              autoEffortByConversation.set(convId, { modelKey: sessionKey, effort: chosen });
+              return chosen;
+            })(),
             maxTokens,
             // Tags every chunk and keys the main-process abort controller, so
             // concurrent conversations never cancel or mix each other's output.
@@ -4972,6 +5019,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     rsiExecutionSessions.delete(id);
     rsiSpendBaselines.delete(id);
     taskMemoryByConversation.delete(id);
+    autoEffortByConversation.delete(id);
     const newSnapshots = new Map(get().workspaceSnapshots);
     newSnapshots.delete(id);
     set((s) => ({

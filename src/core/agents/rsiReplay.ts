@@ -95,8 +95,9 @@ export function replayScore(tree: DiscoveryTree, policy: ExplorationPolicy, opts
   rounds = Math.max(1, rounds);
   let maxReward = REWARD_FAIL;
   for (const node of revealed) {
+    const baseReason = (node.failureReason ?? '').split('+')[0];
     const invalid = !node.externalPass || node.status === 'failed'
-      || ['discipline-veto', 'hard-floor-breach', 'budget-exceeded', 'invalid-declaration', 'mutate-error', 'verify-error'].includes(node.failureReason ?? '');
+      || ['discipline-veto', 'hard-floor-breach', 'budget-exceeded', 'invalid-declaration', 'mutate-error', 'verify-error'].includes(baseReason);
     if (!invalid && Number.isFinite(node.reward) && node.reward > maxReward) maxReward = node.reward;
   }
   // Empty history reveals nothing: score is pure cost of zero attempts.

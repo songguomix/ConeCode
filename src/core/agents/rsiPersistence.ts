@@ -192,9 +192,13 @@ export function appendLesson(
     fs.writeFile(path, renderReflections(next));
     return { appended: false, reinforced: true, rejected: null };
   }
-  const id = `les-${String(lessons.length + 1).padStart(3, '0')}`;
+  const maxSeq = lessons.reduce((max, l) => {
+    const m = /^les-(\d+)$/.exec(l.id);
+    return m ? Math.max(max, parseInt(m[1], 10)) : max;
+  }, lessons.length);
+  const id = `les-${String(maxSeq + 1).padStart(3, '0')}`;
   const entry: Lesson = { id, module: lesson.module, text, episodes: [lesson.episodeId], outcome: lesson.outcome };
-  // Prune past the cap: drop the oldest reinforced-neutral entries first.
+  // Prune past the cap: drop the oldest entries first.
   const kept = [...lessons, entry];
   while (kept.length > MAX_LESSONS) kept.shift();
   fs.writeFile(path, renderReflections(kept));
@@ -338,12 +342,14 @@ export function rebuildLoopStateFromTrees(
     } else {
       state.consecutiveNonImproving += 1;
       state.consecutiveHardFails = n.status === 'failed' ? state.consecutiveHardFails + 1 : 0;
-      const reason = n.failureReason;
+      const reason = n.failureReason?.split('+')[0];
       const cls = reason === 'invalid-declaration' ? 'no-improvement'
         : reason === 'mutate-error' || reason === 'verify-error' ? 'external-fail'
         : classifyFailure(reason as ArchiveVerdict['reason'], reason === 'budget-exceeded');
       state.recentFailures = [...state.recentFailures, cls].slice(-10);
-      if (reason === 'pareto-nondominated') state.archive.push({ id: n.id, metrics: { ...n.metrics } });
+      if (reason === 'pareto-nondominated' && n.externalPass && isMeasuredVector(n.metrics)) {
+        state.archive.push({ id: n.id, metrics: { ...n.metrics } });
+      }
     }
   }
   // Frontier stays the true non-dominated set.

@@ -529,7 +529,7 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
   {
     name: 'github_push',
     description:
-      'Open the GitHub plugin’s push review for this conversation’s project. The user confirms the repository, local branch, and remote branch before any push. The plugin uses the connected GitHub account or saved credentials and handles committing and pushing. Let the plugin run the operation and report its outcome.',
+      'Open the GitHub plugin’s push review for this conversation’s project. The user confirms the repository, local branch, and remote branch before any push. The plugin uses the connected GitHub account or saved credentials and handles committing and pushing through the Git CLI. Let the plugin run the operation and report its outcome.',
     parameters: {
       type: 'object',
       properties: {
@@ -550,7 +550,7 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
       'Call it after a build produced the installers (dmg/exe/AppImage/…) in the build output directory. ' +
       'When "files" is omitted the plugin auto-detects installers in the project build output (release/ or dist/). ' +
       'The user always confirms the publish in a review dialog before anything is uploaded. ' +
-      'Never run git commands or call the GitHub API yourself; the plugin owns publishing and reports the outcome.',
+      'Write Markdown release notes in notes using verified changes, and use the returned result to report the outcome. The plugin runs GitHub CLI commands.',
     parameters: {
       type: 'object',
       properties: {

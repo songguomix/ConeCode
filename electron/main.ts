@@ -1692,7 +1692,7 @@ function registerIPC() {
   ipcMain.handle('github-account:logout', () => githubAuth.logout());
 
   ipcMain.handle('git:publishRelease', async (_, options: Omit<ReleaseOptions, 'token'> & { token?: string }) =>
-    publishGithubRelease({ ...options, token: await githubToken(options?.token) }));
+    publishGithubRelease({ ...options, token: await githubToken(options?.token) }, undefined, getShellEnv()));
 
   // GitHub plugin reply assistant: main-process requests avoid renderer CORS and
   // keep the token out of any browser-level network layer.

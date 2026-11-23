@@ -15,6 +15,7 @@ const config: ProviderConfig = {
 // Subclasses expose the protected wire-format builders so the conversion can be
 // asserted without making a network call.
 class OpenAIProbe extends OpenAIAdapter {
+  wire(params: SendMessageParams) { return this.buildRequestBody(params); }
   clean(messages: ChatMessage[]) { return this.cleanMessages(messages); }
   tools(params: SendMessageParams) { const body: any = {}; this.applyTools(body, params); return body; }
   finalize(acc: Map<number, { id: string; name: string; args: string }>) { return this.finalizeToolCalls(acc); }
@@ -57,6 +58,13 @@ describe('OpenAI-compatible model context discovery', () => {
 });
 
 describe('OpenAI wire format', () => {
+  it('uses the conversation cache key only on the official OpenAI endpoint', () => {
+    const official = new OpenAIProbe({ ...config, baseUrl: 'https://api.openai.com/v1' });
+    const params = { model: 'm', messages: [], conversationId: 'chat-1' };
+    expect(official.wire(params).prompt_cache_key).toBe('chat-1');
+    expect(openai.wire(params)).not.toHaveProperty('prompt_cache_key');
+  });
+
   it('reads context and output limits from common API metadata shapes', () => {
     const camelCase = openai.model({
       id: 'camel',

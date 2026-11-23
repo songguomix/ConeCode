@@ -22,17 +22,29 @@ export class OpenRouterAdapter extends OpenAIAdapter {
 
     if (/^~?anthropic\/claude-/i.test(params.model)) {
       const boundary = params.messages.findIndex((message) => message.role !== 'system' && !!message.cacheControl);
+      const toolContinuation = params.messages[boundary]?.role === 'tool'
+        && params.messages.slice(boundary + 1).every((message) => message.runtimeContext);
+      const activeMessages = toolContinuation
+        ? params.messages.slice(0, boundary + 1)
+        : params.messages;
+      if (toolContinuation && activeMessages.length !== params.messages.length) {
+        body.messages = this.cleanMessages(activeMessages);
+      }
       let historyIndex = boundary;
-      while (historyIndex >= 0) {
-        const message = params.messages[historyIndex];
+      while (!toolContinuation && historyIndex >= 0) {
+        const message = activeMessages[historyIndex];
         if ((message.role === 'user' || message.role === 'assistant') && !message.tool_calls?.length &&
             (typeof message.content === 'string' ? message.content.trim() : message.content.length)) break;
         historyIndex--;
       }
-      for (const [index, message] of params.messages.entries()) {
+      // On pure tool continuations where the boundary sits on a tool result,
+      // OpenRouter's Chat Completions tool message does not accept inline
+      // cache_control blocks. Use top-level automatic caching so the entire
+      // tool-call history is cached without exceeding Anthropic's 4-breakpoint cap.
+      for (const [index, message] of activeMessages.entries()) {
         if (message.role === 'tool' || message.tool_calls?.length) continue;
         const marker = message.role === 'system' ? message.cacheControl
-          : index === historyIndex ? params.messages[boundary].cacheControl : undefined;
+          : (!toolContinuation && index === historyIndex) ? activeMessages[boundary].cacheControl : undefined;
         // Keep Claude text blocks in the same shape when the breakpoint moves.
         const wire = body.messages[index];
         const parts = typeof wire.content === 'string'
@@ -46,7 +58,7 @@ export class OpenRouterAdapter extends OpenAIAdapter {
       // OpenRouter's Chat Completions tool-result shape doesn't accept an
       // Anthropic block marker. When present, use the last eligible history
       // block above instead of caching the volatile context at the very end.
-      if (boundary === -1) body.cache_control = { type: 'ephemeral' };
+      if (boundary === -1 || toolContinuation) body.cache_control = { type: 'ephemeral' };
     }
     return body;
   }

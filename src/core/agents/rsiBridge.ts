@@ -332,6 +332,31 @@ export async function verifyAndAdjudicate(prev: LoopState, deps: AdjudicateDeps)
     };
   }
 
+  // 0b. Stop boundary: honor an already-stopped loop or exhausted budget before verification.
+  const beforeStop = emptyStop(prev);
+  if (prev.stopped || beforeStop.shouldStop) {
+    const reasons = [...new Set([...prev.stopReasons, ...beforeStop.reasons])];
+    const rollback = await rollbackWorkspace(deps.afs, deps.snapshot, (p) => deps.afs.readFile(p));
+    const st: LoopState = { ...prev, stopped: true, stopReasons: reasons };
+    const stop: StopOutcome = {
+      ...beforeStop, shouldStop: true, reasons,
+      report: `STOP [${reasons.join(' | ')}]: resume explicitly before starting another candidate.`,
+    };
+    await deps.afs.writeFile(
+      `${deps.rsiDir.replace(/\/+$/, '')}/LOOP_STATE.json`,
+      JSON.stringify({ version: 1, state: st }, null, 2),
+    );
+    return {
+      outcome: {
+        state: st, reward: NaN,
+        verdict: { action: 'reject', reason: 'not-better-than-best' },
+        mustRollback: true, status: 'rejected', duplicate: false,
+      },
+      state: st, iterationPath: null, evolutionAppended: false,
+      stop, preempted: 'loop-stopped', rollback, cascadeStages: 0, missingMetrics: [],
+    };
+  }
+
   // 1. Goal freeze + candidate validation — before spending verification budget.
   const rawGoal = await deps.afs.readFile(`${deps.rsiDir.replace(/\/+$/, '')}/GOAL_VECTOR.md`);
   if (rawGoal == null || hashContent(rawGoal) !== deps.goalHash) {
@@ -401,7 +426,7 @@ export async function verifyAndAdjudicate(prev: LoopState, deps: AdjudicateDeps)
   const appended = appendExperiment(tree, {
     id: deps.candidate.id, parentId: deps.parentId, baselineId: deps.baselineId,
     candidateId: deps.candidate.id, module: deps.candidate.module, strategyId: deps.strategyId,
-    externalPass: result.externalPass, metrics: Object.fromEntries(deltas.map((d) => [d.id, scaledDelta(d)])),
+    externalPass: result.externalPass && deps.retentionPassed !== false, metrics: Object.fromEntries(deltas.map((d) => [d.id, scaledDelta(d)])),
     reward: outcome.reward, costUsd: Math.max(0, deps.costUsd), costSteps: cascade.costSteps,
     budgetUsd: deps.candidate.costBudgetUsd, attempts: 1, status: outcome.status,
     ...(outcome.failureReason ? { failureReason: outcome.failureReason } : {}),
@@ -480,15 +505,21 @@ async function writeThrough(afs: AsyncRsiFs, rsiDir: string, fn: (fs: RsiFs) => 
 }
 
 async function recordRejection(
-  prev: LoopState, deps: AdjudicateDeps, now: number, reason: string, diagnostics: string,
+  prev: LoopState, deps: AdjudicateDeps, _now: number, reason: string, _diagnostics: string,
   emptyStop: (s: LoopState) => StopOutcome,
 ): Promise<AdjudicateResult> {
-  const st: LoopState = {
+  const rollback = await rollbackWorkspace(deps.afs, deps.snapshot, (p) => deps.afs.readFile(p));
+  const baseState: LoopState = {
     ...prev, episodeIndex: prev.episodeIndex + 1, seenIds: [...prev.seenIds, deps.candidate.id],
+    rewardHistory: [...prev.rewardHistory, -999],
     consecutiveNonImproving: prev.consecutiveNonImproving + 1,
     recentFailures: [...prev.recentFailures, 'no-improvement' as const].slice(-10),
     recentModules: [...prev.recentModules, deps.candidate.module].slice(-10),
   };
+  const stop = emptyStop(baseState);
+  const st: LoopState = stop.shouldStop
+    ? { ...baseState, stopped: true, stopReasons: [...new Set([...baseState.stopReasons, ...stop.reasons])] }
+    : baseState;
   await deps.afs.writeFile(
     `${deps.rsiDir.replace(/\/+$/, '')}/LOOP_STATE.json`,
     JSON.stringify({ version: 1, state: st }, null, 2),
@@ -497,10 +528,10 @@ async function recordRejection(
     outcome: {
       state: st, reward: -999,
       verdict: { action: 'reject', reason: 'external-fail' },
-      mustRollback: false, status: 'rejected', failureReason: reason, duplicate: false,
+      mustRollback: true, status: 'rejected', failureReason: reason, duplicate: false,
     },
     state: st, iterationPath: null, evolutionAppended: false,
-    stop: emptyStop(st), preempted: reason, rollback: null,
+    stop, preempted: reason, rollback,
     cascadeStages: 0, missingMetrics: [],
   };
 }

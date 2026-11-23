@@ -84,7 +84,8 @@ export const useGithubReleaseStore = create<ReleaseState>((set, get) => ({
       if (!token && !await hasGithubCredentials()) {
         return { ok: false, message: useLanguageStore.getState().t('releaseTokenRequired') };
       }
-      return window.electronAPI.git.publishRelease({ ...request, token: token || undefined, repo });
+      const { notes, ...release } = request;
+      return window.electronAPI.git.publishRelease({ ...release, body: notes || undefined, token: token || undefined, repo });
     };
     void publish()
       .then((result) => {

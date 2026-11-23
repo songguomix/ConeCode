@@ -172,14 +172,18 @@ export function runRsiEpisode(prev: LoopState, deps: EpisodeDeps): EpisodeRunRes
       parentId: deps.parentId, baselineId: deps.baselineId, strategyId: deps.strategyId, timestamp: now,
     };
     const { path } = writeIterationFile(deps.fs, deps.rsiDir, irec);
-    const st: LoopState = {
+    const baseState: LoopState = {
       ...prev, episodeIndex: prev.episodeIndex + 1, seenIds: [...prev.seenIds, deps.candidate.id],
+      rewardHistory: [...prev.rewardHistory, -999],
       consecutiveNonImproving: prev.consecutiveNonImproving + 1,
       recentFailures: [...prev.recentFailures, 'no-improvement' as const].slice(-10),
       recentModules: [...prev.recentModules, deps.candidate.module].slice(-10),
     };
+    const stop = evaluateStop(stopInputFrom(baseState, stopCfg));
+    const st: LoopState = stop.shouldStop
+      ? { ...baseState, stopped: true, stopReasons: [...new Set([...baseState.stopReasons, ...stop.reasons])] }
+      : baseState;
     saveLoopState(deps.fs, deps.rsiDir, st);
-    const stop = evaluateStop(stopInputFrom(st, stopCfg));
     return {
       outcome: {
         state: st, reward: -999,

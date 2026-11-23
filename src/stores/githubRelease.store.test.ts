@@ -104,7 +104,7 @@ describe('useGithubReleaseStore confirmation', () => {
     (globalThis as any).window = { electronAPI: { git: { publishRelease: publish } } };
 
     const done = useGithubReleaseStore.getState().request({
-      repo: 'owner/repo', tag: 'v1.0.0', name: 'First', notes: 'n', target: 'main', files: ['/p/app.dmg'],
+      repo: 'owner/repo', tag: 'v1.0.0', name: 'First', notes: '## 更新\n- 修复安装失败', target: 'main', files: ['/p/app.dmg'],
     });
     await vi.waitFor(() => expect(useGithubReleaseStore.getState().pending).not.toBeNull());
     expect(publish).not.toHaveBeenCalled();
@@ -113,7 +113,7 @@ describe('useGithubReleaseStore confirmation', () => {
     const outcome = await done;
     expect(outcome.ok).toBe(true);
     expect(publish).toHaveBeenCalledWith(expect.objectContaining({
-      repo: 'owner/repo', tag: 'v1.0.0', token: 'tok-123', files: ['/p/app.dmg'],
+      repo: 'owner/repo', tag: 'v1.0.0', token: 'tok-123', files: ['/p/app.dmg'], body: '## 更新\n- 修复安装失败',
     }));
     expect(useGithubReleaseStore.getState().pending).toBeNull();
   });

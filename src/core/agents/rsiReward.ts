@@ -316,8 +316,13 @@ export function bestOnEachMetric(cands: ParetoCandidate[]): Record<string, strin
   for (const c of cands) for (const k of Object.keys(c.metrics)) keys.add(k);
   for (const k of keys) {
     let best = -Infinity;
-    for (const c of cands) best = Math.max(best, c.metrics[k] ?? -Infinity);
-    out[k] = cands.filter((c) => (c.metrics[k] ?? -Infinity) === best).map((c) => c.id);
+    for (const c of cands) {
+      const v = c.metrics[k];
+      if (Number.isFinite(v)) best = Math.max(best, v);
+    }
+    out[k] = Number.isFinite(best)
+      ? cands.filter((c) => c.metrics[k] === best).map((c) => c.id)
+      : [];
   }
   return out;
 }
