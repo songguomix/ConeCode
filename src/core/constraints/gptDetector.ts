@@ -25,10 +25,11 @@ export interface ResponseProbeInput {
   body?: unknown;
 }
 
-const VENDOR_PREFIX_RE = /^(?:openai|azure|azure-openai|openrouter|github|together|bedrock|vertex|litellm|custom)\//i;
+const VENDOR_PREFIX_RE = /^~?(?:openai|azure|azure-openai|openrouter|github|together|bedrock|vertex|litellm|custom)\//i;
 const REASONING_SERIES_RE = /(?:^|[^a-z0-9])(o1|o3|o4)(?:-[a-z0-9._-]+)?(?:$|[^a-z0-9])/i;
 const EXPLICIT_GPT_PATTERNS: ReadonlyArray<{ name: string; regex: RegExp }> = [
   { name: 'gpt', regex: /(?:^|[^a-z0-9])gpt(?:-(?:\d|oss|turbo|omni|mini|nano|pro)[a-z0-9._-]*)?(?:$|[^a-z0-9-])/i },
+  { name: 'gpt-latest-alias', regex: /^gpt-(?:astra|sol|terra|luna|chat)-latest$/i },
   { name: 'chatgpt', regex: /(?:^|[^a-z0-9])chatgpt(?:-[a-z0-9._-]+)?(?:$|[^a-z0-9-])/i },
   { name: 'o-series', regex: REASONING_SERIES_RE },
 ];

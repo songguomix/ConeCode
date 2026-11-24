@@ -8,6 +8,14 @@ const disk = vi.hoisted(() => ({
 }));
 vi.mock('../database', () => ({
   readJSON: (file: string) => structuredClone(file === 'conversations.json' ? disk.conversations : disk.messages),
+  selectJSON: (_file: string, _fallback: unknown, select: (snapshot: readonly Message[]) => unknown) => structuredClone(select(disk.messages)),
+  appendUniqueJSON: (_file: string, matches: (item: Readonly<Message>) => boolean, create: () => Message) => {
+    const existing = disk.messages.find(matches);
+    if (existing) return structuredClone(existing);
+    const message = create();
+    disk.messages = [...disk.messages, structuredClone(message)];
+    return structuredClone(message);
+  },
   writeJSON: vi.fn((file: string, records: Conversation[] | Message[]) => {
     if (file === 'conversations.json') disk.conversations = structuredClone(records as Conversation[]);
     else disk.messages = structuredClone(records as Message[]);
@@ -62,6 +70,24 @@ describe('persisted message editing', () => {
     }
     expect(writeJSON).not.toHaveBeenCalled();
     expect(disk.messages).toHaveLength(5);
+  });
+});
+
+describe('persisted message creation', () => {
+  it('deduplicates only within the same conversation and returns detached messages', () => {
+    const previous: Message = { id: 'shared', conversationId: 'two', role: 'user', content: 'other chat', createdAt: 1 };
+    disk.messages = [previous];
+    const input = { id: 'shared', conversationId: 'one', role: 'user' as const, content: 'with photo', images: ['image'] };
+
+    const created = messageRepo.create(input);
+    const duplicate = messageRepo.create({ ...input, content: 'duplicate' });
+    expect(duplicate).toEqual({ ...input, createdAt: expect.any(Number) });
+    expect(disk.messages).toEqual([previous, created]);
+    input.images.push('changed input');
+    created.images!.push('changed result');
+    duplicate.images!.push('changed duplicate');
+    expect(messageRepo.findByConversation('one')[0].images).toEqual(['image']);
+    expect(messageRepo.findByConversation('two')).toEqual([previous]);
   });
 });
 

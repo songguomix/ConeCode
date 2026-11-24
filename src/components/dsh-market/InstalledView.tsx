@@ -66,9 +66,37 @@ export default function InstalledView({ t, onOpenDetails }: {
 
   const profile = snapshot?.profile;
   const profiles = snapshot?.profiles || [];
+  const activeCount = installed.filter((p) => p.enabled && p.status === 'loaded').length;
+  const totalTools = installed.reduce((n, p) => n + p.contributions.tools.length, 0);
+  const totalCommands = installed.reduce((n, p) => n + p.contributions.commands.length, 0);
+  const totalSkills = installed.reduce((n, p) => n + p.contributions.skills.length, 0);
+  const serviceCount = snapshot?.runtime.supportedServices.length ?? 0;
 
   return (
     <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4">
+      <div className="mb-4 grid grid-cols-2 sm:grid-cols-5 gap-2 border-b border-[var(--dm-border)] pb-3.5">
+        <div className="px-2.5 py-2 rounded-lg border border-[var(--dm-border)] bg-[var(--dm-surface)]/55">
+          <div className="text-[10px] text-[var(--text-muted)]">{t('activePlugins')}</div>
+          <div className="dm-num mt-0.5 text-[15px] font-semibold font-mono text-[var(--text-primary)]">{activeCount}/{installed.length}</div>
+        </div>
+        <div className="px-2.5 py-2 rounded-lg border border-[var(--dm-border)] bg-[var(--dm-surface)]/55">
+          <div className="text-[10px] text-[var(--text-muted)]">{t('tools')}</div>
+          <div className="dm-num mt-0.5 text-[15px] font-semibold font-mono text-[var(--text-primary)]">{totalTools}</div>
+        </div>
+        <div className="px-2.5 py-2 rounded-lg border border-[var(--dm-border)] bg-[var(--dm-surface)]/55">
+          <div className="text-[10px] text-[var(--text-muted)]">{t('commands')}</div>
+          <div className="dm-num mt-0.5 text-[15px] font-semibold font-mono text-[var(--text-primary)]">{totalCommands}</div>
+        </div>
+        <div className="px-2.5 py-2 rounded-lg border border-[var(--dm-border)] bg-[var(--dm-surface)]/55">
+          <div className="text-[10px] text-[var(--text-muted)]">{t('skills')}</div>
+          <div className="dm-num mt-0.5 text-[15px] font-semibold font-mono text-[var(--text-primary)]">{totalSkills}</div>
+        </div>
+        <div className="px-2.5 py-2 rounded-lg border border-[var(--dm-border)] bg-[var(--dm-surface)]/55 col-span-2 sm:col-span-1">
+          <div className="text-[10px] text-[var(--text-muted)]">{t('hostCapabilities')}</div>
+          <div className="dm-num mt-0.5 text-[15px] font-semibold font-mono text-[var(--accent)]">{serviceCount}</div>
+        </div>
+      </div>
+
       <div className="flex flex-wrap items-center gap-2 mb-4">
         <div className="flex items-center gap-1.5">
           <span className="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">{t('profile')}</span>

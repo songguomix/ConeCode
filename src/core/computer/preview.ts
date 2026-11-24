@@ -31,6 +31,11 @@ export interface ComputerPreviewSnapshot {
   appearance?: ComputerPreviewAppearance;
 }
 
+export type ComputerPreviewUpdate = Omit<ComputerPreviewSnapshot, 'shot'> & {
+  /** The pixels are omitted when this frame was already sent to the preview. */
+  shot: (Omit<NonNullable<ComputerPreviewSnapshot['shot']>, 'dataUrl'> & { dataUrl?: string }) | null;
+};
+
 export interface ComputerPreviewAppearance {
   locale: 'en' | 'zh' | 'zhHant' | 'ja';
   theme: 'light' | 'dark';
@@ -59,7 +64,7 @@ export interface ComputerPreviewCommandResult {
 
 export interface ComputerPreviewAPI {
   getState(): Promise<ComputerPreviewSnapshot>;
-  onState(callback: (state: ComputerPreviewSnapshot) => void): () => void;
+  onState(callback: (state: ComputerPreviewUpdate) => void): () => void;
   act(input: ComputerPreviewInput): Promise<ComputerPreviewCommandResult>;
   refresh(targetRevision: number): Promise<ComputerPreviewCommandResult>;
 }

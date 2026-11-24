@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { ReactNode } from 'react';
 import { useShallow } from 'zustand/react/shallow';
@@ -44,7 +44,7 @@ function shortTime(ts: number): string {
     : d.toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
-export default function Sidebar() {
+function Sidebar() {
   const viewMode = useUIStore((s) => s.viewMode);
   const [panelsOpen, setPanelsOpen] = useState(false);
   // The panels menu lives in body coordinates (portal): sidebar width,
@@ -54,23 +54,23 @@ export default function Sidebar() {
   // the screen's left edge), so it slides right instead of clipping.
   const panelsBtnRef = useRef<HTMLDivElement>(null);
   const [panelsPos, setPanelsPos] = useState<{ top: number; left: number } | null>(null);
-  const sidebarWidthPx = useUIStore((s) => s.sidebarWidthPx);
   useEffect(() => {
-    if (!panelsOpen) return;
+    const anchor = panelsBtnRef.current;
+    if (!panelsOpen || !anchor) return;
     const place = () => {
-      const r = panelsBtnRef.current?.getBoundingClientRect();
-      if (!r) return;
+      const r = anchor.getBoundingClientRect();
       const W = 192; // w-48
-      setPanelsPos({
-        top: r.bottom + 4,
-        left: Math.max(8, Math.min(r.right - W, window.innerWidth - W - 8)),
-      });
+      const top = r.bottom + 4;
+      const left = Math.max(8, Math.min(r.right - W, window.innerWidth - W - 8));
+      setPanelsPos((prev) => prev?.top === top && prev.left === left ? prev : { top, left });
     };
     place();
+    // The menu button moves with the sidebar while the panel is being resized.
+    const observer = new ResizeObserver(place);
+    if (anchor.parentElement) observer.observe(anchor.parentElement);
     window.addEventListener('resize', place);
-    return () => window.removeEventListener('resize', place);
-    // sidebarWidthPx: re-anchor while the user drags the sidebar under the menu.
-  }, [panelsOpen, sidebarWidthPx]);
+    return () => { observer.disconnect(); window.removeEventListener('resize', place); };
+  }, [panelsOpen]);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState('');
   const [handoffOpen, setHandoffOpen] = useState(false);
@@ -717,3 +717,5 @@ export default function Sidebar() {
     </div>
   );
 }
+
+export default memo(Sidebar);

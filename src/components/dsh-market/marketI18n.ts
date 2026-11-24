@@ -182,6 +182,16 @@ const en: Dict = {
   scriptsHint: 'Scripts run with your user permissions outside the agent sandbox. Off by default.',
   compatibilityMatrix: 'Compatibility matrix',
   declaredVsActual: 'Declared by author vs. actual ConeCode result',
+  filterCompat: 'Compatibility',
+  filterFormat: 'Plugin format',
+  filterClientUi: 'With Client UI',
+  formatAll: 'All formats',
+  formatDsh: 'DSH bundle',
+  formatNative: 'ConeCode native',
+  hostServicesReady: 'host services',
+  activePlugins: 'Active plugins',
+  clientBridgeCap: 'Client UI',
+  hostCap: 'Host runtime',
 };
 
 const zh: Dict = {
@@ -364,6 +374,16 @@ const zh: Dict = {
   scriptsHint: '脚本以你的用户权限在 Agent 沙箱之外运行。默认关闭。',
   compatibilityMatrix: '兼容矩阵',
   declaredVsActual: '作者声明 vs. ConeCode 实测',
+  filterCompat: '兼容状态',
+  filterFormat: '插件格式',
+  filterClientUi: '含客户端界面',
+  formatAll: '全部格式',
+  formatDsh: 'DSH 插件包',
+  formatNative: 'ConeCode 原生',
+  hostServicesReady: '项宿主服务就绪',
+  activePlugins: '已启用插件',
+  clientBridgeCap: '客户端界面',
+  hostCap: '宿主运行时',
 };
 
 const dicts: Record<Locale, Dict> = { en, zh, zhHant: zh, ja: en };

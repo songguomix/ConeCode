@@ -15,7 +15,7 @@ vi.mock('../../stores/installGate.store', async (importOriginal) => {
   return { ...actual, useInstallGateStore: Object.assign((selector: any) => selector(actual.useInstallGateStore.getState()), actual.useInstallGateStore) };
 });
 
-import ChatInput from './ChatInput';
+import ChatInput, { findMentionFiles, mentionTokenAt } from './ChatInput';
 import MessageBubble from './MessageBubble';
 import QuestionPromptCard from './QuestionPromptCard';
 import StreamingReply from './StreamingReply';
@@ -86,6 +86,15 @@ describe('composer send availability', () => {
     expect(sendButton()).not.toContain('disabled=""');
   });
 
+  it('offers a queue button alongside stop for a live run with an image', () => {
+    useChatStore.setState({ streamingRuns: { test: { content: '', reasoningContent: '', status: 'thinking', toolName: null, retry: null } } });
+    expect(renderToStaticMarkup(<ChatInput />)).not.toContain('aria-label="Add to queue"');
+    useWorkspaceStore.getState().addPastedImage('data:image/png;base64,AAAA', 'icon.png');
+    const markup = renderToStaticMarkup(<ChatInput />);
+    expect(markup).toContain('aria-label="Add to queue"');
+    expect(markup).toContain('aria-label="Cancel"');
+  });
+
   it('keeps an empty message or unloaded image disabled', () => {
     expect(sendButton()).toContain('disabled=""');
     useWorkspaceStore.setState({ contextFiles: [{ path: 'pending.png', content: '', isImage: true }] });
@@ -99,15 +108,37 @@ describe('composer send availability', () => {
   });
 });
 
+describe('file mentions', () => {
+  it('recognizes the token at the caret after a long draft and rejects embedded or oversized mentions', () => {
+    const token = 'a'.repeat(80);
+    const before = `${'Earlier text '.repeat(500)}@${token}`;
+    expect(mentionTokenAt(`${before} after the caret`, before.length)).toBe(token);
+    expect(mentionTokenAt(`x@${token}`, token.length + 2)).toBeNull();
+    expect(mentionTokenAt(` @${token}a`, token.length + 3)).toBeNull();
+    expect(mentionTokenAt('@', 1)).toBe('');
+  });
+
+  it('returns the first eight case-insensitive matches without scanning later paths', () => {
+    const matches = Array.from({ length: 8 }, (_, i) => `src/File${i}.ts`);
+    const files = ['src/README.md', ...matches, 'src/later.ts'];
+    const visitLaterPath = vi.fn(() => 'src/File9.ts');
+    Object.defineProperty(files, 9, { get: visitLaterPath });
+    expect(findMentionFiles(files, 'fIlE')).toEqual(matches);
+    expect(findMentionFiles(files, '')).toEqual(files.slice(0, 8));
+    expect(visitLaterPath).not.toHaveBeenCalled();
+  });
+});
+
 it('renders the active conversation queue as an attached composer panel', () => {
   useChatStore.setState({
     streamingRuns: { test: { content: '', reasoningContent: '', status: 'thinking', toolName: null, retry: null } },
     queuedMessages: {
-      test: [{ id: 'queued', content: 'Queued request', providerId: 'p1', modelId: 'm1', createdAt: 0, steer: false, steerError: null }],
+      test: [{ id: 'queued', content: 'Queued request', providerId: 'p1', modelId: 'm1', createdAt: 0, steer: false, steerError: null, images: ['data:image/png;base64,AQID'] }],
       other: [{ id: 'other', content: 'Another conversation', providerId: 'p1', modelId: 'm1', createdAt: 0, steer: false, steerError: null }],
     },
   });
   const markup = renderToStaticMarkup(<ChatInput />);
+  expect(markup).toMatch(/<img [^>]*src="data:image\/png;base64,AQID"[^>]*alt="Queued image"/);
   expect(markup).toMatch(/<section aria-label="Queued".*Queued request.*Steer.*aria-label="Remove queued message".*aria-label="Queued message details".*<div class="chat-composer/);
   expect(markup).not.toContain('Another conversation');
 });

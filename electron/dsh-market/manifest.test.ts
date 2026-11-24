@@ -97,6 +97,25 @@ describe('bundle patch loading', () => {
     expect(loaded.rows[0].config).toEqual({ second: 2 });
   });
 
+  it('supports Cordis groups, nested insert into group id, and inherited disabled state', () => {
+    const root = tempDir();
+    writePackage(root, {
+      name: 'grouped-demo',
+      version: '1.0.0',
+      dsh: { bundle: { patch: ['./base.yml', './extra.yml'] } },
+    }, {
+      'index.js': 'export function apply() {}',
+      'base.yml': `- insert:\n    - id: core-group\n      group: true\n      config:\n        - id: row-a\n          name: grouped-demo\n          config: { a: 1 }\n    - id: off-group\n      group: true\n      disabled: true\n      config:\n        - id: row-off\n          name: grouped-demo\n`,
+      'extra.yml': `- id: core-group\n  insert:\n    - id: row-b\n      name: grouped-demo\n      config: { b: 2 }\n`,
+    });
+    const loaded = loadBundlePatches(root, readPackageManifest(root));
+    expect(loaded.rows.map((r) => [r.id, r.disabled])).toEqual([
+      ['row-a', false],
+      ['row-b', false],
+      ['row-off', true],
+    ]);
+  });
+
   it('rejects a patch path escaping the package', () => {
     const root = tempDir();
     writePackage(root, {

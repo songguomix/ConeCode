@@ -136,6 +136,7 @@ export default function SourcesView({ t }: { t: (key: string) => string }) {
           <Row label="Worker" value={runtime?.workerPid ? `thread ${runtime.workerPid}` : '—'} mono />
           <Row label="Formats" value={runtime?.supportedFormats.join(', ') || '—'} />
           <Row label="Storage substrate" value={runtime?.storage.ready ? `${runtime.storage.backend} · ${runtime.storage.root}` : (runtime?.storage.error || 'unavailable')} mono />
+          <Row label={t('hostCapabilities')} value={runtime?.supportedServices.join(', ') || '—'} mono />
         </dl>
         {runtime?.lastError && <div className="mt-2 text-[10.5px] text-[var(--error)] whitespace-pre-wrap">{runtime.lastError}</div>}
         <DshWebAction t={t} />

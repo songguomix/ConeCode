@@ -360,9 +360,17 @@ export function queryCatalog(
   const compatibleOnly = options.compatibleOnly
     ? labelFiltered.filter((item) => item.compatibility.state !== 'incompatible')
     : labelFiltered;
+  const formatFiltered = options.formatFilter && options.formatFilter !== 'all'
+    ? compatibleOnly.filter((item) => item.plugin.format === options.formatFilter)
+    : compatibleOnly;
+  const finalFiltered = options.compatFilter && options.compatFilter !== 'all'
+    ? formatFiltered.filter((item) => options.compatFilter === 'client'
+        ? Boolean(item.plugin.dsh?.client)
+        : item.compatibility.state === options.compatFilter)
+    : formatFiltered;
 
   const sort = options.sort || 'relevance';
-  compatibleOnly.sort((a, b) => {
+  finalFiltered.sort((a, b) => {
     if (sort === 'name') return a.plugin.title.localeCompare(b.plugin.title);
     if (sort === 'downloads') {
       return (b.plugin.stats?.npmDownloadsLastWeek || 0) - (a.plugin.stats?.npmDownloadsLastWeek || 0);
@@ -376,10 +384,10 @@ export function queryCatalog(
     return b.score - a.score || a.plugin.title.localeCompare(b.plugin.title);
   });
 
-  const total = compatibleOnly.length;
+  const total = finalFiltered.length;
   const page = Math.min(requestedPage, Math.max(1, Math.ceil(total / pageSize)));
   const start = (page - 1) * pageSize;
-  const items = compatibleOnly.slice(start, start + pageSize).map((item) => ({
+  const items = finalFiltered.slice(start, start + pageSize).map((item) => ({
     ...item.plugin,
     compatibility: item.compatibility,
     installed: installedOf(item.plugin),

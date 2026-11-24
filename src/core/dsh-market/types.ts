@@ -430,6 +430,8 @@ export interface CatalogQuery {
   page?: number;
   pageSize?: number;
   compatibleOnly?: boolean;
+  compatFilter?: 'all' | CompatibilityState | 'client';
+  formatFilter?: 'all' | 'dsh' | 'native';
 }
 
 export interface CatalogPage {

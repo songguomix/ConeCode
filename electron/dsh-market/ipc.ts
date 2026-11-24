@@ -72,6 +72,8 @@ export function registerDshMarketIpc(options: DshMarketIpcOptions): void {
     service.invokeCommand(profileId, pluginId, command, rawInput, rowId));
   ipcMain.handle('dsh-market:skills', () => service.listSkills());
   ipcMain.handle('dsh-market:skill-content', (_, pluginId: string, name: string, rowId?: string) => service.getSkill(pluginId, name, rowId));
+  ipcMain.handle('dsh-market:system-prompts', (_, context?: unknown) => service.listSystemPrompts(context));
+  ipcMain.handle('dsh-market:shell-env', () => service.getShellEnv());
   ipcMain.handle('dsh-market:switch-profile', (_, profileId: string) => service.switchProfile(profileId));
   ipcMain.handle('dsh-market:create-profile', (_, profileId: string, name?: string) => service.createProfile(profileId, name));
   ipcMain.handle('dsh-market:restart-runtime', () => service.restartRuntime());

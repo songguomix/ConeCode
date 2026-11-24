@@ -27,6 +27,7 @@ export interface BrowserTab {
   mountUrl: string | null;
   url: string | null;
   title: string | null;
+  reloadRequest?: { url: string };
 }
 
 export type DevicePreset = 'desktop' | 'tablet' | 'mobile';
@@ -49,15 +50,24 @@ const newTab = (url: string | null = null): BrowserTab => ({
   title: null,
 });
 
+function sameOrigin(left: string | null | undefined, right: string | null | undefined): boolean {
+  if (!left || !right) return false;
+  try {
+    return new URL(left).origin === new URL(right).origin;
+  } catch {
+    return false;
+  }
+}
+
 interface PreviewStore {
   state: PreviewStatus['state'];
   url: string | null;
+  serverRevision: number;
+  presentedServer: { url: string; revision: number } | null;
   plan: PreviewPlan | null;
   error: string | null;
   logs: PreviewLogEntry[];
   device: DevicePreset;
-  /** Bumped to ask the active tab's webview to reload (watcher / reload button). */
-  reloadNonce: number;
   /** Console errors the embedded page reported, for the log drawer's badge. */
   pageErrors: number;
   subscribed: boolean;
@@ -72,7 +82,7 @@ interface PreviewStore {
   stop: () => Promise<void>;
   restart: (cwd: string) => Promise<void>;
   setDevice: (device: DevicePreset) => void;
-  requestReload: () => void;
+  requestReload: (source?: 'manual' | 'watcher') => void;
   clearLogs: () => void;
   appendLog: (entry: PreviewLogEntry) => void;
   setPicking: (picking: boolean) => void;
@@ -85,6 +95,8 @@ interface PreviewStore {
   /** Adopt where the page actually went (did-navigate). */
   noteTabUrl: (id: string, url: string) => void;
   setTabTitle: (id: string, title: string) => void;
+  /** Present a newly available server once, across preview panel mounts. */
+  presentServer: () => { id: string; url: string } | null;
   /** Attach the main-process listeners once, at app start. */
   subscribe: () => void;
 }
@@ -95,11 +107,12 @@ const firstTab = newTab();
 export const usePreviewStore = create<PreviewStore>((set, get) => ({
   state: 'idle',
   url: null,
+  serverRevision: 0,
+  presentedServer: null,
   plan: null,
   error: null,
   logs: [],
   device: 'desktop',
-  reloadNonce: 0,
   pageErrors: 0,
   subscribed: false,
 
@@ -115,7 +128,7 @@ export const usePreviewStore = create<PreviewStore>((set, get) => ({
 
   start: async (cwd: string, command?: string | null) => {
     if (!api()) return;
-    set({ logs: [], pageErrors: 0, error: null, state: 'starting' });
+    set({ logs: [], pageErrors: 0, error: null, state: 'starting', url: null });
     applyStatus(set, await api().start({ cwd, command: command || null }));
   },
 
@@ -131,7 +144,20 @@ export const usePreviewStore = create<PreviewStore>((set, get) => ({
   },
 
   setDevice: (device) => set({ device }),
-  requestReload: () => set((s) => ({ reloadNonce: s.reloadNonce + 1, pageErrors: 0 })),
+  requestReload: (source = 'manual') => set((s) => {
+    let changed = false;
+    let reloadActive = false;
+    const tabs = s.tabs.map((tab) => {
+      const reload = source === 'manual'
+        ? tab.id === s.activeTabId && !!tab.mountUrl
+        : s.state === 'running' && s.plan?.mode === 'static' && sameOrigin(tab.url, s.url);
+      if (!reload || !tab.url) return tab;
+      changed = true;
+      reloadActive ||= tab.id === s.activeTabId;
+      return { ...tab, reloadRequest: { url: tab.url } };
+    });
+    return changed ? { tabs, ...(reloadActive ? { pageErrors: 0 } : {}) } : s;
+  }),
   clearLogs: () => set({ logs: [], pageErrors: 0 }),
   setPicking: (picking) => set({ picking }),
 
@@ -148,7 +174,7 @@ export const usePreviewStore = create<PreviewStore>((set, get) => ({
 
   closeTab: (id) => set((s) => {
     const index = s.tabs.findIndex((t) => t.id === id);
-    if (index < 0) return {};
+    if (index < 0) return s;
     const tabs = s.tabs.filter((t) => t.id !== id);
     // Never leave the browser with no tab — closing the last one gives a blank one.
     if (tabs.length === 0) {
@@ -161,7 +187,7 @@ export const usePreviewStore = create<PreviewStore>((set, get) => ({
     return { tabs, activeTabId };
   }),
 
-  selectTab: (id) => set({ activeTabId: id, picking: false }),
+  selectTab: (id) => set((s) => s.activeTabId === id && !s.picking ? s : { activeTabId: id, picking: false }),
 
   navigateTab: (id, url) => set((s) => ({
     tabs: s.tabs.map((t) => (
@@ -173,26 +199,69 @@ export const usePreviewStore = create<PreviewStore>((set, get) => ({
     )),
   })),
 
-  noteTabUrl: (id, url) => set((s) => ({
-    tabs: s.tabs.map((t) => (t.id === id ? { ...t, url } : t)),
-  })),
+  noteTabUrl: (id, url) => set((s) => updateTab(s, id, 'url', url)),
 
-  setTabTitle: (id, title) => set((s) => ({
-    tabs: s.tabs.map((t) => (t.id === id ? { ...t, title } : t)),
-  })),
+  setTabTitle: (id, title) => set((s) => updateTab(s, id, 'title', title)),
+
+  presentServer: () => {
+    const { url, serverRevision, presentedServer, tabs, activeTabId } = get();
+    if (!url || (presentedServer?.url === url && presentedServer.revision === serverRevision)) return null;
+    const presented = { url, revision: serverRevision };
+    const existing = tabs.find((tab) => sameOrigin(tab.url, url));
+    if (existing) {
+      // A restart on the same address needs a fresh page. A panel remount does
+      // not: a new guest already loads the tab's current address.
+      const restarted = presentedServer?.url === url;
+      set({
+        presentedServer: presented,
+        ...(restarted ? { tabs: tabs.map((tab) => tab.url && sameOrigin(tab.url, url)
+          ? { ...tab, reloadRequest: { url: tab.url } }
+          : tab) } : {}),
+      });
+      return null;
+    }
+
+    const active = tabs.find((tab) => tab.id === activeTabId);
+    const reusable = active?.url === null ? active
+      : tabs.find((tab) => sameOrigin(tab.url, presentedServer?.url)) ?? tabs.find((tab) => tab.url === null);
+    const tab = reusable
+      ? { ...reusable, url, mountUrl: reusable.mountUrl ?? url, reloadRequest: undefined }
+      : newTab(url);
+    set({
+      presentedServer: presented,
+      tabs: reusable ? tabs.map((item) => item.id === tab.id ? tab : item) : [...tabs, tab],
+      activeTabId: tab.id,
+      picking: false,
+    });
+    return reusable?.mountUrl ? { id: tab.id, url } : null;
+  },
 
   subscribe: () => {
     if (get().subscribed || !api()) return;
     set({ subscribed: true });
     api().onStatus((status: PreviewStatus) => applyStatus(set, status));
     api().onLog((entry: PreviewLog) => get().appendLog(entry));
-    api().onReload(() => get().requestReload());
+    api().onReload(() => get().requestReload('watcher'));
   },
 }));
 
 type Set = (partial: Partial<PreviewStore> | ((s: PreviewStore) => Partial<PreviewStore>)) => void;
 
+function updateTab(s: PreviewStore, id: string, key: 'url' | 'title', value: string): Partial<PreviewStore> {
+  const index = s.tabs.findIndex((tab) => tab.id === id);
+  if (index < 0 || s.tabs[index][key] === value) return s;
+  const tabs = s.tabs.slice();
+  tabs[index] = { ...tabs[index], [key]: value };
+  return { tabs };
+}
+
 function applyStatus(set: Set, status: PreviewStatus): void {
   if (!status) return;
-  set({ state: status.state, url: status.url, plan: status.plan, error: status.error });
+  set((s) => ({
+    state: status.state,
+    url: status.url,
+    plan: status.plan,
+    error: status.error,
+    serverRevision: status.url && status.url !== s.url ? s.serverRevision + 1 : s.serverRevision,
+  }));
 }

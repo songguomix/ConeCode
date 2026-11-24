@@ -68,6 +68,22 @@ describe('native floating preview', () => {
     expect(render({ ...older, status: { ...older.status, enabled: false } })).not.toContain('<img');
   });
 
+  it('keeps the matching screenshot across compact pushes and delayed initial pulls', () => {
+    const initial = snapshot(5);
+    const { dataUrl, ...frame } = initial.shot!;
+    const pushed = { ...initial, revision: 6, inFlight: 1, shot: frame };
+    const expected = { ...pushed, shot: { ...frame, dataUrl } };
+    expect(newerPreviewState(initial, pushed)).toEqual(expected);
+    expect(newerPreviewState(pushed, initial)).toEqual(expected);
+
+    const cleared = { ...pushed, revision: 7, shot: null };
+    expect(newerPreviewState(cleared, initial)).toBe(cleared);
+    const nextFrame = { ...pushed, revision: 7, shot: { ...frame, frameId: 'frame2' } };
+    expect(newerPreviewState(nextFrame, initial)).toBe(nextFrame);
+    const nextSelection = { ...pushed, revision: 7, status: { ...pushed.status, targetRevision: 2 } };
+    expect(newerPreviewState(nextSelection, initial)).toBe(nextSelection);
+  });
+
   it('never renders remote or executable image sources', () => {
     for (const url of ['https://external.example/shot.png', 'data:image/svg+xml,<svg onload="alert(1)"/>']) {
       const state = snapshot();

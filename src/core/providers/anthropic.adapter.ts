@@ -273,7 +273,7 @@ export class AnthropicAdapter extends BaseAdapter {
             break;
           case 'message_stop':
             sawStop = true;
-            onChunk({ type: 'done', content: '', reasoning_content: fullThinking || undefined, finishReason: stopReason || undefined });
+            onChunk({ type: 'done', content: '', finishReason: stopReason || undefined });
             break;
         }
       } catch {}

@@ -1,4 +1,4 @@
-import { readJSON, writeJSON } from '../database';
+import { appendUniqueJSON, readJSON, selectJSON, writeJSON } from '../database';
 import type { Conversation, Message } from '../../../types';
 import type { SubAgentRun } from '../../../types/subAgent.types';
 import { collectSubAgentRuns } from '../../agents/subAgentHistory';
@@ -114,30 +114,29 @@ export const messageRepo = {
   },
 
   findByConversation(conversationId: string): Message[] {
-    const messages = readJSON<Message[]>(MSG_FILE, []).filter((m) => m.conversationId === conversationId);
     // Only the sub-agent panel requests child transcripts. Ordinary chat loads,
     // including those replayed to the model, need just the parent's messages.
-    for (const message of messages) delete message.subAgentRuns;
-    return messages;
+    return selectJSON(MSG_FILE, [] as Message[], (messages) => messages
+      .filter((message) => message.conversationId === conversationId)
+      .map(({ subAgentRuns, ...message }) => message));
   },
 
   /** Message count per conversation, used to find never-used blank chats. */
   countsByConversation(): Record<string, number> {
-    const counts: Record<string, number> = {};
-    for (const message of readJSON<Message[]>(MSG_FILE, [])) {
-      counts[message.conversationId] = (counts[message.conversationId] ?? 0) + 1;
-    }
-    return counts;
+    return selectJSON(MSG_FILE, [] as Message[], (messages) => {
+      const counts: Record<string, number> = {};
+      for (const message of messages) {
+        counts[message.conversationId] = (counts[message.conversationId] ?? 0) + 1;
+      }
+      return counts;
+    });
   },
 
   create(data: Omit<Message, 'createdAt'>): Message {
-    const messages = readJSON<Message[]>(MSG_FILE, []);
-    const existing = messages.find((message) => message.id === data.id && message.conversationId === data.conversationId);
-    if (existing) return existing;
-    const msg: Message = { ...data, createdAt: Date.now() };
-    messages.push(msg);
-    writeJSON(MSG_FILE, messages);
-    return msg;
+    return appendUniqueJSON<Message>(MSG_FILE,
+      (message) => message.id === data.id && message.conversationId === data.conversationId,
+      () => ({ ...data, createdAt: Date.now() }),
+    );
   },
 
   delete(messageId: string): boolean {

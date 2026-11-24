@@ -141,8 +141,9 @@ function ActionCard({ action }: { action: AnyAction }) {
 // Code block with copy button.
 // ---------------------------------------------------------------------------
 
-function CodeBlock({ lang, code }: { lang: string; code: string }) {
+const CodeBlock = memo(function CodeBlock({ lang, code }: { lang: string; code: string }) {
   const [copied, setCopied] = useState(false);
+  const highlighted = useMemo(() => highlightCode(code, lang), [code, lang]);
   const copy = async () => {
     await navigator.clipboard.writeText(code);
     setCopied(true);
@@ -156,10 +157,10 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
           {copied ? <FiCheck size={11} /> : <FiCopy size={11} />}{copied ? 'Copied' : 'Copy'}
         </button>
       </div>
-      <pre className="p-3.5 overflow-x-auto text-[13px] leading-relaxed font-mono text-[var(--text-primary)]"><code>{highlightCode(code, lang)}</code></pre>
+      <pre className="p-3.5 overflow-x-auto text-[13px] leading-relaxed font-mono text-[var(--text-primary)]"><code>{highlighted}</code></pre>
     </div>
   );
-}
+});
 
 // ---------------------------------------------------------------------------
 // Lightweight inline + block Markdown rendering (no external deps).
@@ -194,9 +195,9 @@ function renderInlines(tokens: MdInline[], keyPrefix: string): ReactNode[] {
   });
 }
 
-function InlineText({ text, k }: { text: string; k: string }) {
+const InlineText = memo(function InlineText({ text, k }: { text: string; k: string }) {
   return <>{renderInlines(parseInline(text), k)}</>;
-}
+});
 
 function ListBlock({ items, k }: { items: MdListItem[]; k: string }) {
   // Flatten consecutive same-ordered runs into one <ul>/<ol>; nesting is done
@@ -291,7 +292,7 @@ function TableBlock({ block, k }: { block: Extract<MdBlock, { type: 'table' }>; 
   );
 }
 
-function MarkdownText({ text }: { text: string }) {
+const MarkdownText = memo(function MarkdownText({ text }: { text: string }) {
   const blocks = parseMarkdownBlocks(text);
   return (
     <div className="space-y-1.5">
@@ -338,7 +339,7 @@ function MarkdownText({ text }: { text: string }) {
       })}
     </div>
   );
-}
+});
 
 // ---------------------------------------------------------------------------
 

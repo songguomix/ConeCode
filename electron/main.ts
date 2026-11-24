@@ -15,12 +15,12 @@ import { exec, spawn, execSync } from 'child_process';
 import os from 'os';
 import { providerRepo } from '../src/core/storage/repositories/provider.repo';
 import { modelRepo } from '../src/core/storage/repositories/model.repo';
-import { conversationRepo, messageRepo } from '../src/core/storage/repositories/conversation.repo';
+import { ConversationStorageClient } from './conversation-storage-client';
 import { ProviderRegistry } from '../src/core/providers/registry';
 import { FreeAdapter, FREE_PROVIDER, FREE_PROVIDER_ID } from '../src/core/providers/free.adapter';
 import { applyRecordedUsage, applyServerResetTo, hydrateRecords } from '../src/core/providers/freeUsage';
 import { terminalShell, TerminalTextStream } from './terminal';
-import { readJSON, writeJSON } from '../src/core/storage/database';
+import { configureStorageDirectory, readJSON, writeJSON } from '../src/core/storage/database';
 import { FileMemory2Store } from './memory2.store';
 import { DriveMemoryStore } from './memory-drive';
 import { mcpManager, type McpServerConfig } from '../src/core/mcp/client';
@@ -54,6 +54,8 @@ const providerRegistry = new ProviderRegistry((url, init) =>
 );
 
 let mainWindow: BrowserWindow | null = null;
+let historyStorage: ConversationStorageClient | undefined;
+let waitingForHistory = false;
 const computerPreview = new ComputerPreviewWindow({
   createWindow: (options) => new BrowserWindow(options),
   getMainWindow: () => mainWindow,
@@ -950,6 +952,7 @@ app.on('web-contents-created', (_event, contents) => {
 });
 
 app.whenReady().then(() => {
+  configureStorageDirectory(path.join(app.getPath('userData'), 'data'));
   createWindow();
   // Pre-warm the screenshot overlay while the app idles: the window and its
   // renderer are ready before the user ever presses the shortcut.
@@ -999,6 +1002,18 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   void dshMarketService?.runtime.shutdown();
   dshMarketService?.web.stop();
+});
+
+app.on('will-quit', (event) => {
+  if (historyStorage?.hasPending) {
+    event.preventDefault();
+    if (!waitingForHistory) {
+      waitingForHistory = true;
+      void historyStorage.whenIdle().then(() => { waitingForHistory = false; app.quit(); });
+    }
+  } else {
+    historyStorage?.close();
+  }
 });
 
 app.on('activate', () => {
@@ -1212,19 +1227,23 @@ function registerIPC() {
     }
   });
 
-  ipcMain.handle('conversation:list', () => conversationRepo.findAll());
-  ipcMain.handle('conversation:create', (_, data) => conversationRepo.create(data));
-  ipcMain.handle('conversation:update', (_, id, data) => conversationRepo.update(id, data));
-  ipcMain.handle('conversation:setArchived', (_, id, archived) => conversationRepo.setArchived(id, archived));
-  ipcMain.handle('conversation:delete', (_, id) => conversationRepo.delete(id));
+  const appPath = app.getAppPath();
+  const workerDir = appPath.endsWith('.asar') ? path.join(appPath + '.unpacked', 'dist-electron') : __dirname;
+  const history = new ConversationStorageClient(path.join(workerDir, 'conversation-storage-worker.js'), path.join(app.getPath('userData'), 'data'));
+  historyStorage = history;
+  ipcMain.handle('conversation:list', () => history.request('conversation:list'));
+  ipcMain.handle('conversation:create', (_, data) => history.request('conversation:create', data));
+  ipcMain.handle('conversation:update', (_, id, data) => history.request('conversation:update', id, data));
+  ipcMain.handle('conversation:setArchived', (_, id, archived) => history.request('conversation:setArchived', id, archived));
+  ipcMain.handle('conversation:delete', (_, id) => history.request('conversation:delete', id));
 
-  ipcMain.handle('message:list', (_, convId) => messageRepo.findByConversation(convId));
-  ipcMain.handle('message:subAgentHistory', () => messageRepo.subAgentHistory());
-  ipcMain.handle('message:recordSubAgent', (_, parentMessageId, run) => messageRepo.recordSubAgent(parentMessageId, run));
-  ipcMain.handle('message:counts', () => messageRepo.countsByConversation());
-  ipcMain.handle('message:create', (_, data) => messageRepo.create(data));
-  ipcMain.handle('message:delete', (_, messageId) => messageRepo.delete(messageId));
-  ipcMain.handle('message:editAndTruncate', (_, convId, messageId, content) => messageRepo.editAndTruncate(convId, messageId, content));
+  ipcMain.handle('message:list', (_, convId) => history.request('message:list', convId));
+  ipcMain.handle('message:subAgentHistory', () => history.request('message:subAgentHistory'));
+  ipcMain.handle('message:recordSubAgent', (_, parentMessageId, run) => history.request('message:recordSubAgent', parentMessageId, run));
+  ipcMain.handle('message:counts', () => history.request('message:counts'));
+  ipcMain.handle('message:create', (_, data) => history.request('message:create', data));
+  ipcMain.handle('message:delete', (_, messageId) => history.request('message:delete', messageId));
+  ipcMain.handle('message:editAndTruncate', (_, convId, messageId, content) => history.request('message:editAndTruncate', convId, messageId, content));
 
   ipcMain.handle('settings:get', () => readJSON('settings.json', {}));
   ipcMain.handle('settings:update', (_, data) => {
@@ -2290,7 +2309,7 @@ function registerIPC() {
   });
   ipcMain.handle('screenshot:relaunch', () => {
     app.relaunch();
-    app.exit(0);
+    app.quit();
     return { ok: true };
   });
   // Customizable global hotkey. Registration lives here (main) so it works

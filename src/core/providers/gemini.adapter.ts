@@ -199,7 +199,6 @@ export class GeminiAdapter extends BaseAdapter {
     onChunk({
       type: 'done',
       content: '',
-      reasoning_content: fullThinking || undefined,
       // MAX_TOKENS is Gemini's name for OpenAI's 'length'.
       finishReason: finishReason === 'MAX_TOKENS' ? 'length' : finishReason || undefined,
     });

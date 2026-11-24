@@ -53,8 +53,12 @@ async function handle(request: Request): Promise<unknown> {
       return host.invokeTool(String(payload.pluginId), payload.rowId ?? null, String(payload.name), payload.args ?? {});
     case 'invokeCommand':
       return host.invokeCommand(String(payload.pluginId), payload.rowId ?? null, String(payload.name), String(payload.rawInput ?? ''));
+    case 'listSystemPrompts':
+      return host.listSystemPrompts(payload.context);
+    case 'getShellEnv':
+      return host.getShellEnv();
     case 'info':
-      return { plugins: host.runtimeInfo(), storage: host.storageInfo(), llmReady: host.llmReady };
+      return { plugins: host.runtimeInfo(), storage: host.storageInfo(), llmReady: host.llmReady, webServer: host.webServerInfo() };
     case 'shutdown':
       await host.dispose();
       return { ok: true };

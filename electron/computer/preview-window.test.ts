@@ -162,6 +162,36 @@ describe('native computer preview manager (mock Electron window)', () => {
     expect(h.main.webContents.send).toHaveBeenCalledWith(CHANNELS.visibility, { visible: false });
   });
 
+  it('sends pixels once per frame while keeping pulls and status updates current', async () => {
+    const h = harness(); await h.manager.open();
+    const send = h.preview.webContents.send;
+    send.mockClear();
+    await showInitialFrame(h);
+    expect(send).toHaveBeenLastCalledWith(CHANNELS.state, expect.objectContaining({ shot: expect.objectContaining(image) }));
+    send.mockClear();
+
+    h.manager.beginOperation();
+    h.manager.endAction({ action: 'type', text: 'fixture' }, { ok: true, message: 'Sent' });
+    expect(send).toHaveBeenCalledTimes(2);
+    for (const [channel, state] of send.mock.calls) {
+      expect(channel).toBe(CHANNELS.state);
+      expect(state.shot).toMatchObject({ frameId: image.frameId, geometry, target });
+      expect(state.shot).not.toHaveProperty('dataUrl');
+    }
+    expect(send.mock.calls.map(([, state]) => state.inFlight)).toEqual([1, 0]);
+
+    const fromPull = h.handlers.get(CHANNELS.getState)!(h.event(h.preview));
+    expect(fromPull.shot).toMatchObject(image);
+    expect(send).toHaveBeenCalledTimes(2);
+
+    await h.manager.capture();
+    expect(send).toHaveBeenLastCalledWith(CHANNELS.state, expect.objectContaining({
+      shot: expect.objectContaining({ dataUrl: image.dataUrl, frameId: 'next-frame' }),
+    }));
+    h.manager.clearShot();
+    expect(send).toHaveBeenLastCalledWith(CHANNELS.state, expect.objectContaining({ shot: null }));
+  });
+
   it('does not capture at all while disabled or return pixels after the control generation changed', async () => {
     const h = harness(); h.status.enabled = false;
     expect(await h.manager.capture()).toHaveProperty('error');

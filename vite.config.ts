@@ -27,6 +27,17 @@ export default defineConfig({
         },
       },
       {
+        entry: 'electron/conversation-storage-worker.ts',
+        vite: {
+          build: {
+            outDir: 'dist-electron',
+            rollupOptions: {
+              output: { entryFileNames: 'conversation-storage-worker.js', inlineDynamicImports: true },
+            },
+          },
+        },
+      },
+      {
         entry: 'electron/dsh-market/worker.ts',
         vite: {
           build: {

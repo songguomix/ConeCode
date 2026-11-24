@@ -7,7 +7,7 @@ import { AnthropicAdapter } from './anthropic.adapter';
 import { GeminiAdapter } from './gemini.adapter';
 import { buildToolset } from '../tools/definitions';
 import { buildApiMessages } from '../../stores/chat.store';
-import type { ProviderConfig } from '../../types';
+import type { ProviderConfig, StreamChunk } from '../../types';
 
 // Runs the adapters against a REAL HTTP server so the request body and the SSE
 // parsing are verified over the wire, not against a mock of our own shape.
@@ -77,6 +77,22 @@ describe('stream idle timeout', () => {
 });
 
 describe('OpenAI over the wire', () => {
+  it('streams reasoning once and keeps the full text in the saved response', async () => {
+    respondWith = (res) => sse(res, [
+      '{"choices":[{"delta":{"reasoning_content":"first "}}]}',
+      '{"choices":[{"delta":{"reasoning_content":"second"}}]}',
+      '{"choices":[{"delta":{"content":"answer"},"finish_reason":"stop"}]}',
+      '[DONE]',
+    ]);
+    const chunks: StreamChunk[] = [];
+    const result = await new OpenAIAdapter(config()).streamMessage(
+      { model: 'm', messages: [{ role: 'user', content: 'question' }] }, (chunk) => chunks.push(chunk),
+    );
+    expect(chunks.filter((chunk) => chunk.type === 'reasoning').map((chunk) => chunk.content).join('')).toBe('first second');
+    expect(chunks[chunks.length - 1]).toEqual({ type: 'done', content: '', finishReason: 'stop' });
+    expect(result.choices[0].message.reasoning_content).toBe('first second');
+  });
+
   it('puts the tool schemas in the request body', async () => {
     respondWith = (res) => sse(res, ['{"choices":[{"delta":{"content":"hi"}}]}', '[DONE]']);
     const adapter = new OpenAIAdapter(config());
@@ -194,6 +210,22 @@ describe('Anthropic over the wire', () => {
 });
 
 describe('Gemini over the wire', () => {
+  it('keeps streamed thoughts out of the completion marker', async () => {
+    respondWith = (res) => sse(res, [
+      '{"candidates":[{"content":{"parts":[{"text":"thinking","thought":true}]}}]}',
+      '{"candidates":[{"content":{"parts":[{"text":"answer"}]},"finishReason":"STOP"}]}',
+    ]);
+    const chunks: StreamChunk[] = [];
+    const result = await new GeminiAdapter(config({ type: 'gemini' })).streamMessage(
+      { model: 'm', messages: [{ role: 'user', content: 'question' }] }, (chunk) => chunks.push(chunk),
+    );
+    expect(chunks.filter((chunk) => chunk.type === 'reasoning').map((chunk) => chunk.content)).toEqual(['thinking']);
+    const last = chunks[chunks.length - 1];
+    expect(last).toMatchObject({ type: 'done' });
+    expect(last).not.toHaveProperty('reasoning_content');
+    expect(result.reasoning_content).toBe('thinking');
+  });
+
   it('sends functionDeclarations and parses a functionCall part', async () => {
     respondWith = (res) => sse(res, [
       '{"candidates":[{"content":{"parts":[{"text":"looking"},{"functionCall":{"name":"read_file","args":{"path":"/a.ts"}}}]},"finishReason":"STOP"}],"usageMetadata":{"totalTokenCount":42}}',
@@ -272,9 +304,14 @@ describe('Anthropic extended thinking + tools', () => {
       '{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig123"}}',
       '{"type":"message_stop"}',
     ]);
+    const chunks: StreamChunk[] = [];
     const result: any = await new AnthropicAdapter(config({ type: 'anthropic' })).streamMessage(
-      { model: 'm', reasoningEffort: 'medium', messages: [{ role: 'user', content: 'go' }] }, () => {},
+      { model: 'm', reasoningEffort: 'medium', messages: [{ role: 'user', content: 'go' }] }, (chunk) => chunks.push(chunk),
     );
+    expect(chunks.filter((chunk) => chunk.type === 'reasoning').map((chunk) => chunk.content)).toEqual(['step one']);
+    const last = chunks[chunks.length - 1];
+    expect(last).toMatchObject({ type: 'done' });
+    expect(last).not.toHaveProperty('reasoning_content');
     expect(result.thinking_blocks).toEqual([{ thinking: 'step one', signature: 'sig123' }]);
   });
 });

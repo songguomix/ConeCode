@@ -731,7 +731,9 @@ export function initRemoteBridge() {
   useModelStore.subscribe(publishSoon);
   useThemeStore.subscribe(publishSoon);
   useWorkspaceStore.subscribe(publishSoon);
-  useUIStore.subscribe(publishSoon);
+  useUIStore.subscribe((state, previous) => {
+    if (state.viewMode !== previous.viewMode) publishSoon();
+  });
   useComputerStore.subscribe(publishSoon);
   useInstallGateStore.subscribe(publishSoon);
   useGoalStore.subscribe(publishSoon);

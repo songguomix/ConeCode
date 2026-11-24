@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { memo, useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { FiSave, FiSearch, FiX, FiChevronUp, FiChevronDown } from 'react-icons/fi';
 import { useWorkspaceStore, useLanguageStore, useUIStore, useAiHighlightsStore } from '../../stores';
 import { highlightCode } from './highlight';
@@ -82,7 +82,7 @@ function measureCharWidth(): number {
   }
 }
 
-export default function EditorPanel() {
+function EditorPanel() {
   const { selectedFile, fileContent, selectedFileIsImage, saveFile, rootPath } = useWorkspaceStore();
   const setTabDirty = useWorkspaceStore((s) => s.setTabDirty);
   const dirtyTabs = useWorkspaceStore((s) => s.dirtyTabs);
@@ -947,3 +947,5 @@ const KIND_BADGE: Record<string, string> = {
   word: 'bg-[var(--bg-4)] text-[var(--text-muted)]',
   property: 'bg-[color-mix(in_srgb,var(--syntax-property)_20%,transparent)] text-[var(--syntax-property)]',
 };
+
+export default memo(EditorPanel);

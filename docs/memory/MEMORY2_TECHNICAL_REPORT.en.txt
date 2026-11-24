@@ -1,0 +1,69 @@
+ConeCode Memory 2.0: Layered Long-Term Memory, Cloud Sync, and Dream Offline Consolidation Technical Report
+
+Project: ConeCode (v2.4.25)
+Document Type: Plain-Text System Architecture and Core Technical Report
+Date: 2026-11-23
+
+1. System Overview and Design Goals
+
+Conventional AI coding clients typically store long-term memory as a flat list of short strings concatenated wholesale into every system prompt. In multi-project, multi-device software engineering, that flat design creates five structural failures: cross-repository context leakage, silent overwriting of explicit user constraints by agent inferences, irreversible updates without version history or conflict handling, prompt bloat from unranked noisy entries, and blurred privacy boundaries around cloud sync.
+
+ConeCode Memory 2.0 replaces the flat list with a layered, versioned, strictly project-isolated, local-first long-term memory engine. On top of this core, it provides a vendor-neutral cloud synchronization contract (supporting both a self-hosted REST gateway and one-click Google Drive OAuth) and a read-only offline consolidation layer called Dream Wiki.
+
+2. Five-Layer Data Model and Hard Project Isolation
+
+The canonical zero-I/O data model in src/core/memory/v2/types.ts serves as the shared contract across local storage, cloud gateways, the sync engine, and the UI. Memory is organized into five scoped layers:
+
+1. global: projectId is null; visible across all projects; holds personal preferences, coding habits, and cross-project constraints.
+2. project: bound to a single projectId; holds architecture, tech stack, technical decisions, known bugs, and project constraints.
+3. episodic: bound to a single projectId; records individual task outcomes, troubleshooting incidents, fixes, and failed attempts.
+4. semantic: bound to a single projectId; holds reusable rules and decision rationale distilled across episodes.
+5. working: bound to a single projectId with a TTL (default 24 hours); tracks current task progress and temporary todos, promotable or expirable.
+
+Each MemoryRecord carries 13 semantic types (user_fact, project_fact, architecture, technical_decision, decision_reason, constraint, task_result, progress, todo, success_experience, failure_experience, known_bug, reusable_knowledge), 5 lifecycle statuses (confirmed, inferred, pending, superseded, archived), 6 origins (user, extracted, manual, migration, tool, sync), 7 directed relation kinds (related, supersedes, derived_from, caused_by, solves, part_of, conflicts_with), plus a stable UUID, monotonic version counter, immutable history snapshots, deviceId, syncStatus, contentHash, and tombstone timestamp deletedAt.
+
+Project isolation is enforced as a hard invariant at every boundary rather than as a UI filter: createRecord refuses non-global records without a projectId, updateMemory forbids moving records out of global scope without a projectId, and visibleToProject gates local search, relation expansion, service reads, remote sync ingestion, and cloud POST /search routes.
+
+3. Event-Driven Extraction, Quality Control, and Polarity Deduplication
+
+Memory 2.0 replaces timer-based extraction with event-driven extraction (extract.ts). detectValueSignals triggers extraction only on genuine value signals—decisions, architecture changes, solved issues, reusable rules, explicit failures, or substantive session ends (real value signals or at least six substantive messages). Noise hygiene filters out greetings, acknowledgements, unanswered questions, first-person process narration, trivial navigation commands, and secret-like strings. parseExtractionV2 tolerates fenced or prose-wrapped JSON and never promotes an inference directly to confirmed.
+
+Classification and quality control (classify.ts) deterministically map types to layers via layerFor and score each candidate between 0 and 1 via qualityScore: entries shorter than 12 characters or matching noise patterns score 0; valid candidates start at 0.35 and gain points for length >= 30 (+0.10), causal connectives (+0.15), engineering tokens (+0.12), explicit rationale why (+0.12), at least two tags (+0.06), and importance weighting (up to +0.10), with a default admission floor of 0.40.
+
+dedupeCandidates compares each candidate against active records in the same layer and project using term-set Jaccard similarity and containment (0.90 when contained) against a threshold of 0.62, emitting five decisions: reject (duplicate in batch or below quality floor), reconcile (similar subject with opposite rule polarity detected by detectContradiction, such as always versus never), merge (same polarity and candidate content at least 1.15x longer, preserving union detail), reinforce (same polarity restatement, raising importance by +0.06 without creating a duplicate), or add (new record, automatically linking semantic lessons to recent session episodes via derived_from or related).
+
+4. Versioned Lifecycle, Conflict Reconciliation, and Write Guards
+
+lifecycle.ts routes every mutation through updateMemory, which snapshots the pre-patch record into history (capped at 50 versions) before incrementing version and recomputing contentHash. undoUpdate restores the preceding snapshot as a new versioned write, preserving monotonic history.
+
+High-importance records are guarded by PROTECTED_IMPORTANCE and cannot be silently overwritten, archived, or deleted without an explicit human force flag. reconcile mediates conflicting information using provenance, timestamps, and confidence: an explicit confirmed user statement (confidence >= 0.9) supersedes an earlier inference; an inference can never overwrite a user-stated fact; and materially different claims lacking a decisive user confirmation or a +0.20 confidence margin return kept_both, retaining both versions linked via conflicts_with for human review. Deletions use soft tombstones (deletedAt set and status set to archived) so deleted records never resurrect across devices.
+
+5. CJK-Aware Hybrid Retrieval and Bounded Prompt Injection
+
+retrieval.ts builds a lightweight in-memory inverted index with native field boosting: title and tags terms are weighted 2x while content and why are weighted 1x. Tokenization splits CJK text into overlapping bigrams alongside alphanumeric word tokens, powering standard BM25 (k1 = 1.5, b = 0.75) without external native tokenizer dependencies.
+
+Candidates are ranked by a five-factor score: 0.55 * min(1, bm25 / 6) + 0.20 * importance + 0.12 * confidence + 0.08 * recency (90-day half-life) + 0.05 if status is confirmed. Queries support filters on scope, projectId, layers, types, statuses, tags, importanceMin, confidenceMin, time range, and sourceSessionId, excluding deleted, archived, and superseded entries by default.
+
+When includeRelated is enabled, bounded graph expansion traverses from the top 5 seed hits (default depth 1, max 12 hits), scoring related records at 0.35 * edgeWeight * topScore with explicit provenance reasons. Local and cloud hits merge via mergeHybrid by UUID, keeping the newer version or higher score while re-checking project scope. Before injection, needsHistory filters pure greetings and acknowledgements, and formatRetrievalBlock packs top hits within maxContextChars (default 6000 characters), labeling each entry with layer, type, status, version, source, and importance while reminding the model to verify inferred facts and defer to user overrides.
+
+6. Bidirectional Incremental Sync, Three-Way Merge, and End-to-End Encryption
+
+MemorySyncEngine (sync.ts) implements local-first, offline-tolerant bidirectional sync over CompositeStorageProvider. Every local write appends a monotonic seq and idempotent changeId to the change log; pull maintains appliedChangeIds (capped at 3000) and skips echoed changes from the same deviceId. When the cloud is unreachable, local edits remain queued offline with honest error reporting and exponential backoff up to 5 minutes.
+
+On concurrent edits to the same record, findBase locates the newest local history snapshot at or below the remote version and runs threeWayMerge: disjoint single-side field edits merge automatically, importance and confidence take max(local, remote), tags take the set union, and missing why fields fill in. Concurrent edits to free-text fields (title or content) or missing common ancestors never overwrite blindly; instead, a MemoryConflict preserves local, remote, and base versions until the user resolves it as keep_local, keep_remote, or merge. Tombstones always win over older updates.
+
+Two cloud backends are supported: a vendor-neutral REST gateway (reference server/memory-cloud/server.mjs plus production PostgreSQL schema) offering health verification, server-side project-isolated search, cursor-based change feeds, object storage, device listing and revocation (403 on all routes), usage reporting, backup/restore, and tenant deletion requiring exact tenant-name confirmation; and a one-click Google Drive provider (electron/memory-drive.ts) using main-process OAuth 2.0 Loopback + PKCE into Drive's hidden appDataFolder with ETag-conditional writes and Electron safeStorage credential encryption.
+
+security.ts explicitly separates three security layers: transport encryption (TLS required for non-loopback hosts), server-at-rest encryption, and client-side end-to-end encryption (E2E). Under E2E, Web Crypto derives a 256-bit key via PBKDF2-SHA-256 (120,000 iterations, cached in process memory) and encrypts title, content, why, tags, and session provenance with AES-256-GCM using a fresh 12-byte random IV per write, storing only ciphertext on the server. The system honestly disables server-side plaintext search under E2E and falls back to searching the locally decrypted cache.
+
+7. Non-Destructive Migration and Dream Offline Consolidation
+
+migration.ts migrates legacy memory.json and project CLAUDE.md/AGENTS.md files non-destructively: source files remain unmodified, a backup is written first, stable IDs and source hashes guarantee idempotency, expected texts are verified post-import, records belonging to other workspaces stay in the legacy store until those workspaces open, and unclassifiable lines receive needsTriage=true.
+
+Dream (src/core/memory/v2/dream/) is a read-only offline consolidation layer built on the Memory 2.0 object store without mutating memory2.json. It collects finished sessions idle for at least 10 minutes (up to 6 sessions, 12 candidates, and 6 topic files per run, skipping unchanged sessions by transcript hash), triggered manually or daily while running. Both input transcripts (capped at 24k chars) and generated wiki bodies undergo credential redaction. An analyzer produces strictly JSON-validated Markdown topics (archiving overwritten versions into history, retaining the latest 8 copies for 180 days), and an organizer deterministically merges or retires topics while preserving all facts, leaving MOVED TO stubs, rewriting wiki links, and regenerating index.json and _index.md from disk. Main-process object storage validates path containment on every key. Subsequent sessions mount the index plus up to two relevant topics (capped at 2600 chars) alongside structured memory recall.
+
+8. Verification Coverage and Known Boundaries
+
+Memory 2.0 and Dream are verified by 22 test suites comprising 204 automated tests. All 20 offline core and local-persistence suites (196 tests) pass 100% in local sandboxed execution, covering classification, extraction, versioned lifecycle, CJK-BM25 retrieval, three-way sync, AES-256-GCM encryption, non-destructive migration, and Dream consolidation; two loopback network integration suites (8 tests) exercise live two-device REST sync, E2E ciphertext sync, Bearer authentication, and Google Drive OAuth/ETag conflict flows.
+
+Known boundaries are documented explicitly: the default semantic provider reports isSemantic=false (lexical baseline) until a neural embedding provider is registered via setSemanticProvider; the dependency-free reference cloud server uses atomic JSON files per tenant while production deployments should use the provided PostgreSQL schema; Google Drive ETag checks protect updates to existing files rather than initial file-creation races; and cross-device project identity relies on an explicit project marker or Git origin remote, falling back to a machine-local path hash for unmarked non-Git folders.

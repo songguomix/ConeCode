@@ -25,6 +25,8 @@ interface DshMarketStore {
   sort: NonNullable<CatalogQuery['sort']>;
   page: number;
   compatibleOnly: boolean;
+  compatFilter: NonNullable<CatalogQuery['compatFilter']>;
+  formatFilter: NonNullable<CatalogQuery['formatFilter']>;
   selectedPluginId: string | null;
   operationLog: string | null;
   logs: { path: string; text: string; truncated: boolean } | null;
@@ -43,6 +45,8 @@ interface DshMarketStore {
   setSort: (sort: NonNullable<CatalogQuery['sort']>) => void;
   setPage: (page: number) => void;
   setCompatibleOnly: (value: boolean) => void;
+  setCompatFilter: (value: NonNullable<CatalogQuery['compatFilter']>) => void;
+  setFormatFilter: (value: NonNullable<CatalogQuery['formatFilter']>) => void;
   refresh: () => Promise<void>;
   selectPlugin: (pluginId: string, version?: string) => Promise<void>;
   clearSelection: () => void;
@@ -118,6 +122,8 @@ export const useDshMarketStore = create<DshMarketStore>((set, get) => {
     page: get().page,
     pageSize: 12,
     compatibleOnly: get().compatibleOnly,
+    compatFilter: get().compatFilter,
+    formatFilter: get().formatFilter,
   });
 
   const refreshSnapshot = async () => {
@@ -191,6 +197,8 @@ export const useDshMarketStore = create<DshMarketStore>((set, get) => {
     sort: 'relevance',
     page: 1,
     compatibleOnly: false,
+    compatFilter: 'all',
+    formatFilter: 'all',
     selectedPluginId: null,
     operationLog: null,
     logs: null,
@@ -249,6 +257,16 @@ export const useDshMarketStore = create<DshMarketStore>((set, get) => {
 
     setCompatibleOnly: (value) => {
       set({ compatibleOnly: value, page: 1 });
+      scheduleRefresh(true);
+    },
+
+    setCompatFilter: (value) => {
+      set({ compatFilter: value, page: 1 });
+      scheduleRefresh(true);
+    },
+
+    setFormatFilter: (value) => {
+      set({ formatFilter: value, page: 1 });
       scheduleRefresh(true);
     },
 

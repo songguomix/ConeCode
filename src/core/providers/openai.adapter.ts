@@ -1,6 +1,7 @@
 import { BaseAdapter } from './base.adapter';
 import { toOpenAITools } from '../tools/definitions';
 import { gptDetector } from '../constraints/gptDetector';
+import { isOfficialOpenAIEndpoint, reasoningReplayFor } from './reasoningReplay';
 import type { AIModel, SendMessageParams, StreamChunk, ToolCall } from '../../types';
 
 export class OpenAIAdapter extends BaseAdapter {
@@ -15,10 +16,10 @@ export class OpenAIAdapter extends BaseAdapter {
   /**
    * Strip fields that ConeCode adds internally (isQuestion, isToolResult, …)
    * but that the API does not recognise, and re-encode native tool calls into
-   * the OpenAI wire format. Preserve `reasoning_content` because MiMo models
-   * require it on assistant turns with tool_calls.
+   * the OpenAI wire format. Compatible providers such as MiMo can require
+   * `reasoning_content` alongside native tool calls.
    */
-  protected cleanMessages(messages: any[]): any[] {
+  protected cleanMessages(messages: any[], reasoning: 'all' | 'tools' | 'none' = 'all'): any[] {
     return messages.map((m) => {
       // Tool results answer one call by id; the API rejects any other field.
       if (m.role === 'tool') {
@@ -29,8 +30,11 @@ export class OpenAIAdapter extends BaseAdapter {
         };
       }
       const out: any = { role: m.role, content: m.content };
-      if (m.reasoning_content) out.reasoning_content = m.reasoning_content;
-      if (Array.isArray(m.tool_calls) && m.tool_calls.length) {
+      const hasToolCalls = Array.isArray(m.tool_calls) && m.tool_calls.length > 0;
+      if (m.reasoning_content && (reasoning === 'all' || (reasoning === 'tools' && hasToolCalls))) {
+        out.reasoning_content = m.reasoning_content;
+      }
+      if (hasToolCalls) {
         out.tool_calls = m.tool_calls.map((tc: ToolCall) => ({
           id: tc.id,
           type: 'function',
@@ -76,15 +80,17 @@ export class OpenAIAdapter extends BaseAdapter {
   }
 
   protected buildRequestBody(params: SendMessageParams): Record<string, any> {
+    // Chat Completions has no reasoning history field. On compatible GPT
+    // endpoints, preserve native tool exchanges but omit display-only thinking
+    // so an older assistant message keeps the same cacheable prefix.
     const body: Record<string, any> = {
       model: params.model,
-      messages: this.cleanMessages(params.messages),
+      messages: this.cleanMessages(params.messages, reasoningReplayFor(this.config, params.model)),
       temperature: params.temperature ?? 0.7,
       max_tokens: params.maxTokens,
     };
     if (params.reasoningEffort) body.reasoning_effort = params.reasoningEffort;
-    if (this.config.type === 'openai' && params.conversationId
-      && /^https:\/\/api\.openai\.com(?:\/|$)/i.test(this.config.baseUrl)) {
+    if (params.conversationId && isOfficialOpenAIEndpoint(this.config)) {
       body.prompt_cache_key = params.conversationId;
     }
     this.applyTools(body, params);
@@ -230,7 +236,7 @@ export class OpenAIAdapter extends BaseAdapter {
       },
     });
 
-    onChunk({ type: 'done', content: '', reasoning_content: fullReasoningContent || undefined, finishReason: finishReason || undefined });
+    onChunk({ type: 'done', content: '', finishReason: finishReason || undefined });
 
     return {
       choices: [{

@@ -10,6 +10,7 @@ import { useComputerStore } from '../../stores/computer.store';
 import { useUIStore } from '../../stores/ui.store';
 import { OpenAIAdapter } from './openai.adapter';
 import { AnthropicAdapter } from './anthropic.adapter';
+import { CustomAdapter } from './custom.adapter';
 import { OpenRouterAdapter } from './openrouter.adapter';
 import type { AIModel, ProviderConfig, SendMessageParams } from '../../types';
 
@@ -125,6 +126,10 @@ class OpenAIWireProbe extends OpenAIAdapter {
   wire(params: SendMessageParams) { return this.buildRequestBody(params); }
 }
 
+class CustomWireProbe extends CustomAdapter {
+  wire(params: SendMessageParams) { return this.buildRequestBody(params); }
+}
+
 class OpenRouterWireProbe extends OpenRouterAdapter {
   wire(params: SendMessageParams) { return this.buildRequestBody(params); }
 }
@@ -158,6 +163,12 @@ const model: AIModel = {
   contextWindow: 200000, maxOutputTokens: 8192, enabled: true,
 };
 
+const gptModel: AIModel = {
+  ...model,
+  id: 'gpt-4o', name: 'GPT-4o', supportsVision: true, supportsReasoning: false,
+  contextWindow: 128000, maxOutputTokens: 16384,
+};
+
 const toolCallResponse = (name: string, args: Record<string, any>, id: string, thinking?: string) => ({
   choices: [{
     message: {
@@ -178,7 +189,7 @@ let streamCalls: any[];
 let queued: any[];
 let files: Map<string, string>;
 
-function setupStore(openFileSize = 10000) {
+function setupStore(openFileSize = 10000, selectedModel = model) {
   streamCalls = [];
   queued = [];
   files = new Map();
@@ -213,7 +224,7 @@ function setupStore(openFileSize = 10000) {
   Object.defineProperty(globalThis, 'navigator', { value: { platform: 'MacIntel' }, configurable: true });
   resetNativeToolFallback();
   useUIStore.setState({ viewMode: 'work' });
-  useModelStore.setState({ models: new Map([['p1', [model]]]), selectedModelId: model.id });
+  useModelStore.setState({ models: new Map([['p1', [selectedModel]]]), selectedModelId: selectedModel.id });
   useSettingsStore.setState({ toolCallMode: 'auto', approvalMode: 'suggest', autoIncludeFileContext: true, maxContextFileSize: 10000 });
   useWorkspaceStore.setState({
     rootPath: '/proj', mcpTools: [], contextFiles: [],
@@ -226,7 +237,7 @@ function setupStore(openFileSize = 10000) {
   useComputerStore.setState({ enabled: false, target: null, targetRevision: 0, frameId: null, lastShot: null, activity: [] });
   useChatStore.setState({
     messages: [],
-    conversations: [{ id: 'conv1', title: 'Smoke', providerId: 'p1', modelId: model.id, createdAt: 0, updatedAt: 0 }],
+    conversations: [{ id: 'conv1', title: 'Smoke', providerId: 'p1', modelId: selectedModel.id, createdAt: 0, updatedAt: 0 }],
     activeConversationId: 'conv1',
     isStreaming: false,
     planMode: false,
@@ -275,6 +286,115 @@ describe('Cache hit rate smoke test', () => {
     console.info('[Smoke S1 OpenAI tool loop + 10KB open file] hit ratios:', ratios.map((r) => `${(r * 100).toFixed(1)}%`));
     // On tool continuations, prefix hit ratio should be high (>= 80%), not tanked by re-sending 10KB uncached open file.
     expect(ratios[ratios.length - 1]).toBeGreaterThanOrEqual(0.8);
+  });
+
+  it('keeps GPT-4o’s editor and tool history prefix across new user turns', async () => {
+    setupStore(10000, gptModel);
+    const date = vi.spyOn(Date, 'now').mockReturnValue(new Date(2026, 10, 24, 10, 1).getTime());
+    try {
+      const chat = useChatStore.getState();
+      queued.push(
+        toolCallResponse('read_file', { path: '/proj/src/mod0.ts' }, 'cached-read'),
+        textResponse('I read the module and compared it with the editor.'),
+      );
+      await chat.sendMessage('Compare the open file with the first module.', 'p1', gptModel.id);
+
+      date.mockReturnValue(new Date(2026, 10, 24, 10, 3).getTime());
+      await chat.sendMessage('Which differences are important?', 'p1', gptModel.id);
+
+      date.mockReturnValue(new Date(2026, 10, 24, 10, 5).getTime());
+      useWorkspaceStore.setState({ fileContent: '// Updated editor file\nexport const replacement = 42;' });
+      await chat.sendMessage('Review the updated editor version.', 'p1', gptModel.id);
+    } finally {
+      date.mockRestore();
+    }
+
+    expect(streamCalls).toHaveLength(4);
+    const probe = new OpenAIWireProbe(baseConfig);
+    const [first, continuation, followUp, changed] = streamCalls.map((call) => probe.wire({
+      model: call.modelId, messages: call.messages, tools: call.tools,
+      toolChoice: call.toolChoice, conversationId: call.conversationId, reasoningEffort: call.reasoningEffort,
+      maxTokens: call.maxTokens,
+    }));
+
+    const firstToolResult = continuation.messages.at(-1);
+    expect(firstToolResult).toEqual({
+      role: 'tool', tool_call_id: 'cached-read', content: expect.stringContaining(files.get('/proj/src/mod0.ts')!),
+    });
+    expect(JSON.stringify(continuation.messages)).toContain('// Open editor file');
+    expect(continuation.messages.some((message: { content: unknown }) =>
+      typeof message.content === 'string' && message.content.includes('Environment:'))).toBe(false);
+    expect(continuation.messages.slice(0, first.messages.length - 1)).toEqual(first.messages.slice(0, -1));
+    expect(followUp.messages.slice(0, continuation.messages.length)).toEqual(continuation.messages);
+    expect(followUp.messages.filter((message: { content: unknown }) =>
+      typeof message.content === 'string' && message.content.includes('// Open editor file'))).toHaveLength(1);
+    expect(followUp.tools).toEqual(continuation.tools);
+    expect(followUp.prompt_cache_key).toBe(continuation.prompt_cache_key);
+
+    expect(first.messages.at(-1).content).toContain('Environment: macOS · 2026-11-24 10:01');
+    expect(followUp.messages.at(-1).content).toContain('Environment: macOS · 2026-11-24 10:03');
+    expect(changed.messages.at(-1).content).toContain('Environment: macOS · 2026-11-24 10:05');
+    expect(JSON.stringify(changed.messages)).toContain('// Updated editor file');
+    expect(JSON.stringify(changed.messages)).not.toContain('// Open editor file');
+  });
+
+  it.each([20, 10_500])('preserves recent GPT history when the editor changes after six replies of %i characters', async (size) => {
+    setupStore(10000, gptModel);
+    const send = (index: number) => useChatStore.getState().sendMessage(`Turn ${index}`, 'p1', gptModel.id);
+    for (let i = 0; i < 6; i++) {
+      queued.push(textResponse(`Reply ${i} ${'x'.repeat(size)}`));
+      await send(i);
+    }
+    useWorkspaceStore.setState({ fileContent: '// Revised file' });
+    await send(6);
+
+    const probe = new OpenAIWireProbe(baseConfig);
+    const [prior, revised] = streamCalls.slice(-2).map((call) => probe.wire({
+      model: call.modelId, messages: call.messages, tools: call.tools, conversationId: call.conversationId,
+    }));
+    // Short replies may share the previous turn's editor snapshot. For a long
+    // reply the transcript takes priority and must match through the latest turn.
+    const lastReusable = prior.messages.findIndex((m: { content: unknown }) =>
+      m.content === (size > 10000 ? 'Turn 5' : 'Turn 4'));
+    expect(lastReusable).toBeGreaterThan(0);
+    expect(revised.messages.slice(0, lastReusable + 1)).toEqual(prior.messages.slice(0, lastReusable + 1));
+    expect(JSON.stringify(revised.messages)).not.toContain('// Open editor file');
+    expect(JSON.stringify(revised.messages)).toContain('// Revised file');
+  });
+
+  it('keeps the GPT-5 prompt-mode tool prefix stable after reasoning', async () => {
+    const reasoningModel = { ...gptModel, id: 'gpt-5', name: 'GPT-5', supportsReasoning: true };
+    setupStore(10000, reasoningModel);
+    useSettingsStore.setState({ toolCallMode: 'prompt' });
+    const saveMessage = vi.spyOn(window.electronAPI.message, 'create');
+    const reasoning = ['The first module is needed for comparison.', 'Now read the second module.'];
+    for (const [index, reasoningContent] of reasoning.entries()) {
+      queued.push({ choices: [{
+        message: {
+          role: 'assistant',
+          content: `\`\`\`json\n{"action":"read_file","path":"/proj/src/mod${index}.ts"}\n\`\`\``,
+          reasoning_content: reasoningContent,
+        },
+        finish_reason: 'stop',
+      }] });
+    }
+    queued.push(textResponse('Both modules have been read.'));
+
+    await useChatStore.getState().sendMessage('Read and compare the first two modules.', 'p1', reasoningModel.id);
+
+    expect(streamCalls).toHaveLength(3);
+    const probe = new CustomWireProbe({ ...baseConfig, type: 'custom', baseUrl: 'https://gateway.example.test/v1' });
+    const [, firstContinuation, secondContinuation] = streamCalls.map((call) => probe.wire({
+      model: call.modelId, messages: call.messages, tools: call.tools, conversationId: call.conversationId,
+      reasoningEffort: call.reasoningEffort, maxTokens: call.maxTokens,
+    }));
+
+    expect(firstContinuation.messages.at(-1).content).toContain(files.get('/proj/src/mod0.ts'));
+    expect(secondContinuation.messages.at(-1).content).toContain(files.get('/proj/src/mod1.ts'));
+    expect(secondContinuation.messages.slice(0, firstContinuation.messages.length)).toEqual(firstContinuation.messages);
+    expect(secondContinuation.messages.some((message: { reasoning_content?: string }) =>
+      message.reasoning_content !== undefined)).toBe(false);
+    expect(saveMessage.mock.calls.map(([message]) => message.reasoning_content).filter(Boolean)).toEqual(reasoning);
   });
 
   it('Scenario 2: OpenRouter Claude caches tool-call history across multi-step tool loop', async () => {

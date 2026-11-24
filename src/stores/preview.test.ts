@@ -7,7 +7,10 @@ import { usePreviewStore } from './preview.store';
 
 const reset = () => {
   const first = { id: 'tab-1', mountUrl: null, url: null, title: null };
-  usePreviewStore.setState({ tabs: [first], activeTabId: first.id, picking: false });
+  usePreviewStore.setState({
+    tabs: [first], activeTabId: first.id, picking: false,
+    state: 'idle', url: null, plan: null, serverRevision: 0, presentedServer: null,
+  });
 };
 
 beforeEach(reset);
@@ -95,6 +98,106 @@ describe('tabs', () => {
     usePreviewStore.getState().setPicking(true);
     usePreviewStore.getState().selectTab(second);
     expect(usePreviewStore.getState().picking).toBe(false);
+  });
+
+  it('ignores repeated guest URL and title events without publishing state', () => {
+    const { activeTabId, navigateTab, noteTabUrl, setTabTitle } = usePreviewStore.getState();
+    const url = 'http://localhost:3000/';
+    navigateTab(activeTabId, url);
+    setTabTitle(activeTabId, 'Project');
+    const before = usePreviewStore.getState();
+
+    noteTabUrl(activeTabId, url);
+    setTabTitle(activeTabId, 'Project');
+
+    expect(usePreviewStore.getState()).toBe(before);
+  });
+});
+
+describe('preview server tabs', () => {
+  const url = 'http://localhost:4000/';
+  const restartedUrl = 'http://localhost:4001/';
+  const externalUrl = 'https://example.test/';
+  const show = (url: string, serverRevision: number) => usePreviewStore.setState({
+    state: 'running', url, serverRevision, plan: { mode: 'static', cwd: '/project', command: null },
+  });
+
+  it('presents a running server once and leaves the selected tab alone on reopen', () => {
+    const { activeTabId, openTab, presentServer } = usePreviewStore.getState();
+    show(url, 1);
+    expect(presentServer()).toBeNull();
+    expect(usePreviewStore.getState().tabs).toEqual([
+      expect.objectContaining({ id: activeTabId, mountUrl: url, url }),
+    ]);
+
+    const externalId = openTab(externalUrl);
+    const beforeReopen = usePreviewStore.getState();
+    expect(presentServer()).toBeNull();
+    expect(usePreviewStore.getState()).toBe(beforeReopen);
+    expect(usePreviewStore.getState().activeTabId).toBe(externalId);
+  });
+
+  it('does not open another tab when a project page is already open', () => {
+    const { openTab, presentServer } = usePreviewStore.getState();
+    const path = `${url}settings`;
+    const id = openTab(path);
+    show(url, 1);
+
+    expect(presentServer()).toBeNull();
+    const { tabs, activeTabId } = usePreviewStore.getState();
+    expect(activeTabId).toBe(id);
+    expect(tabs).toHaveLength(2);
+    expect(tabs[1].url).toBe(path);
+  });
+
+  it('reuses the project tab when the server restarts on another port', () => {
+    const { activeTabId, noteTabUrl, presentServer } = usePreviewStore.getState();
+    show(url, 1);
+    presentServer();
+    noteTabUrl(activeTabId, `${url}settings`);
+    show(restartedUrl, 2);
+
+    expect(presentServer()).toEqual({ id: activeTabId, url: restartedUrl });
+    expect(usePreviewStore.getState().tabs).toEqual([
+      expect.objectContaining({ id: activeTabId, mountUrl: url, url: restartedUrl }),
+    ]);
+  });
+
+  it('requests one reload of existing tabs when the server restarts on the same port', () => {
+    const { activeTabId, noteTabUrl, presentServer } = usePreviewStore.getState();
+    show(url, 1);
+    presentServer();
+    const path = `${url}settings`;
+    noteTabUrl(activeTabId, path);
+    show(url, 2);
+
+    expect(presentServer()).toBeNull();
+    const { tabs } = usePreviewStore.getState();
+    expect(tabs).toEqual([expect.objectContaining({ url: path, reloadRequest: { url: path } })]);
+    presentServer();
+    expect(usePreviewStore.getState().tabs).toBe(tabs);
+  });
+
+  it('targets static file reloads to project tabs and manual reloads to the active tab', () => {
+    const { activeTabId, openTab, presentServer, requestReload } = usePreviewStore.getState();
+    show(url, 1);
+    presentServer();
+    const externalId = openTab(externalUrl);
+    const otherPort = openTab(restartedUrl);
+    const first = usePreviewStore.getState().tabs;
+
+    requestReload('watcher');
+    const watched = usePreviewStore.getState();
+    expect(watched.activeTabId).toBe(otherPort);
+    expect(watched.tabs.find((tab) => tab.id === activeTabId)?.reloadRequest).toEqual({ url });
+    expect(watched.tabs.find((tab) => tab.id === externalId)).toBe(first[1]);
+    expect(watched.tabs.find((tab) => tab.id === otherPort)).toBe(first[2]);
+
+    requestReload();
+    const manual = usePreviewStore.getState().tabs;
+    expect(manual[0]).toBe(watched.tabs[0]);
+    expect(manual[1]).toBe(watched.tabs[1]);
+    expect(manual[2].reloadRequest).toEqual({ url: restartedUrl });
   });
 });
 

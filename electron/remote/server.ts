@@ -180,6 +180,7 @@ export class RemoteServer extends EventEmitter {
       frame = { ...frame, snapshot: { ...frame.snapshot, computerId: this.fingerprint, screenControlProvider: 'uuRemote' } };
     }
     if (frame && frame.type === 'state') this.latest = frame;
+    if (!this.clients.size) return;
     const data = `data: ${JSON.stringify(frame)}\n\n`;
     for (const client of this.clients.values()) this.writeData(client, data);
   }

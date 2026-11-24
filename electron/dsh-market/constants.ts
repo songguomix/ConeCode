@@ -28,6 +28,17 @@ export const SUPPORTED_HOST_SERVICES = [
   'skills',
   'credentials',
   'llm',
+  // Full DSH host compatibility services bridged to ConeCode.
+  'systemPrompt',
+  'sessions',
+  'shellEnv',
+  'webServer',
+  'fs',
+  'userApproval',
+  'scope',
+  'memory',
+  'connection',
+  'agents',
   // Available only after the profile runtime provides the official storage stack.
   'storage',
   'storageDomain',

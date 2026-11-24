@@ -65,7 +65,7 @@ const GithubControls = memo(SyncView);
  * RSI has no chat composer: runs start from the header, and approvals or
  * questions dock above the progress row only when they need an answer.
  */
-export default function RsiView() {
+function RsiView() {
   const { t } = useLanguageStore();
   const sendMessage = useChatStore((s) => s.sendMessage);
   const stopGeneration = useChatStore((s) => s.stopGeneration);
@@ -1036,3 +1036,5 @@ export default function RsiView() {
     </div>
   );
 }
+
+export default memo(RsiView);

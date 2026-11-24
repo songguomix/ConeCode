@@ -1,12 +1,25 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { useChatStore, useModelStore, useWorkspaceStore, useSettingsStore, useLanguageStore } from '../../stores';
 import { contextMessagesForUsage } from '../../stores/chat.store';
 import { estimateTokens, SYSTEM_PROMPT_TOKENS } from '../../core/tokens';
 import { effectiveContextWindow } from '../../core/model/context';
+import type { Message } from '../../types';
 
 // Donut geometry. Drawn in a 36x36 viewBox, rendered small in the control bar.
 const RADIUS = 15;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
+
+// Appends create a new transcript array, but keep its existing messages.
+const messageTokenEstimates = new WeakMap<Message, number>();
+
+function estimateMessageTokens(message: Message): number {
+  const cached = messageTokenEstimates.get(message);
+  if (cached !== undefined) return cached;
+  const tokens = estimateTokens(message.content) + estimateTokens(message.reasoning_content);
+  messageTokenEstimates.set(message, tokens);
+  return tokens;
+}
 
 function severityColor(pct: number): string {
   if (pct >= 0.9) return '#ef4444'; // red
@@ -25,24 +38,31 @@ export default function ContextMeter() {
   const { t } = useLanguageStore();
 
   const messages = useChatStore((s) => s.messages);
-  const activeConversationId = useChatStore((s) => s.activeConversationId);
-  const streamedTokens = useChatStore((s) =>
-    activeConversationId ? s.streamingRuns[activeConversationId]?.streamedTokens : undefined);
-  const streamingContent = useChatStore((s) =>
-    activeConversationId && streamedTokens === undefined ? s.streamingRuns[activeConversationId]?.content ?? '' : '');
-  const streamingReasoningContent = useChatStore((s) =>
-    activeConversationId && streamedTokens === undefined ? s.streamingRuns[activeConversationId]?.reasoningContent ?? '' : '');
+  const [streamedTokens, streamingContent, streamingReasoningContent] = useChatStore(useShallow((s) => {
+    const run = s.activeConversationId ? s.streamingRuns[s.activeConversationId] : undefined;
+    return run?.streamedTokens === undefined
+      ? [undefined, run?.content, run?.reasoningContent] as const
+      : [run.streamedTokens, undefined, undefined] as const;
+  }));
   const selectedModel = useModelStore((s) => s.getSelectedModel());
 
-  const { selectedFile, fileContent, selectedFileIsImage, contextFiles } = useWorkspaceStore();
-  const { autoIncludeFileContext, maxContextFileSize } = useSettingsStore();
+  const { selectedFile, fileContent, selectedFileIsImage, contextFiles } = useWorkspaceStore(useShallow((s) => ({
+    selectedFile: s.selectedFile,
+    fileContent: s.fileContent,
+    selectedFileIsImage: s.selectedFileIsImage,
+    contextFiles: s.contextFiles,
+  })));
+  const { autoIncludeFileContext, maxContextFileSize, fullContext } = useSettingsStore(useShallow((s) => ({
+    autoIncludeFileContext: s.autoIncludeFileContext,
+    maxContextFileSize: s.maxContextFileSize,
+    fullContext: s.fullContext,
+  })));
 
   // Only count the live request context. Compacted transcript messages remain
   // visible, but are excluded here just as they are in buildApiMessages().
-  const liveMessages = useMemo(() => contextMessagesForUsage(messages), [messages]);
   const messageTokens = useMemo(
-    () => liveMessages.reduce((sum, m) => sum + estimateTokens(m.content) + estimateTokens(m.reasoning_content), 0),
-    [liveMessages]
+    () => contextMessagesForUsage(messages).reduce((sum, message) => sum + estimateMessageTokens(message), 0),
+    [messages]
   );
   const compactionCount = useMemo(
     () => messages.reduce((count, m) => count + (m.isSummary ? 1 : 0), 0),
@@ -75,7 +95,6 @@ export default function ContextMeter() {
 
   const convoTokens = messageTokens + liveTokens;
   const used = convoTokens + fileTokens + SYSTEM_PROMPT_TOKENS;
-  const fullContext = useSettingsStore((s) => s.fullContext);
   const window = effectiveContextWindow(selectedModel?.contextWindow, fullContext, selectedModel?.hasContextWindowOverride);
   const pct = window > 0 ? Math.min(used / window, 1) : 0;
   const remaining = Math.max(0, window - used);

@@ -224,6 +224,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     invokeCommand: (profileId: string, pluginId: string, command: string, rawInput: string, rowId?: string) => ipcRenderer.invoke('dsh-market:invoke-command', profileId, pluginId, command, rawInput, rowId),
     skills: () => ipcRenderer.invoke('dsh-market:skills'),
     skillContent: (pluginId: string, name: string, rowId?: string) => ipcRenderer.invoke('dsh-market:skill-content', pluginId, name, rowId),
+    systemPrompts: (context?: unknown) => ipcRenderer.invoke('dsh-market:system-prompts', context),
+    shellEnv: () => ipcRenderer.invoke('dsh-market:shell-env'),
     switchProfile: (profileId: string) => ipcRenderer.invoke('dsh-market:switch-profile', profileId),
     createProfile: (profileId: string, name?: string) => ipcRenderer.invoke('dsh-market:create-profile', profileId, name),
     restartRuntime: () => ipcRenderer.invoke('dsh-market:restart-runtime'),

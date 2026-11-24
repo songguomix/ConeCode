@@ -201,14 +201,18 @@ describe('mid-run message queue', () => {
     await vi.waitFor(() => expect(streamCalls).toHaveLength(1));
     const store = useChatStore.getState();
     store.enqueueMessage('conv1', 'normal follow-up', 'p1', 'gpt-test');
-    store.enqueueMessage('conv1', 'change direction', 'p1', 'gpt-test');
+    const icon = 'data:image/png;base64,AQID';
+    useWorkspaceStore.getState().addPastedImage(icon, 'icon.png');
+    store.enqueueMessage('conv1', 'change direction', 'p1', 'gpt-test', 'composer');
     store.steerQueuedMessage('conv1', useChatStore.getState().queuedMessages.conv1[1].id);
     expect(streamCalls).toHaveLength(1);
     finish(textResponse('first step complete'));
 
     await vi.waitFor(() => expect(streamCalls).toHaveLength(2));
     const messages = streamCalls[1].messages;
-    expect(messages[messages.length - 1]).toMatchObject({ role: 'user', content: 'change direction' });
+    expect(messages[messages.length - 1]).toMatchObject({
+      role: 'user', content: [{ type: 'image_url', image_url: { url: icon } }, { type: 'text', text: 'change direction' }],
+    });
     expect(useChatStore.getState().queuedMessages.conv1.map((item) => item.content)).toEqual(['normal follow-up']);
     expect(window.electronAPI.chat.stop).not.toHaveBeenCalled();
     finishSteered(textResponse('updated direction complete'));
@@ -325,7 +329,31 @@ describe('mid-run message queue', () => {
     expect(useChatStore.getState().queuedMessages.conv1).toHaveLength(1);
   });
 
-  it('never drags the composer image into a queued turn', async () => {
+  it.each([true, false])('sends an image-only composer follow-up with its own images when busy is %s', async (busy) => {
+    const icons = ['data:image/png;base64,AQID', 'data:image/png;base64,BAUG'];
+    const textFile = { path: '/proj/readme.md', content: 'Notes' };
+    useWorkspaceStore.setState({ contextFiles: [textFile] });
+    for (const [i, icon] of icons.entries()) useWorkspaceStore.getState().addPastedImage(icon, `icon${i}.png`);
+    if (busy) useChatStore.setState({ streamingRuns: { conv1: fakeRun() } });
+    expect(useChatStore.getState().enqueueMessage('missing', '', 'p1', 'gpt-test', 'composer')).toBe('dropped');
+    expect(useChatStore.getState().enqueueMessage('conv1', '', 'p1', 'gpt-test', 'composer')).toBe(busy ? 'queued' : 'sent');
+    expect(useWorkspaceStore.getState().contextFiles).toEqual([textFile]);
+    const later = 'data:image/png;base64,BwgJ';
+    useWorkspaceStore.getState().addPastedImage(later, 'later.png');
+    if (busy) {
+      expect(useChatStore.getState().queuedMessages.conv1[0].images).toEqual(icons);
+      useChatStore.setState({ streamingRuns: {} });
+      await useChatStore.getState().flushQueue('conv1');
+    }
+    await vi.waitFor(() => expect(streamCalls).toHaveLength(1));
+    expect(created.filter((m) => m.role === 'user')).toMatchObject([{ content: '', images: icons }]);
+    const wireImages = streamCalls[0].messages.flatMap((m: any) => Array.isArray(m.content)
+      ? m.content.filter((part: any) => part.type === 'image_url').map((part: any) => part.image_url.url) : []);
+    expect(wireImages).toEqual(icons);
+    expect(useWorkspaceStore.getState().contextFiles.map((f) => f.path)).toEqual([textFile.path, 'later.png']);
+  });
+
+  it('never drags the composer image into a programmatic queued turn', async () => {
     const pastedImage = {
       path: 'pasted-image.png',
       content: '',
@@ -345,6 +373,25 @@ describe('mid-run message queue', () => {
     expect(userMsg.images).toBeUndefined();
     // The image stays in the composer, ready for the user's own next send.
     expect(useWorkspaceStore.getState().contextFiles).toEqual([pastedImage]);
+  });
+
+  it('keeps queued images until their transcript write succeeds and retries using the same message id', async () => {
+    const icon = 'data:image/png;base64,AAEB';
+    useWorkspaceStore.getState().addPastedImage(icon, 'icon.png');
+    useChatStore.setState({ streamingRuns: { conv1: fakeRun() } });
+    const chat = useChatStore.getState();
+    chat.enqueueMessage('conv1', '', 'p1', 'gpt-test', 'composer');
+    const [item] = useChatStore.getState().queuedMessages.conv1;
+    const create = window.electronAPI.message.create;
+    window.electronAPI.message.create = vi.fn().mockRejectedValueOnce(new Error('Disk is full')).mockImplementation(create);
+    useChatStore.setState({ streamingRuns: {} });
+    await chat.flushQueue('conv1');
+    expect(useChatStore.getState().queuedMessages.conv1).toEqual([{ ...item, deliveryError: 'Disk is full' }]);
+    expect(useChatStore.getState().error).toBe('Disk is full');
+    expect(streamCalls).toHaveLength(0);
+    await chat.flushQueue('conv1');
+    expect(created.filter((m) => m.role === 'user')).toMatchObject([{ id: item.id, images: [icon] }]);
+    expect(useChatStore.getState().queuedMessages.conv1).toEqual([]);
   });
 
   it('still sends the composer image with the turn the user actually sends', async () => {

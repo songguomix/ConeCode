@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { memo, useState, useRef, useEffect, useMemo } from 'react';
 import { FiChevronDown, FiSearch, FiStar, FiSun, FiMoon, FiRefreshCw, FiCpu, FiSliders, FiShield } from 'react-icons/fi';
 import { useModelStore, useProviderStore, useUIStore, useLanguageStore, useThemeStore, useChatStore } from '../../stores';
 import { modelLimitKey } from '../../stores/model.store';
@@ -30,7 +30,7 @@ function LimitInputHint({ raw, invalidLabel }: { raw: string; invalidLabel: stri
   return <span className="text-[10.5px] text-[var(--text-muted)] leading-tight tabular-nums">≈ {formatLimitTokens(parsed)} tokens</span>;
 }
 
-export default function ModelSelector() {
+function ModelSelector() {
   const [search, setSearch] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   // Hover key only — the model object itself is derived fresh from the store
@@ -492,3 +492,5 @@ export default function ModelSelector() {
     </div>
   );
 }
+
+export default memo(ModelSelector);

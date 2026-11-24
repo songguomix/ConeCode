@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { FiSquare, FiPaperclip, FiX, FiFile, FiArrowUp, FiPlus, FiTool, FiChevronRight, FiCamera, FiClock, FiPlay } from 'react-icons/fi';
 import { type AgentMode } from '../../core/agents/modePrompts';
 import { useChatStore, useModelStore, useLanguageStore, useWorkspaceStore, useSettingsStore, useUIStore, useSkillsStore } from '../../stores';
@@ -18,10 +19,23 @@ import QueuedMessages from './QueuedMessages';
 import { parseQuickCapture, captureMemory } from '../../core/memory/quickCapture';
 import { resolveDisplayPath } from '../../core/workspace/roots';
 
-function mentionTokenAt(value: string, caret: number): string | null {
-  const before = value.slice(0, caret);
+export function mentionTokenAt(value: string, caret: number): string | null {
+  // A mention can consume at most 80 characters after @, plus its separator.
+  const before = value.slice(Math.max(0, caret - 82), caret);
   const m = before.match(/(?:^|\s)@([^\s@]{0,80})$/);
   return m ? m[1] : null;
+}
+
+export function findMentionFiles(fileList: readonly string[], query: string): string[] {
+  const needle = query.toLowerCase();
+  if (!needle) return fileList.slice(0, 8);
+  const matches: string[] = [];
+  for (const file of fileList) {
+    if (!file.toLowerCase().includes(needle)) continue;
+    matches.push(file);
+    if (matches.length === 8) break;
+  }
+  return matches;
 }
 
 interface ChatInputProps {
@@ -69,8 +83,14 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
     selectedFile, contextFiles, customCommands, rootPath, memoryFiles, fileList,
     addContextFile, addPastedImage, removeContextFile, ensureFileList, reloadProjectConfig,
     allRoots,
-  } = useWorkspaceStore();
-  const { autoIncludeFileContext, sendWithEnter } = useSettingsStore();
+  } = useWorkspaceStore(useShallow((s) => ({
+    selectedFile: s.selectedFile, contextFiles: s.contextFiles, customCommands: s.customCommands,
+    rootPath: s.rootPath, memoryFiles: s.memoryFiles, fileList: s.fileList,
+    addContextFile: s.addContextFile, addPastedImage: s.addPastedImage, removeContextFile: s.removeContextFile,
+    ensureFileList: s.ensureFileList, reloadProjectConfig: s.reloadProjectConfig, allRoots: s.allRoots,
+  })));
+  const autoIncludeFileContext = useSettingsStore((s) => s.autoIncludeFileContext);
+  const sendWithEnter = useSettingsStore((s) => s.sendWithEnter);
   const toggleModelSelector = useUIStore((s) => s.toggleModelSelector);
   const inputContent = useUIStore((s) => s.inputContent);
   const setInputContent = useUIStore((s) => s.setInputContent);
@@ -81,7 +101,8 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
 
   const [slashIndex, setSlashIndex] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState(false);
-  const [caret, setCaret] = useState(0);
+  const mentionCaret = useRef(0);
+  const pendingFileList = useRef<{ rootsKey: string; files: ReturnType<typeof useWorkspaceStore.getState>['files'] } | null>(null);
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
   /** Text captured with "#", waiting for the user to say which file it belongs in. */
@@ -95,8 +116,7 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
 
   const mentionMatches = useMemo<string[]>(() => {
     if (mentionQuery == null || !fileList) return [];
-    const q = mentionQuery.toLowerCase();
-    return fileList.filter((f) => f.toLowerCase().includes(q)).slice(0, 8);
+    return findMentionFiles(fileList, mentionQuery);
   }, [mentionQuery, fileList]);
   const showMention = !showSlash && mentionQuery != null && mentionMatches.length > 0;
   const hasSendableContent = !!input.trim() || contextFiles.some((file) => file.isImage && !!file.dataUrl);
@@ -105,10 +125,16 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
   useEffect(() => { setMentionIndex(0); }, [mentionQuery]);
 
   useEffect(() => {
-    if (mentionQuery != null && fileList == null) {
-      void ensureFileList().catch(() => { /* A later edit can retry the lookup. */ });
-    }
-  }, [mentionQuery, fileList, ensureFileList]);
+    if (mentionQuery == null || fileList != null) return;
+    const { files } = useWorkspaceStore.getState();
+    const rootsKey = allRoots().join('\0');
+    if (pendingFileList.current?.rootsKey === rootsKey && pendingFileList.current.files === files) return;
+    const request = { rootsKey, files };
+    pendingFileList.current = request;
+    void ensureFileList().catch(() => { /* A later edit can retry the lookup. */ }).finally(() => {
+      if (pendingFileList.current === request) pendingFileList.current = null;
+    });
+  }, [mentionQuery, fileList, rootPath, allRoots, ensureFileList]);
 
   useEffect(() => {
     if (inputContent) {
@@ -127,13 +153,14 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
   }, [centered]);
 
   const refreshMention = (value: string, caretPos: number) => {
-    setCaret(caretPos);
+    mentionCaret.current = caretPos;
     const tok = mentionTokenAt(value, caretPos);
     setMentionQuery(tok);
   };
 
   const acceptMention = (rel: string) => {
     const value = input;
+    const caret = mentionCaret.current;
     const before = value.slice(0, caret).replace(/(^|\s)@([^\s@]*)$/, (_m, pre) => `${pre}@${rel} `);
     const after = value.slice(caret);
     setInput(before + after);
@@ -244,7 +271,7 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
     // Mid-run typing queues behind the live run (opencode-style) instead of
     // being swallowed: it becomes the next turn when this one ends.
     if (isStreaming && activeConversationId) {
-      enqueueMessage(activeConversationId, full, selectedModel.providerId, selectedModel.id);
+      if (enqueueMessage(activeConversationId, full, selectedModel.providerId, selectedModel.id, 'composer') === 'dropped') return;
       setInput('');
       setMentionQuery(null);
       return;
@@ -624,18 +651,19 @@ export default function ChatInput({ centered = false }: ChatInputProps) {
               className="flex-1 min-w-0 bg-transparent border-0 py-2 text-[16px] font-[450] leading-relaxed resize-none outline-none max-h-[200px] overflow-y-auto placeholder:text-[var(--text-muted)]"
             />
 
-            {isStreaming ? (
+            {isStreaming && (
               <button onClick={() => stopGeneration()}
                 aria-label={t('cancel')}
                 title={t('cancel')}
                 className="w-9 h-9 rounded-full bg-[var(--accent)] text-white flex items-center justify-center hover:bg-[var(--accent-hover)] transition-all shadow-[0_4px_14px_rgba(201,100,66,0.35)] hover:scale-105 active:scale-95 shrink-0 mb-0.5 anim-press cursor-pointer">
                 <FiSquare size={14} />
               </button>
-            ) : (
+            )}
+            {(!isStreaming || hasSendableContent) && (
               <button onClick={handleSend}
                 disabled={!hasSendableContent || isSavingEdit || installHolding}
-                aria-label={t('send')}
-                title={sendWithEnter ? t('sendHintEnter') : t('sendHintCmd')}
+                aria-label={t(isStreaming ? 'queueSend' : 'send')}
+                title={isStreaming ? t('queueSend') : sendWithEnter ? t('sendHintEnter') : t('sendHintCmd')}
                 className="w-9 h-9 rounded-full flex items-center justify-center transition-all bg-gradient-to-tr from-[var(--accent)] to-[#e88a6a] text-white shadow-[0_4px_14px_rgba(201,100,66,0.35)] disabled:opacity-30 disabled:shadow-none hover:shadow-[0_6px_20px_rgba(201,100,66,0.45)] hover:scale-105 active:scale-95 shrink-0 mb-0.5 anim-press cursor-pointer disabled:cursor-not-allowed">
                 <FiArrowUp size={18} />
               </button>

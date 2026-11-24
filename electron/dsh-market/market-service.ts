@@ -653,10 +653,12 @@ export class DshMarketService {
       environment: this.environment,
       supportedServices: [
         'tools', 'commands', 'skills', 'credentials',
+        'systemPrompt', 'sessions', 'shellEnv', 'webServer',
+        'fs', 'userApproval', 'scope', 'memory', 'connection', 'agents',
         ...(runtime.llmReady ? ['llm'] : []),
         ...(runtime.storage?.ready ? ['storage', 'storageDomain', 'storage.backend.json'] : []),
       ],
-      supportedFormats: ['dsh-bundle (host half)', 'conecode-native'],
+      supportedFormats: ['dsh-bundle (host + client bridge)', 'conecode-native'],
       npmPath: npm?.path || null,
       npmVersion: npm?.version || null,
       storage: runtime.storage || { ready: false, backend: null, root: null, error: 'Storage stack unavailable' },
@@ -1786,14 +1788,57 @@ export class DshMarketService {
     });
   }
 
+  async listSystemPrompts(context?: unknown): Promise<Array<{ pluginId: string; rowId: string; id: string; title?: string; content: string; priority: number }>> {
+    await this.ensureReady();
+    if (!this.runtime.getInfo().available) return [];
+    return this.runtime.listSystemPrompts(context).catch(() => []);
+  }
+
+  async getShellEnv(): Promise<Record<string, string>> {
+    await this.ensureReady();
+    if (!this.runtime.getInfo().available) return {};
+    return this.runtime.getShellEnv().catch(() => ({}));
+  }
+
   async listChatTools() {
     await this.ensureReady();
-    return this.chatEntries().map((entry) => entry.tool);
+    const tools = this.chatEntries().map((entry) => entry.tool);
+    const skills = this.runtime.getInfo().available ? await this.runtime.listSkills().catch(() => []) : [];
+    if (skills.length > 0) {
+      const names = skills.slice(0, 20).map((s) => `${s.pluginId}:${s.name}`).join(', ');
+      tools.push({
+        server: 'dsh_skills_bridge',
+        name: 'read_dsh_skill',
+        description: `[DSH Skills] Read full instructions for an installed DSH plugin skill (${skills.length} available: ${names}).`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            pluginId: { type: 'string', description: 'Installed DSH plugin id or name' },
+            name: { type: 'string', description: 'Skill name to read' },
+            rowId: { type: 'string', description: 'Optional row id if multiple rows provide the same skill' },
+          },
+          required: ['name'],
+        },
+      });
+    }
+    return tools;
   }
 
   async callChatTool(server: string, tool: string, args: Record<string, unknown>): Promise<string> {
     await this.ensureReady();
     if (!isDshChatServer(server)) throw new Error(`Not a DSH market server: ${server}`);
+    if (server === 'dsh_skills_bridge' && tool === 'read_dsh_skill') {
+      const skillName = typeof args.name === 'string' ? args.name.trim() : '';
+      if (!skillName) throw new Error('read_dsh_skill requires a skill name.');
+      const skills = await this.listSkills();
+      const target = skills.find((s) =>
+        s.name === skillName && (!args.pluginId || s.pluginId === args.pluginId) && (!args.rowId || s.rowId === args.rowId),
+      );
+      if (!target) throw new Error(`DSH skill "${skillName}" is not registered by any active plugin.`);
+      const content = await this.getSkill(target.pluginId, target.name, target.rowId);
+      if (content === null) throw new Error(`DSH skill "${skillName}" has no readable content.`);
+      return content;
+    }
     const match = this.chatEntries().find((entry) => entry.tool.server === server && entry.tool.name === tool);
     if (!match) throw new Error(`DSH plugin tool ${server}:${tool} is no longer registered.`);
     const profile = this.state.activeProfileId();

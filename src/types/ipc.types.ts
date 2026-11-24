@@ -439,6 +439,8 @@ export interface ElectronAPI {
     invokeCommand: (profileId: string, pluginId: string, command: string, rawInput: string, rowId?: string) => Promise<InvokeResult>;
     skills: () => Promise<SkillContribution[]>;
     skillContent: (pluginId: string, name: string, rowId?: string) => Promise<string | null>;
+    systemPrompts?: (context?: unknown) => Promise<Array<{ pluginId: string; rowId: string; id: string; title?: string; content: string; priority: number }>>;
+    shellEnv?: () => Promise<Record<string, string>>;
     switchProfile: (profileId: string) => Promise<void>;
     createProfile: (profileId: string, name?: string) => Promise<MarketProfile>;
     restartRuntime: () => Promise<void>;

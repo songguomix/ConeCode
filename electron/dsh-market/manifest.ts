@@ -136,17 +136,34 @@ export function applyEntryPatches(
   for (const patch of patches) {
     const { id, insert, name, ...overrides } = patch;
     if (insert !== undefined) {
-      if (id !== undefined) {
-        // Nested inserts need group semantics; refuse rather than mounting the
-        // children at the wrong level.
-        warn(`patch insert into ${String(id)} is not supported by this compatibility layer`);
-        continue;
-      }
       if (!Array.isArray(insert)) {
         warn('patch insert must be an array');
         continue;
       }
       const clone = structuredClone(insert) as BundlePatchRow[];
+      if (id !== undefined) {
+        if (typeof id !== 'string' || !id) {
+          warn('patch insert target id must be a non-empty string');
+          continue;
+        }
+        const target = byId.get(id);
+        if (!target) {
+          warn(`patch insert target ${JSON.stringify(id)} was not found`);
+          continue;
+        }
+        if (target.group === true) {
+          const children = Array.isArray(target.config) ? (target.config as unknown as BundlePatchRow[]) : [];
+          children.push(...clone);
+          target.config = children;
+          build(clone);
+        } else {
+          const idx = entries.indexOf(target);
+          if (idx >= 0) entries.splice(idx + 1, 0, ...clone);
+          else entries.push(...clone);
+          build(clone);
+        }
+        continue;
+      }
       entries.push(...clone);
       build(clone);
       continue;
@@ -175,12 +192,21 @@ export function applyEntryPatches(
 /** Overrides of rows supplied by earlier bundles, in the declared patch order. */
 export function bundleOverrides(patches: LoadedBundlePatch): Array<Record<string, unknown>> {
   const localIds = new Set<string>();
+  const collectLocalIds = (rows: unknown[]) => {
+    for (const item of rows) {
+      if (!item || typeof item !== 'object') continue;
+      const row = item as Record<string, unknown>;
+      if (typeof row.id === 'string') localIds.add(row.id);
+      if (row.group === true && Array.isArray(row.config)) collectLocalIds(row.config);
+    }
+  };
   return patches.patches.filter((patch) => {
     if (Array.isArray(patch.insert)) {
-      if (patch.id === undefined) for (const row of patch.insert) {
-        if (typeof row?.id === 'string') localIds.add(row.id);
+      if (patch.id === undefined || (typeof patch.id === 'string' && localIds.has(patch.id))) {
+        collectLocalIds(patch.insert);
+        return false;
       }
-      return false;
+      return typeof patch.id === 'string' && !!patch.id;
     }
     return typeof patch.id === 'string' && !!patch.id && !localIds.has(patch.id)
       && ('config' in patch || typeof patch.disabled === 'boolean' || Array.isArray(patch.inject));
@@ -214,25 +240,32 @@ export function loadBundlePatches(packageDir: string, manifest: RawPackageManife
   }
   const rows = applyEntryPatches([], patches, (message) => warnings.push(message));
   const normalized: BundlePatchRow[] = [];
-  for (const row of rows) {
-    if (row.group === true) {
-      throw new Error(`plugin row ${JSON.stringify(row.id ?? row.name)} uses a Cordis group, which this layer does not mount`);
+  const flattenRows = (items: BundlePatchRow[], inheritedDisabled: boolean, depth = 0) => {
+    if (depth > 8) throw new Error('Cordis group nesting exceeds maximum depth (8)');
+    for (const row of items) {
+      if (row.disabled && typeof row.disabled === 'object') {
+        throw new Error(`plugin row ${JSON.stringify(row.id)} uses a dynamic !!js disabled expression; refusing to guess its value`);
+      }
+      const isDisabled = inheritedDisabled || row.disabled === true;
+      if (row.group === true) {
+        const children = Array.isArray(row.config) ? (row.config as unknown as BundlePatchRow[]) : [];
+        flattenRows(children, isDisabled, depth + 1);
+        continue;
+      }
+      if (typeof row.name !== 'string' || !row.name.trim()) {
+        throw new Error(`plugin row ${JSON.stringify(row.id)} has no module name`);
+      }
+      const id = typeof row.id === 'string' && row.id ? row.id : `${row.name}#${normalized.length + 1}`;
+      normalized.push({
+        ...row,
+        id,
+        name: row.name,
+        disabled: isDisabled,
+        inject: Array.isArray(row.inject) ? row.inject.filter((x): x is string => typeof x === 'string') : undefined,
+      });
     }
-    if (typeof row.name !== 'string' || !row.name.trim()) {
-      throw new Error(`plugin row ${JSON.stringify(row.id)} has no module name`);
-    }
-    if (row.disabled && typeof row.disabled === 'object') {
-      throw new Error(`plugin row ${JSON.stringify(row.id)} uses a dynamic !!js disabled expression; refusing to guess its value`);
-    }
-    const id = typeof row.id === 'string' && row.id ? row.id : `${row.name}#${normalized.length + 1}`;
-    normalized.push({
-      ...row,
-      id,
-      name: row.name,
-      disabled: row.disabled === true,
-      inject: Array.isArray(row.inject) ? row.inject.filter((x): x is string => typeof x === 'string') : undefined,
-    });
-  }
+  };
+  flattenRows(rows, false);
   return { files, rows: normalized, patches, warnings };
 }
 

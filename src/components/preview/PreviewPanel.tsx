@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   FiArrowLeft, FiArrowRight, FiRotateCw, FiX, FiExternalLink, FiMonitor, FiTablet,
   FiSmartphone, FiPlay, FiSquare, FiRefreshCw, FiTerminal, FiAlertCircle, FiFolder,
@@ -90,7 +90,22 @@ function IconButton({ title, onClick, disabled, active, children }: {
   );
 }
 
-export default function PreviewPanel() {
+const PreviewGuest = memo(function PreviewGuest({ id, url, register }: {
+  id: string; url: string; register: (id: string, guest: WebviewEl | null) => void;
+}) {
+  // A new guest restores the tab's current address. Later navigations must
+  // leave src alone because changing it tears down the guest's history.
+  const initialUrl = useRef(url).current;
+  const ref = useCallback((guest: HTMLElement | null) => register(id, guest as WebviewEl | null), [id, register]);
+  return <webview
+    ref={ref}
+    src={initialUrl}
+    partition="persist:conecode-preview"
+    style={{ width: '100%', height: '100%', display: 'inline-flex' }}
+  />;
+});
+
+const PreviewPanel = memo(function PreviewPanel() {
   const rootPath = useWorkspaceStore((s) => s.rootPath);
   const openFolder = useWorkspaceStore((s) => s.openFolder);
   const setInputContent = useUIStore((s) => s.setInputContent);
@@ -101,8 +116,8 @@ export default function PreviewPanel() {
   const plan = usePreviewStore((s) => s.plan);
   const error = usePreviewStore((s) => s.error);
   const device = usePreviewStore((s) => s.device);
-  const reloadNonce = usePreviewStore((s) => s.reloadNonce);
-  const pageErrors = usePreviewStore((s) => s.pageErrors);
+  const serverRevision = usePreviewStore((s) => s.serverRevision);
+  const pageErrors = usePreviewStore((s) => Math.min(10, s.pageErrors));
   const tabs = usePreviewStore((s) => s.tabs);
   const activeTabId = usePreviewStore((s) => s.activeTabId);
   const picking = usePreviewStore((s) => s.picking);
@@ -122,12 +137,39 @@ export default function PreviewPanel() {
   const navigateTab = usePreviewStore((s) => s.navigateTab);
   const noteTabUrl = usePreviewStore((s) => s.noteTabUrl);
   const setTabTitle = usePreviewStore((s) => s.setTabTitle);
+  const presentServer = usePreviewStore((s) => s.presentServer);
 
-  // One <webview> per tab, all kept mounted so switching tabs never reloads.
+  // Load a tab on first selection, then keep its guest for this panel session.
   const webviews = useRef(new Map<string, WebviewEl>());
+  const appliedReloads = useRef(new Map<string, BrowserTab['reloadRequest']>());
   const viewportRef = useRef<HTMLDivElement>(null);
   const autoStarted = useRef<string | null>(null);
-  const lastServerUrl = useRef<string | null>(null);
+  const registerWebview = useCallback((id: string, guest: WebviewEl | null) => {
+    if (guest) {
+      webviews.current.set(id, guest);
+      const tab = usePreviewStore.getState().tabs.find((item) => item.id === id);
+      // Mount itself loads fresh content even if edits happened while closed.
+      appliedReloads.current.set(id, tab?.reloadRequest);
+    } else {
+      webviews.current.delete(id);
+      appliedReloads.current.delete(id);
+    }
+  }, []);
+  const reloadWhenReady = useCallback((id: string, guest: WebviewEl) => {
+    const { activeTabId, tabs } = usePreviewStore.getState();
+    if (activeTabId !== id) return;
+    const tab = tabs.find((item) => item.id === id);
+    const request = tab?.reloadRequest;
+    if (!request || request.url !== tab?.url || appliedReloads.current.get(id) === request) return;
+    appliedReloads.current.set(id, request);
+    try {
+      guest.reload();
+    } catch {
+      // A guest can be attached before Electron accepts commands. The
+      // did-stop-loading handler retries requests that arrived in that gap.
+      appliedReloads.current.delete(id);
+    }
+  }, []);
 
   const [address, setAddress] = useState('');
   const [addressFocused, setAddressFocused] = useState(false);
@@ -141,13 +183,12 @@ export default function PreviewPanel() {
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
   const activeWebview = () => webviews.current.get(activeTab?.id ?? '') ?? null;
 
-  // The agent's page tools drive whichever tab is in front. Registered here (and
-  // in the webview ref below) so switching tabs moves the agent with the user
-  // rather than leaving it holding a torn-down element.
-  useEffect(() => {
+  // Refs are assigned before layout effects, including on first selection of
+  // a tab whose guest has not been created yet.
+  useLayoutEffect(() => {
     setAgentWebview(activeWebview());
     return () => setAgentWebview(null);
-  }, [activeTabId, tabs.length]);
+  }, [activeTab?.id, activeTab?.mountUrl]);
 
   // ---- server lifecycle ----------------------------------------------------
 
@@ -166,28 +207,12 @@ export default function PreviewPanel() {
     start(rootPath);
   }, [rootPath, state, plan, start]);
 
-  // The server came up (or came back on a new port): show it. A blank tab or one
-  // still pointing at the old address is the natural place; otherwise open one.
+  // The store remembers which server has already been presented, even while
+  // the panel is closed and its guests are unmounted.
   useEffect(() => {
-    const previous = lastServerUrl.current;
-    lastServerUrl.current = serverUrl;
-    if (!serverUrl || serverUrl === previous) return;
-
-    const current = usePreviewStore.getState();
-    const active = current.tabs.find((tab) => tab.id === current.activeTabId);
-    const reusable = active && (active.url === null || active.url === previous)
-      ? active
-      : current.tabs.find((tab) => tab.url === null);
-
-    if (reusable) {
-      navigateTab(reusable.id, serverUrl);
-      selectTab(reusable.id);
-      const wv = webviews.current.get(reusable.id);
-      if (wv && reusable.mountUrl) wv.loadURL(serverUrl).catch(() => {});
-    } else {
-      openTab(serverUrl);
-    }
-  }, [serverUrl, navigateTab, selectTab, openTab]);
+    const navigation = presentServer();
+    if (navigation) webviews.current.get(navigation.id)?.loadURL(navigation.url).catch(() => {});
+  }, [serverUrl, serverRevision, presentServer]);
 
   const handleStart = (command?: string | null) => {
     if (!rootPath) return;
@@ -227,15 +252,16 @@ export default function PreviewPanel() {
     const tabId = activeTab.id;
 
     const onStartLoading = () => { setLoading(true); setFailure(null); };
-    const onStopLoading = () => { setLoading(false); syncHistory(wv); };
+    const onStopLoading = () => { setLoading(false); syncHistory(wv); reloadWhenReady(tabId, wv); };
     const onNavigate = (e: any) => {
-      if (e?.url) { setAddress(e.url); noteTabUrl(tabId, e.url); }
+      if (e?.isMainFrame === false) return;
+      if (e?.url) noteTabUrl(tabId, e.url);
       syncHistory(wv);
     };
     const onTitle = (e: any) => { if (e?.title) setTabTitle(tabId, e.title); };
     const onFail = (e: any) => {
       // -3 is ABORTED, which every in-page navigation raises; not an error.
-      if (e?.errorCode === -3) return;
+      if (e?.isMainFrame === false || e?.errorCode === -3) return;
       setLoading(false);
       setFailure(e?.errorDescription || String(e?.errorCode ?? ''));
     };
@@ -272,14 +298,14 @@ export default function PreviewPanel() {
       wv.removeEventListener('did-fail-load', onFail);
       wv.removeEventListener('console-message', onConsole);
     };
-  }, [activeTab?.id, activeTab?.mountUrl, appendLog, noteTabUrl, setTabTitle, setInputContent, setPicking, t]);
+  }, [activeTab?.id, activeTab?.mountUrl, appendLog, noteTabUrl, reloadWhenReady, setTabTitle, setInputContent, setPicking, t]);
 
-  // Reload requests come from the button and from main's file watcher (static
-  // previews have no HMR of their own).
+  // Apply at most one refresh to the displayed guest, even if its files
+  // changed several times while another tab was in front.
   useEffect(() => {
-    if (!reloadNonce) return;
-    try { activeWebview()?.reload(); } catch {}
-  }, [reloadNonce]);
+    const wv = activeWebview();
+    if (activeTab && wv) reloadWhenReady(activeTab.id, wv);
+  }, [activeTab?.id, activeTab?.url, activeTab?.reloadRequest, reloadWhenReady]);
 
   // Keep the address bar in step with the page, unless the user is typing in it.
   useEffect(() => {
@@ -308,7 +334,8 @@ export default function PreviewPanel() {
     const el = viewportRef.current;
     if (!el) return;
     const observer = new ResizeObserver(([entry]) => {
-      setBox({ width: entry.contentRect.width, height: entry.contentRect.height });
+      const { width, height } = entry.contentRect;
+      setBox((previous) => previous.width === width && previous.height === height ? previous : { width, height });
     });
     observer.observe(el);
     return () => observer.disconnect();
@@ -387,7 +414,7 @@ export default function PreviewPanel() {
             tab={tab}
             active={tab.id === activeTabId}
             onSelect={() => selectTab(tab.id)}
-            onClose={() => { webviews.current.delete(tab.id); closeTab(tab.id); }}
+            onClose={() => closeTab(tab.id)}
             newTabLabel={t('previewNewTab')}
             closeLabel={t('close')}
           />
@@ -515,7 +542,7 @@ export default function PreviewPanel() {
         </div>
       </div>
 
-      {/* Pages — every tab stays mounted; only the active one is visible */}
+      {/* Visited pages stay mounted while only the active one is visible. */}
       <div
         ref={viewportRef}
         className="flex-1 min-h-0 relative bg-[var(--bg-1)] border-t border-[var(--border)]"
@@ -530,7 +557,7 @@ export default function PreviewPanel() {
               // <webview> comes back blank.
               style={{ visibility: isActive ? 'visible' : 'hidden' }}
             >
-              {tab.mountUrl ? (
+              {tab.mountUrl ? (isActive || webviews.current.has(tab.id)) && (
                 <div
                   style={{
                     width: frame.width,
@@ -541,19 +568,7 @@ export default function PreviewPanel() {
                     device === 'desktop' ? '' : 'rounded-[28px] border border-[var(--border)] shadow-2xl'
                   }`}
                 >
-                  <webview
-                    ref={(el) => {
-                      if (el) webviews.current.set(tab.id, el as WebviewEl);
-                      else webviews.current.delete(tab.id);
-                      // Keep the agent pointed at whatever the user is looking at.
-                      if (tab.id === activeTabId) setAgentWebview((el as WebviewEl) ?? null);
-                    }}
-                    src={tab.mountUrl}
-                    // Its own browsing session: cookies/localStorage behave like a
-                    // real browser across reloads, but stay out of the app's storage.
-                    partition="persist:conecode-preview"
-                    style={{ width: '100%', height: '100%', display: 'inline-flex' }}
-                  />
+                  <PreviewGuest id={tab.id} url={tab.url ?? tab.mountUrl} register={registerWebview} />
                   {/* Annotate capture: the <webview> guest swallows pointer
                       events, so clicks on the page never bubble to React. The
                       overlay takes the click instead, in the frame's own
@@ -635,7 +650,9 @@ export default function PreviewPanel() {
       {logsOpen && <LogDrawer onClose={() => setLogsOpen(false)} />}
     </div>
   );
-}
+});
+
+export default PreviewPanel;
 
 // ---- tab chip --------------------------------------------------------------
 

@@ -5,6 +5,7 @@ import { OpenAIAdapter } from './openai.adapter';
 import { OpenRouterAdapter } from './openrouter.adapter';
 import { AnthropicAdapter } from './anthropic.adapter';
 import { GeminiAdapter } from './gemini.adapter';
+import { gptDetector } from '../constraints/gptDetector';
 import type { ChatMessage, ProviderConfig, SendMessageParams } from '../../types';
 
 const config: ProviderConfig = {
@@ -20,6 +21,12 @@ class OpenAIProbe extends OpenAIAdapter {
   tools(params: SendMessageParams) { const body: any = {}; this.applyTools(body, params); return body; }
   finalize(acc: Map<number, { id: string; name: string; args: string }>) { return this.finalizeToolCalls(acc); }
   model(raw: any) { return this.mapModel(raw); }
+}
+class CustomProbe extends CustomAdapter {
+  wire(params: SendMessageParams) { return this.buildRequestBody(params); }
+}
+class OpenRouterProbe extends OpenRouterAdapter {
+  wire(params: SendMessageParams) { return this.buildRequestBody(params); }
 }
 class AnthropicProbe extends AnthropicAdapter {
   build(messages: ChatMessage[]) { return this.buildMessages(messages); }
@@ -60,9 +67,100 @@ describe('OpenAI-compatible model context discovery', () => {
 describe('OpenAI wire format', () => {
   it('uses the conversation cache key only on the official OpenAI endpoint', () => {
     const official = new OpenAIProbe({ ...config, baseUrl: 'https://api.openai.com/v1' });
+    const directCustom = new CustomProbe({ ...config, type: 'custom', baseUrl: 'https://api.openai.com:443/v1' });
+    const openRouter = new OpenRouterProbe({ ...config, type: 'openrouter', baseUrl: 'https://api.openai.com/v1' });
     const params = { model: 'm', messages: [], conversationId: 'chat-1' };
     expect(official.wire(params).prompt_cache_key).toBe('chat-1');
+    expect(directCustom.wire(params).prompt_cache_key).toBe('chat-1');
     expect(openai.wire(params)).not.toHaveProperty('prompt_cache_key');
+    expect(openRouter.wire(params)).not.toHaveProperty('prompt_cache_key');
+  });
+
+  it.each([
+    {
+      endpoint: 'official OpenAI',
+      adapter: new OpenAIProbe({ ...config, baseUrl: 'https://api.openai.com/v1' }),
+      model: 'gpt-5',
+      replayToolReasoning: false,
+      replayTextReasoning: false,
+    },
+    {
+      endpoint: 'official OpenAI through Custom with an explicit default port',
+      adapter: new CustomProbe({ ...config, type: 'custom', baseUrl: 'https://api.openai.com:443/v1' }),
+      model: 'gpt-5',
+      replayToolReasoning: false,
+      replayTextReasoning: false,
+    },
+    {
+      endpoint: 'a compatible gateway with GPT',
+      adapter: openai,
+      model: 'gpt-5',
+      replayToolReasoning: true,
+      replayTextReasoning: false,
+    },
+    {
+      endpoint: 'OpenRouter with a latest GPT alias',
+      adapter: new OpenRouterProbe({ ...config, type: 'openrouter', baseUrl: 'https://openrouter.ai/api' }),
+      model: '~openai/gpt-sol-latest',
+      replayToolReasoning: true,
+      replayTextReasoning: false,
+    },
+    {
+      endpoint: 'a compatible gateway with MiMo',
+      adapter: openai,
+      model: 'mimo-v2.5-pro',
+      replayToolReasoning: true,
+      replayTextReasoning: true,
+    },
+  ])('serializes assistant reasoning for $endpoint', ({ adapter, model, replayToolReasoning, replayTextReasoning }) => {
+    const toolReasoning = 'Reasoning leading to a native tool call';
+    const textReasoning = 'Reasoning for a plain assistant reply';
+    const rawArguments = '{ "path": "/a" }';
+    const messages: ChatMessage[] = [
+      exchange[0],
+      exchange[1],
+      {
+        role: 'assistant',
+        content: '',
+        reasoning_content: toolReasoning,
+        tool_calls: [{ id: 'c1', name: 'read_file', arguments: { path: '/a' }, rawArguments }],
+      },
+      exchange[3],
+      { ...exchange[4], reasoning_content: textReasoning },
+    ];
+
+    const wire = adapter.wire({ model, messages });
+
+    expect(wire.messages.slice(2)).toEqual([
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{ id: 'c1', type: 'function', function: { name: 'read_file', arguments: rawArguments } }],
+        ...(replayToolReasoning ? { reasoning_content: toolReasoning } : {}),
+      },
+      { role: 'tool', tool_call_id: 'c1', content: 'file body' },
+      { role: 'assistant', content: 'done', ...(replayTextReasoning ? { reasoning_content: textReasoning } : {}) },
+    ]);
+    expect(messages[2].reasoning_content).toBe(toolReasoning);
+    expect(messages[4].reasoning_content).toBe(textReasoning);
+  });
+
+  it('filters learned GPT aliases only when their resolved model is GPT', () => {
+    const baseUrl = 'https://model-alias.example.test/v1';
+    const custom = new CustomProbe({ ...config, type: 'custom', baseUrl });
+    const messages: ChatMessage[] = [
+      { role: 'assistant', content: 'done', reasoning_content: 'assistant reasoning' },
+    ];
+    try {
+      gptDetector.probeResponse({ baseUrl, modelAlias: 'default-model', body: { model: 'gpt-5.5' } });
+      gptDetector.probeResponse({
+        baseUrl, modelAlias: 'other-model', body: { model: 'deepseek-v4-pro', system_fingerprint: 'fp_123' },
+      });
+      expect(custom.wire({ model: 'default-model', messages }).messages[0]).not.toHaveProperty('reasoning_content');
+      expect(custom.wire({ model: 'other-model', messages }).messages[0].reasoning_content).toBe('assistant reasoning');
+    } finally {
+      gptDetector.clearAliasCache();
+    }
   });
 
   it('reads context and output limits from common API metadata shapes', () => {

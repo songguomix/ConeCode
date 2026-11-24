@@ -1,0 +1,69 @@
+ConeCode Memory 2.0 分层长期记忆、云同步与 Dream 离线整理系统技术报告
+
+项目：ConeCode（v2.4.25）
+文档类型：纯文字系统架构与核心技术报告
+日期：2026-11-23
+
+一、系统概述与设计目标
+
+传统 AI 编程客户端的长期记忆通常采用扁平字符串列表并在每轮对话全量拼接进系统提示词，在真实多项目、多设备研发场景中存在五类结构性局限：不同项目的架构约束与构建命令相互串扰；用户明确声明的事实与模型单次推断缺少状态区分导致推断静默覆盖事实；缺乏版本快照与并发冲突裁决导致错误更新不可逆；全量注入与无门槛抽取导致噪声堆积；云同步缺乏增量游标、软删除墓碑以及诚实的端到端加密能力界定。
+
+ConeCode Memory 2.0 以分层、带版本、严格项目隔离与本地优先的架构重构了长期记忆引擎，并在其上构建了厂商中立的云同步协议（支持自托管 REST 网关与一键 Google Drive OAuth）以及只读离线知识整理层 Dream Wiki。
+
+二、五层数据模型与全链路项目硬隔离
+
+Memory 2.0 的规范数据模型定义在 src/core/memory/v2/types.ts，零 I/O 依赖，统一服务于本地存储、云网关、同步引擎与界面层。系统将记忆划分为五个作用域清晰的层次：
+
+1. global（全局层）：projectId 为空，跨全部项目可见，存储个人偏好、编码习惯与通用约束。
+2. project（项目层）：绑定单一 projectId，存储项目架构、技术栈、技术决策、已知缺陷与项目约束。
+3. episodic（情景层）：绑定单一 projectId，记录具体任务结果、故障排查、修复与失败尝试。
+4. semantic（语义层）：绑定单一 projectId，记录从多次情景中提炼的可复用规律与决策依据。
+5. working（工作层）：绑定单一 projectId 并带有效期（默认 24 小时 TTL），记录当前任务进度与临时待办，可晋升或过期清理。
+
+每条记忆记录包含 13 种语义类型（user_fact、project_fact、architecture、technical_decision、decision_reason、constraint、task_result、progress、todo、success_experience、failure_experience、known_bug、reusable_knowledge）、5 种状态（confirmed、inferred、pending、superseded、archived）、6 种来源（user、extracted、manual、migration、tool、sync）、7 种有向关系（related、supersedes、derived_from、caused_by、solves、part_of、conflicts_with），以及稳定 UUID、单调递增版本号 version、不可变历史快照数组 history、设备 ID、同步状态、内容哈希 contentHash 与软删除墓碑时间戳 deletedAt。
+
+项目隔离并非前端过滤，而是贯穿数据流每一道边界的硬不变量：createRecord 拒绝创建缺少 projectId 的非全局记录；updateMemory 禁止无 projectId 时迁出全局层；visibleToProject 统一作用于本地检索、关系图扩展、服务读取、远程同步导入及云端搜索路由，确保不同项目的记录绝对隔离。
+
+三、事件驱动抽取、质量门控与极性冲突去重
+
+Memory 2.0 摒弃定时轮询，改为事件驱动抽取（extract.ts）。detectValueSignals 仅在捕获决策、架构变更、问题解决、可复用规则、明确失败或实质性会话结束（存在真实价值信号或至少 6 条实质消息）时才放行抽取。系统严格执行噪声治理，自动过滤寒暄、确认词、未回答的问题、第一人称过程旁白、简单导航命令及疑似密钥凭据；解析器 parseExtractionV2 容忍模型输出中的围栏与散文，且永不将模型推断直接升级为 confirmed。
+
+分类与质量控制（classify.ts）将语义类型确定性映射至对应层级，并通过 qualityScore 在 0 到 1 区间评分：长度不足 12 字符或命中寒暄与噪声规则直接判 0 分；基础分 0.35，按长度达到 30 字符（+0.10）、含因果连接词（+0.15）、含技术标识符（+0.12）、含决策依据 why（+0.12）、标签不少于 2 个（+0.06）及重要性加权（最高 +0.10）累加，默认入库门槛为 0.40。
+
+去重引擎 dedupeCandidates 针对同层同项目活跃记录计算词集合 Jaccard 相似度与包含关系（包含即取 0.90），以 0.62 为阈值输出五类决策：低于质量门槛或本轮重复则 reject；相似度达标且 detectContradiction 检测到正负极性相反（如“必须”对“禁止”）则交由 reconcile 裁决；同极性且新表述长度超过原记录 1.15 倍则 merge 保留并集细节；同极性常规重现则 reinforce 提升重要性 0.06 而不新建重复项；其余情况作为新记录 add，并自动将语义层教训关联至同会话近期情景记录。
+
+四、版本化生命周期、冲突裁决与防误删保护
+
+lifecycle.ts 规定所有写入必须经过 updateMemory，并在应用补丁之前将旧记录保存为不可变快照追加至 history（上限 50 份），再递增版本号并重算内容哈希，确保撤销操作 undoUpdate 真正恢复上一版本且撤销本身也带版本号。
+
+高重要性记录受 PROTECTED_IMPORTANCE 保护，自动抽取不得静默覆盖、归档或删除，必须由用户显式传入 force 标志方可修改。冲突裁决 reconcile 综合来源、时间与置信度做出保护性判定：用户确认陈述（confirmed 且置信度不低于 0.9）可取代旧的推断；模型推断绝不可覆盖用户直述事实；对内容互不包含的实质性分歧，若缺乏压倒性置信度优势（+0.20），则返回 kept_both 同时保留双方版本并以 conflicts_with 边关联等待人工裁决。删除统一通过 tombstone 写入 deletedAt 并将状态置为 archived，确保跨设备同步时已删除记忆永不复活。
+
+五、CJK 友好混合检索与受控上下文注入
+
+retrieval.ts 构建了轻量级字段加权倒排索引：title 与 tags 词项重复加权 2 倍，content 与 why 权重 1 倍；中文文本采用重叠双字切片（Bigram）配合英文词项切分，在不依赖原生分词库的情况下支持中英双语 BM25（k1=1.5，b=0.75）全文检索。
+
+排序公式融合五类信号：相关性得分占 0.55（BM25 除以 6 截断至 1）、重要性占 0.20、置信度占 0.12、90 天半衰期时效性占 0.08、用户确认状态加分 0.05。查询支持按项目、层级、类型、状态、标签、重要性下限、置信度下限、时间窗口与来源会话过滤，默认排除已删除、已归档与已被取代记录。
+
+开启关系图扩展（includeRelated）时，以前 5 条高分命中为种子沿关系边扩展（默认深度 1，最多 12 条），按 0.35 倍边权重衰减计分并保留溯源路径。本地与云端结果经 mergeHybrid 按 UUID 归并，保留新版或高分条目并合并来源标注与作用域复检。任务开始前先由 needsHistory 过滤纯寒暄，再由 formatRetrievalBlock 将排名前列的命中压缩在 6000 字符上限内注入提示词，每条标明层级、类型、状态、版本号与来源，并提示模型核实 inferred 结论且以用户最新指令为准。
+
+六、双向增量同步、三方合并与端到端加密
+
+sync.ts 中的 MemorySyncEngine 基于 CompositeStorageProvider 实现本地优先、离线容忍的增量双向同步。每次本地写操作生成单调递增序号 seq 与幂等键 changeId，拉取端记录已应用的变更 ID（上限 3000 条）并跳过本设备回声变更，重放变更流永不产生重复。云端不可用时自动保留本地离线队列并诚实报告离线，自动同步采用上限 5 分钟的指数退避重试。
+
+当双端并发修改同一记录时，引擎通过 findBase 从本地历史中查找不高于远端版本的最新公共祖先并尝试字段级三方合并（threeWayMerge）：单端修改字段自动采纳；importance 与 confidence 取较大值；tags 取集合并集；why 缺失端自动补全。一旦双端同时修改自由文本（title 或 content）或缺少公共祖先，绝不盲目覆写，而是创建 MemoryConflict 完整保留本地、远端与基线版本，由用户在界面显式选择保留本地、保留远端或合并。同步过程中墓碑优先于更新，避免跨设备复活。
+
+云同步提供两类后端：其一是厂商中立 REST 网关（参考实现 server/memory-cloud/server.mjs 及生产级 PostgreSQL 建表脚本），提供健康校验、服务端项目隔离搜索、游标增量推送与拉取、对象存储、设备管理与吊销（吊销设备全路由返回 403）、用量统计、备份恢复以及需精确租户名二次确认的租户销毁接口；其二是一键 Google Drive 提供者（electron/memory-drive.ts），在主进程通过 OAuth 2.0 Loopback 与 PKCE 授权写入隐藏的 appDataFolder，以 ETag 条件写防护并发覆写，凭据由 Electron safeStorage 加密保存。
+
+安全边界（security.ts）明确区分传输加密（非回环地址强制 TLS）、服务端静态加密与客户端端到端加密（E2E）。开启 E2E 后，客户端使用 Web Crypto API 以 PBKDF2-SHA-256（120000 次迭代，进程内缓存派生密钥）和每次随机 12 字节 IV 的 AES-256-GCM 加密 title、content、why、tags 及会话溯源字段，服务端仅保存密文，同时系统诚实关闭云端明文检索并自动回退至本地解密缓存检索。
+
+七、无损迁移与 Dream 离线记忆整理
+
+migration.ts 实现了面向旧版 memory.json 与项目 CLAUDE.md、AGENTS.md 的无损幂等迁移：只读源文件并先写备份，通过稳定 ID 与源哈希防止重复导入，迁移后逐条核对预期文本落地，保留属于其他工作区的项目条目，并将无法自动分类的内容标记为 needsTriage。
+
+Dream（src/core/memory/v2/dream/）是运行在 Memory 2.0 对象存储之上的只读离线回看层，不修改 memory2.json 中的任何结构化记录。其仅收集已结束且空闲至少 10 分钟的历史会话（每轮上限 6 个会话、12 个候选、每会话最多 6 个主题，按 transcript 哈希跳过未变更会话），支持手动或每日自动触发。输入 transcript（截断 24000 字符）与模型产出正文均经过双重凭据脱敏。Analyzer 逐会话产出严格 JSON 校验的 Markdown 主题（覆盖前先归档旧版至 history，每主题保留最近 8 份且 180 天）；Organizer 确定性执行合并与退役，保留全部事实、留下 MOVED TO 存根并重写全库双向链接，最后从实际文件重建索引。主进程对象存储对 key 执行路径包含校验以防路径逃逸。后续会话启动时自动挂载索引与最相关的至多 2 个主题（上限 2600 字符），与结构化记录的精确召回形成互补。
+
+八、工程验证与技术边界
+
+Memory 2.0 与 Dream 子系统共包含 22 个测试文件、204 个自动化测试用例，其中离线核心与本地持久化 20 个测试文件共 196 个用例在本地沙箱环境下 100% 通过，全面覆盖分类抽取、版本生命周期、CJK-BM25 检索、三方同步、AES-256-GCM 加密、无损迁移与 Dream 整理；另含 2 个回环网络集成测试文件（8 个用例）用于验证真实双设备 REST 同步与 Google Drive OAuth 及 ETag 冲突流程。
+
+已知技术边界包括：默认语义提供者显式声明为词法模式（isSemantic 为 false），可通过 setSemanticProvider 接入真实向量模型；零依赖参考云服务采用单租户原子 JSON 文件，大规模生产环境应部署基于 PostgreSQL 契约的网关；Google Drive 的 ETag 保护已有文件更新但不具备首次建文件原子锁；跨设备项目标识优先依赖项目标记或 Git origin 地址，无标记非 Git 目录退化为本机路径哈希。

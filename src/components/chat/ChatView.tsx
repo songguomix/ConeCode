@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState, useMemo, useCallback, Fragment } from 'react';
+import { memo, useRef, useEffect, useState, useMemo, useCallback, Fragment } from 'react';
 import { FiMap, FiPlay, FiEdit3, FiChevronDown, FiChevronRight, FiX } from 'react-icons/fi';
 import { useChatStore, useLanguageStore, useCodeChangesStore, useWorkspaceStore, useModelStore, useSettingsStore, useUIStore } from '../../stores';
 import { orderForDisplay } from '../../stores/chat.store';
@@ -22,7 +22,7 @@ import { completedWorkProcesses } from './workProcess';
 import { responseHealth } from '../../core/model/responseHealth';
 import { useConversationChanges } from './useConversationChanges';
 
-export default function ChatView() {
+function ChatView() {
   const viewMode = useUIStore((s) => s.viewMode);
   const ensureWorkFolder = useChatStore((s) => s.ensureWorkFolder);
   const rawMessages = useChatStore((s) => s.messages);
@@ -482,3 +482,5 @@ function extractCodeBlocks(content: string): string[] {
   }
   return blocks;
 }
+
+export default memo(ChatView);

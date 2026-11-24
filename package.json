@@ -89,6 +89,7 @@
       }
     ],
     "asarUnpack": [
+      "dist-electron/conversation-storage-worker.js",
       "dist-electron/dsh-worker.js"
     ],
     "files": [

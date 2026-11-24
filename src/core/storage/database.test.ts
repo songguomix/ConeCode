@@ -3,15 +3,15 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-// The store resolves its directory from Electron's userData path; point that at a temp dir.
 const userData = { dir: '' };
-vi.mock('electron', () => ({ app: { getPath: () => userData.dir } }));
 
 const FILE = 'conversations.json';
 
 async function loadStore() {
   vi.resetModules();
-  return import('./database');
+  const store = await import('./database');
+  store.configureStorageDirectory(path.join(userData.dir, 'data'));
+  return store;
 }
 
 function dataFile(name = FILE): string {
@@ -28,7 +28,42 @@ afterEach(() => {
 });
 
 describe('crash-safe JSON persistence', () => {
-  it('leaves the previous version readable when a save dies mid-write', async () => {
+  it('clones only the selected rows and isolates nested data from callers', async () => {
+    const store = await loadStore();
+    const rows = [{ id: 'active', calls: ['read_file'] }, { id: 'other', calls: ['search'] }];
+    store.writeJSON(FILE, rows);
+    const clone = vi.spyOn(globalThis, 'structuredClone');
+    const selected = store.selectJSON(FILE, [] as typeof rows, (items) => items.filter((item) => item.id === 'active'));
+    expect(clone).toHaveBeenCalledTimes(1);
+    expect(clone.mock.calls[0][0]).toEqual([rows[0]]);
+    selected[0].calls.push('list_dir');
+    expect(store.readJSON(FILE, [])).toEqual(rows);
+  });
+
+  it('appends without cloning the history and isolates new and duplicate results', async () => {
+    const store = await loadStore();
+    const history = [{ id: 'old', calls: ['search'] }];
+    store.writeJSON(FILE, history);
+    const row = { id: 'new', calls: ['read_file'] };
+    const clone = vi.spyOn(globalThis, 'structuredClone');
+
+    const added = store.appendUniqueJSON<typeof row>(FILE, (item) => item.id === row.id, () => row);
+    expect(clone.mock.calls.map(([value]) => value)).toEqual([row, row]);
+    expect(JSON.parse(fs.readFileSync(dataFile(), 'utf-8'))).toEqual([...history, row]);
+    expect(JSON.parse(fs.readFileSync(dataFile() + '.bak', 'utf-8'))).toEqual(history);
+    row.calls.push('input changed');
+    added.calls.push('result changed');
+
+    const createDuplicate = vi.fn(() => ({ id: row.id, calls: [] }));
+    const duplicate = store.appendUniqueJSON<typeof row>(FILE, (item) => item.id === row.id, createDuplicate);
+    expect(createDuplicate).not.toHaveBeenCalled();
+    expect(duplicate).toEqual({ id: 'new', calls: ['read_file'] });
+    duplicate.calls.push('duplicate changed');
+    expect(store.readJSON(FILE, [])).toEqual([...history, { id: 'new', calls: ['read_file'] }]);
+    expect(JSON.parse(fs.readFileSync(dataFile() + '.bak', 'utf-8'))).toEqual(history);
+  });
+
+  it.each(['replace', 'append'])('leaves the previous version readable after a failed %s', async (operation) => {
     const store = await loadStore();
     store.writeJSON(FILE, [{ id: 'a' }]);
     const before = fs.readFileSync(dataFile(), 'utf-8');
@@ -47,7 +82,10 @@ describe('crash-safe JSON persistence', () => {
       return realWrite(target as never, payload as never) as never;
     }) as typeof fs.writeFileSync);
 
-    expect(() => store.writeJSON(FILE, [{ id: 'b' }])).toThrow();
+    expect(() => {
+      if (operation === 'replace') store.writeJSON(FILE, [{ id: 'b' }]);
+      else store.appendUniqueJSON(FILE, (item: Readonly<{ id: string }>) => item.id === 'b', () => ({ id: 'b' }));
+    }).toThrow();
     vi.restoreAllMocks();
 
     expect(store.readJSON(FILE, [])).toEqual([{ id: 'a' }]);

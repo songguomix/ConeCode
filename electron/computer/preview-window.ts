@@ -6,7 +6,7 @@ import { describeAction, toCapturePoint, toLogicalPoint, validateComputerRequest
 import {
   COMPUTER_PREVIEW_CHANNELS as CHANNELS, COMPUTER_PREVIEW_HASH,
   type ComputerPreviewAppearance, type ComputerPreviewCommandResult, type ComputerPreviewPointer,
-  type ComputerPreviewSnapshot, type ComputerPreviewStatus,
+  type ComputerPreviewSnapshot, type ComputerPreviewStatus, type ComputerPreviewUpdate,
 } from '../../src/core/computer/preview';
 import type { ComputerActionResult } from './controller';
 
@@ -66,6 +66,7 @@ export class ComputerPreviewWindow {
   private activitySeq = 0;
   private pointerSeq = 0;
   private aspectRatio = 1.6;
+  private publishedFrameId: string | null = null;
   private state: ComputerPreviewSnapshot = {
     revision: 0, updatedAt: Date.now(),
     status: { platform: process.platform, enabled: false, supported: false, accessibility: false, screenRecording: false, geometry: null, target: null, targetRevision: 0, frameId: null },
@@ -93,7 +94,13 @@ export class ComputerPreviewWindow {
       try { await this.open(appearance); return { ok: true }; }
       catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; }
     });
-    ipc.handle(CHANNELS.getState, (event) => { this.assertPreview(event); this.statusChanged(); return this.snapshot(); });
+    ipc.handle(CHANNELS.getState, (event) => {
+      this.assertPreview(event);
+      this.syncStatus(false, this.options.getStatus());
+      this.advanceRevision();
+      this.publishedFrameId = this.state.shot?.frameId ?? null;
+      return this.snapshot();
+    });
     ipc.handle(CHANNELS.act, (event, input: unknown) => { this.assertPreview(event); return this.manualAction(input); });
     ipc.handle(CHANNELS.refresh, (event, revision: unknown) => { this.assertPreview(event); return this.refresh(revision); });
     ipc.handle(CHANNELS.close, (event) => { this.assertMain(event); this.close(); });
@@ -143,6 +150,7 @@ export class ComputerPreviewWindow {
       },
     });
     this.window = win;
+    this.publishedFrameId = null;
     win.setAlwaysOnTop(true, 'floating');
     win.setAspectRatio(ratio);
     win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
@@ -197,6 +205,11 @@ export class ComputerPreviewWindow {
   close(): void { if (this.window && !this.window.isDestroyed()) this.window.close(); }
 
   statusChanged(forceClear = false, status = this.options.getStatus()): void {
+    this.syncStatus(forceClear, status);
+    this.publish();
+  }
+
+  private syncStatus(forceClear: boolean, status: ComputerPreviewStatus): void {
     if (forceClear || status.targetRevision !== this.state.status.targetRevision || status.enabled !== this.state.status.enabled) {
       this.generation += 1;
       this.state.shot = null;
@@ -208,7 +221,6 @@ export class ComputerPreviewWindow {
     this.state.status = status;
     const main = this.options.getMainWindow();
     if (main && !main.isDestroyed()) main.webContents.send('computer:status-changed', { ...status });
-    this.publish();
   }
 
   clearShot(): void {
@@ -377,11 +389,23 @@ export class ComputerPreviewWindow {
     this.publishVisibility();
   }
 
-  private publish(): void {
+  private advanceRevision(): void {
     this.state.revision += 1;
     this.state.updatedAt = Date.now();
-    // Electron serializes the snapshot for IPC, including the full image.
-    if (this.window && !this.window.isDestroyed()) this.window.webContents.send(CHANNELS.state, this.state);
+  }
+
+  private publish(): void {
+    this.advanceRevision();
+    if (!this.window || this.window.isDestroyed()) return;
+    const shot = this.state.shot;
+    const update: ComputerPreviewUpdate = { ...this.state };
+    if (shot && shot.frameId === this.publishedFrameId) {
+      // Busy and pointer transitions can reuse the image already in the viewer.
+      const { dataUrl, ...frame } = shot;
+      update.shot = frame;
+    }
+    this.window.webContents.send(CHANNELS.state, update);
+    this.publishedFrameId = shot?.frameId ?? null;
   }
 
   private publishVisibility(): void {

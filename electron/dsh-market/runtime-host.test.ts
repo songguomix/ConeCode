@@ -62,23 +62,89 @@ describe('Cordis runtime host', () => {
   it('fails a plugin that injects a service the host does not provide', async () => {
     const dir = tempDir();
     fs.writeFileSync(path.join(dir, 'inject.mjs'), `
-      export const name = 'needs-agents'
-      export const inject = ['agents']
+      export const name = 'needs-unknown'
+      export const inject = ['unknownHostService']
       export function apply() {}
     `);
     const host = new RuntimeHost();
     await host.start();
     const state = await host.load({
-      id: 'needs-agents',
-      name: 'needs-agents',
-      title: 'Needs agents',
+      id: 'needs-unknown',
+      name: 'needs-unknown',
+      title: 'Needs unknown',
       format: 'dsh',
       packageDir: dir,
-      rows: [{ id: 'row', name: 'needs-agents', entryPath: path.join(dir, 'inject.mjs'), config: {}, disabled: false }],
+      rows: [{ id: 'row', name: 'needs-unknown', entryPath: path.join(dir, 'inject.mjs'), config: {}, disabled: false }],
       enabled: true,
     });
     expect(state.status).toBe('missing-capability');
-    expect(state.missing).toEqual(['agents']);
+    expect(state.missing).toEqual(['unknownHostService']);
+    await host.dispose();
+  });
+
+  it('provides full DSH host services (systemPrompt, sessions, shellEnv, webServer, fs, userApproval, scope, memory, connection, agents) and cleans up on unload', async () => {
+    const dir = tempDir();
+    fs.writeFileSync(path.join(dir, 'full-dsh.mjs'), `
+      export const name = 'full-dsh-compat'
+      export const inject = [
+        'tools', 'systemPrompt', 'sessions', 'shellEnv',
+        'webServer', 'fs', 'userApproval', 'scope', 'memory', 'connection', 'agents',
+      ]
+      export function apply(ctx) {
+        ctx.systemPrompt.register({ id: 'mem-sec', content: 'Remember DSH rules', priority: 10 })
+        ctx.shellEnv.register({ DSH_COMPAT_ACTIVE: '1' })
+        ctx.webServer.get('/health', () => ({ ok: true }))
+        ctx.memory.registerProvider({ name: 'local-mem', search: (q) => [{ q, hit: true }] })
+        ctx.agents.register({ name: 'reviewer', description: 'Code reviewer' })
+        const session = ctx.sessions.create({ id: 's1', title: 'demo' })
+        ctx.sessions.appendEvent(session.id, { type: 'start' })
+        ctx.tools.register({
+          name: 'verify_dsh_services',
+          description: 'Verify all extended DSH host services',
+          execute: async () => ({
+            sessionEvents: ctx.sessions.get('s1')?.events.length,
+            memHits: await ctx.memory.search('test'),
+            agentFound: ctx.agents.get('reviewer')?.name,
+            approval: await ctx.userApproval.request({ action: 'read', danger: false }),
+            connected: ctx.connection.isConnected(),
+            profileId: ctx.scope.getProfileId(),
+            hasFs: typeof ctx.fs.readFile === 'function',
+          }),
+        })
+      }
+    `);
+    const host = new RuntimeHost();
+    await host.start({ profileId: 'compat-test' });
+    const state = await host.load({
+      id: 'full-dsh-compat',
+      name: 'full-dsh-compat',
+      title: 'Full DSH Compat',
+      format: 'dsh',
+      packageDir: dir,
+      rows: [{ id: 'main', name: 'full-dsh-compat', entryPath: path.join(dir, 'full-dsh.mjs'), config: {}, disabled: false }],
+      enabled: true,
+    });
+    expect(state.status).toBe('loaded');
+    expect(await host.listSystemPrompts()).toMatchObject([{ pluginId: 'full-dsh-compat', id: 'mem-sec', content: 'Remember DSH rules' }]);
+    expect(await host.getShellEnv()).toEqual({ DSH_COMPAT_ACTIVE: '1' });
+    expect(host.webServerInfo().routes).toEqual([{ pluginId: 'full-dsh-compat', method: 'GET', path: '/health' }]);
+
+    const res = await host.invokeTool('full-dsh-compat', 'main', 'verify_dsh_services', {});
+    expect(res.ok).toBe(true);
+    expect(res.value).toMatchObject({
+      sessionEvents: 1,
+      memHits: [{ q: 'test', hit: true }],
+      agentFound: 'reviewer',
+      approval: { approved: true, decision: 'allow' },
+      connected: true,
+      profileId: 'compat-test',
+      hasFs: true,
+    });
+
+    await host.unload('full-dsh-compat');
+    expect(await host.listSystemPrompts()).toEqual([]);
+    expect(await host.getShellEnv()).toEqual({});
+    expect(host.webServerInfo().routes).toEqual([]);
     await host.dispose();
   });
 

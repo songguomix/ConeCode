@@ -50,6 +50,21 @@ export interface RuntimeSkillContent {
   resourceBase?: unknown;
 }
 
+export interface RuntimeSystemPromptSection {
+  pluginId: string;
+  rowId: string;
+  id: string;
+  title?: string;
+  content: string;
+  priority: number;
+}
+
+export interface RuntimeWebServerInfo {
+  running: boolean;
+  baseUrl: string | null;
+  routes: Array<{ pluginId: string; method: string; path: string }>;
+}
+
 class HostCapabilityError extends Error {
   readonly missing: string[];
   constructor(missing: string[]) {
@@ -57,6 +72,23 @@ class HostCapabilityError extends Error {
     this.name = 'HostCapabilityError';
     this.missing = missing;
   }
+}
+
+interface RegisteredPromptEntry {
+  id: string;
+  title?: string;
+  priority: number;
+  content?: string;
+  render?: (context?: unknown) => string | Promise<string>;
+}
+
+interface RegisteredRoute {
+  pluginId: string;
+  rowId: string;
+  method: string;
+  path: string;
+  prefix: boolean;
+  handler: (req: any, res: any) => unknown | Promise<unknown>;
 }
 
 interface RowRuntime {
@@ -69,6 +101,9 @@ interface RowRuntime {
   rawCommands: any[];
   rawSkills: any[];
   providers: Map<string, { provider: any; lifecycle: AbortController }>;
+  systemPrompts: RegisteredPromptEntry[];
+  shellEnvProviders: Array<() => Record<string, string> | Promise<Record<string, string>>>;
+  disposers: Array<() => void>;
   nativeDispose?: () => void | Promise<void>;
   requiredServices: string[];
 }
@@ -121,6 +156,12 @@ export interface RuntimeStorageInfo {
   error: string | null;
 }
 
+const HOST_PROVIDED_SERVICES = [
+  'tools', 'commands', 'skills', 'credentials',
+  'systemPrompt', 'sessions', 'shellEnv', 'webServer',
+  'fs', 'userApproval', 'scope', 'memory', 'connection', 'agents',
+] as const;
+
 export class RuntimeHost {
   private root: Context | null = null;
   private storage: RuntimeStorageInfo = { ready: false, backend: null, root: null, error: null };
@@ -128,6 +169,14 @@ export class RuntimeHost {
   private logSink: ((message: string, level?: 'info' | 'warn' | 'error') => void) | null = null;
   private generation = 0;
   private llmPlugin: Parameters<Context['plugin']>[0] | null = null;
+  private dshHome: string | null = null;
+  private profileId: string | null = null;
+  private webRoutes: RegisteredRoute[] = [];
+  private sessionRecords = new Map<string, { id: string; title?: string; createdAt: string; events: unknown[] }>();
+  private sessionListeners = new Set<(event: unknown) => void>();
+  private memoryProviders = new Map<string, any>();
+  private agentPresets = new Map<string, any>();
+  private connectionListeners = new Map<string, Set<(payload: unknown) => void>>();
 
   get llmReady(): boolean {
     return !!this.llmPlugin;
@@ -144,6 +193,8 @@ export class RuntimeHost {
   async start(options?: { dshHome?: string; profileId?: string }): Promise<void> {
     if (this.root) return;
     this.root = new Context();
+    this.dshHome = options?.dshHome || process.env.DSH_HOME || null;
+    this.profileId = options?.profileId || 'default';
     this.log('Cordis root context created');
     if (options?.dshHome && options.profileId) {
       const profileDir = path.join(options.dshHome, 'profiles', options.profileId);
@@ -271,7 +322,7 @@ export class RuntimeHost {
         rows.push({ row, entry: plugin, inject });
       }
       for (const name of privateServices) bundleScope = bundleScope.isolate(name);
-      const availableInHost = new Set<string>(['tools', 'commands', 'skills', 'credentials', ...CORDIS_BUILTIN_SERVICES]);
+      const availableInHost = new Set<string>([...HOST_PROVIDED_SERVICES, ...CORDIS_BUILTIN_SERVICES]);
       while (rows.length) {
         // A bundle may declare its consumer before the row providing a private service.
         const ready = rows.findIndex(({ inject }) => inject.every((key) => availableInHost.has(key) || bundleScope.get(key) !== undefined));
@@ -300,18 +351,222 @@ export class RuntimeHost {
     return plugin.state;
   }
 
+  webServerInfo(): RuntimeWebServerInfo {
+    return {
+      running: this.webRoutes.length > 0,
+      baseUrl: this.webRoutes.length > 0 ? 'conecode-dsh://local' : null,
+      routes: this.webRoutes.map(({ pluginId, method, path: routePath }) => ({ pluginId, method, path: routePath })),
+    };
+  }
+
+  private makeExtendedServices(spec: RuntimePluginSpec, row: RuntimeRowSpec, rowRuntime: RowRuntime) {
+    const profileDir = this.dshHome && this.profileId
+      ? path.join(this.dshHome, 'profiles', this.profileId)
+      : spec.packageDir;
+    const pluginDataDir = this.dshHome && this.profileId
+      ? path.join(this.dshHome, 'profiles', this.profileId, 'data', spec.id.replace(/[^a-zA-Z0-9._-]+/g, '-'))
+      : path.join(spec.packageDir, '.data');
+    const registerDisposer = (dispose: () => void) => {
+      rowRuntime.disposers.push(dispose);
+      return dispose;
+    };
+
+    const systemPrompt = {
+      register: (input: string | { id?: string; title?: string; content?: string; priority?: number; render?: (ctx?: unknown) => string | Promise<string> }) => {
+        const entry: RegisteredPromptEntry = typeof input === 'string'
+          ? { id: `${spec.id}:${row.id}:${rowRuntime.systemPrompts.length + 1}`, content: input, priority: 100 }
+          : {
+              id: input?.id || `${spec.id}:${row.id}:${rowRuntime.systemPrompts.length + 1}`,
+              title: input?.title,
+              content: input?.content,
+              render: typeof input?.render === 'function' ? input.render : undefined,
+              priority: Number.isFinite(input?.priority) ? Number(input.priority) : 100,
+            };
+        rowRuntime.systemPrompts.push(entry);
+        return registerDisposer(() => {
+          const idx = rowRuntime.systemPrompts.indexOf(entry);
+          if (idx >= 0) rowRuntime.systemPrompts.splice(idx, 1);
+        });
+      },
+      registerSection(input: any) { return this.register(input); },
+      registerProvider(fn: (context?: unknown) => string | Promise<string>) {
+        if (typeof fn !== 'function') throw new Error('systemPrompt.registerProvider requires a function');
+        return this.register({ render: fn });
+      },
+      list: () => rowRuntime.systemPrompts.slice(),
+      render: async (context?: unknown) => (await this.listSystemPrompts(context)).map((s) => s.content).filter(Boolean).join('\n\n'),
+    };
+
+    const sessions = {
+      list: () => [...this.sessionRecords.values()],
+      get: (id: string) => this.sessionRecords.get(id) || null,
+      current: () => {
+        const list = [...this.sessionRecords.values()];
+        return list.length ? list[list.length - 1] : null;
+      },
+      create: (meta?: { id?: string; title?: string }) => {
+        const id = meta?.id || `session-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        const record = { id, title: meta?.title, createdAt: new Date().toISOString(), events: [] as unknown[] };
+        this.sessionRecords.set(id, record);
+        return record;
+      },
+      appendEvent: (id: string, event: unknown) => {
+        let record = this.sessionRecords.get(id);
+        if (!record) {
+          record = { id, createdAt: new Date().toISOString(), events: [] };
+          this.sessionRecords.set(id, record);
+        }
+        record.events.push(event);
+        for (const listener of this.sessionListeners) {
+          try { listener({ sessionId: id, event }); } catch { /* isolate */ }
+        }
+      },
+      onEvent: (listener: (event: unknown) => void) => {
+        this.sessionListeners.add(listener);
+        return registerDisposer(() => this.sessionListeners.delete(listener));
+      },
+    };
+
+    const shellEnv = {
+      register: (provider: Record<string, string> | (() => Record<string, string> | Promise<Record<string, string>>)) => {
+        const fn = typeof provider === 'function' ? provider : () => ({ ...provider });
+        rowRuntime.shellEnvProviders.push(fn);
+        return registerDisposer(() => {
+          const idx = rowRuntime.shellEnvProviders.indexOf(fn);
+          if (idx >= 0) rowRuntime.shellEnvProviders.splice(idx, 1);
+        });
+      },
+      getEnv: () => this.getShellEnv(),
+      resolve: async (base: Record<string, string | undefined> = {}) => ({ ...base, ...(await this.getShellEnv()) }),
+    };
+
+    const addRoute = (method: string, routePath: string, prefix: boolean, handler: RegisteredRoute['handler']) => {
+      const normalized = routePath.startsWith('/') ? routePath : `/${routePath}`;
+      const route: RegisteredRoute = {
+        pluginId: spec.id,
+        rowId: row.id,
+        method: (method || '*').toUpperCase(),
+        path: normalized,
+        prefix,
+        handler,
+      };
+      this.webRoutes.push(route);
+      return registerDisposer(() => {
+        const idx = this.webRoutes.indexOf(route);
+        if (idx >= 0) this.webRoutes.splice(idx, 1);
+      });
+    };
+
+    const webServer = {
+      getBaseUrl: () => Promise.resolve('conecode-dsh://local'),
+      registerRoute: (method: string, routePath: string, handler: RegisteredRoute['handler']) => addRoute(method, routePath, false, handler),
+      registerPrefix: (prefixPath: string, handler: RegisteredRoute['handler']) => addRoute('*', prefixPath, true, handler),
+      get: (routePath: string, handler: RegisteredRoute['handler']) => addRoute('GET', routePath, false, handler),
+      post: (routePath: string, handler: RegisteredRoute['handler']) => addRoute('POST', routePath, false, handler),
+      put: (routePath: string, handler: RegisteredRoute['handler']) => addRoute('PUT', routePath, false, handler),
+      delete: (routePath: string, handler: RegisteredRoute['handler']) => addRoute('DELETE', routePath, false, handler),
+      use: (prefixPath: string, handler: RegisteredRoute['handler']) => addRoute('*', prefixPath, true, handler),
+      routes: () => this.webRoutes.map(({ pluginId, method, path: routePath }) => ({ pluginId, method, path: routePath })),
+    };
+
+    const scopedFs = {
+      readFile: (target: string, encoding: BufferEncoding = 'utf8') => fs.promises.readFile(target, encoding),
+      writeFile: async (target: string, data: string | Buffer) => {
+        await fs.promises.mkdir(path.dirname(target), { recursive: true });
+        await fs.promises.writeFile(target, data);
+      },
+      readdir: (target: string) => fs.promises.readdir(target),
+      stat: (target: string) => fs.promises.stat(target),
+      exists: (target: string) => Promise.resolve(fs.existsSync(target)),
+      mkdir: (target: string) => fs.promises.mkdir(target, { recursive: true }),
+      rm: (target: string, opts?: fs.RmOptions) => fs.promises.rm(target, opts),
+    };
+
+    const userApproval = {
+      getPolicy: () => 'auto-safe',
+      request: async (req?: { action?: string; danger?: boolean; reason?: string }) => ({
+        approved: !req?.danger,
+        decision: req?.danger ? 'deny' : 'allow',
+        reason: req?.danger ? 'Dangerous operations require explicit user confirmation in ConeCode.' : 'Allowed by ConeCode DSH adapter.',
+      }),
+    };
+
+    const scope = {
+      getDshHome: () => this.dshHome,
+      getProfileId: () => this.profileId,
+      getProfileDir: () => profileDir,
+      getPluginDataDir: (id = spec.id) => {
+        const dir = id === spec.id ? pluginDataDir : path.join(profileDir, 'data', id.replace(/[^a-zA-Z0-9._-]+/g, '-'));
+        fs.mkdirSync(dir, { recursive: true });
+        return dir;
+      },
+      getPackageDir: () => spec.packageDir,
+    };
+
+    const memory = {
+      registerProvider: (provider: { name: string; search?: (query: string, opts?: unknown) => unknown; add?: (entry: unknown) => unknown }) => {
+        if (!provider?.name) throw new Error('memory.registerProvider requires a provider name');
+        const key = `${spec.id}:${row.id}:${provider.name}`;
+        this.memoryProviders.set(key, provider);
+        return registerDisposer(() => this.memoryProviders.delete(key));
+      },
+      listProviders: () => [...this.memoryProviders.values()],
+      search: async (query: string, opts?: unknown) => {
+        const results: unknown[] = [];
+        for (const provider of this.memoryProviders.values()) {
+          if (typeof provider.search !== 'function') continue;
+          const items = await Promise.resolve(provider.search(query, opts));
+          if (Array.isArray(items)) results.push(...items);
+        }
+        return results;
+      },
+      add: async (entry: unknown) => {
+        for (const provider of this.memoryProviders.values()) {
+          if (typeof provider.add === 'function') await Promise.resolve(provider.add(entry));
+        }
+      },
+    };
+
+    const connection = {
+      isConnected: () => true,
+      broadcast: (event: string, payload?: unknown) => {
+        const set = this.connectionListeners.get(event);
+        if (!set) return;
+        for (const fn of set) { try { fn(payload); } catch { /* isolate */ } }
+      },
+      on: (event: string, listener: (payload: unknown) => void) => {
+        let set = this.connectionListeners.get(event);
+        if (!set) { set = new Set(); this.connectionListeners.set(event, set); }
+        set.add(listener);
+        return registerDisposer(() => set!.delete(listener));
+      },
+    };
+
+    const agents = {
+      register: (preset: { name: string; description?: string; [key: string]: unknown }) => {
+        if (!preset?.name) throw new Error('agents.register requires a preset name');
+        const key = `${spec.id}:${row.id}:${preset.name}`;
+        this.agentPresets.set(key, preset);
+        return registerDisposer(() => this.agentPresets.delete(key));
+      },
+      list: () => [...this.agentPresets.values()],
+      get: (name: string) => [...this.agentPresets.values()].find((item) => item.name === name) || null,
+    };
+
+    return { systemPrompt, sessions, shellEnv, webServer, fs: scopedFs, userApproval, scope, memory, connection, agents };
+  }
+
   private async mountRow(
     spec: RuntimePluginSpec, row: RuntimeRowSpec, bundleScope: Context,
     plugin: Parameters<Context['plugin']>[0], inject: string[],
   ): Promise<RowRuntime> {
     const generation = ++this.generation;
     const label = `${spec.id}:${row.id}:${generation}`;
-    const scope = bundleScope
-      .isolate('tools', Symbol(`${label}:tools`))
-      .isolate('commands', Symbol(`${label}:commands`))
-      .isolate('skills', Symbol(`${label}:skills`))
-      .isolate('credentials', Symbol(`${label}:credentials`))
-      .extend();
+    let scope = bundleScope;
+    for (const serviceName of HOST_PROVIDED_SERVICES) {
+      scope = scope.isolate(serviceName, Symbol(`${label}:${serviceName}`));
+    }
+    scope = scope.extend();
     const rowRuntime: RowRuntime = {
       row,
       scope,
@@ -322,21 +577,38 @@ export class RuntimeHost {
       rawCommands: [],
       rawSkills: [],
       providers: new Map(),
+      systemPrompts: [],
+      shellEnvProviders: [],
+      disposers: [],
       requiredServices: [],
     };
     const host = {
       name: `conecode-host:${spec.id}:${row.id}:${generation}`,
       apply: (ctx: Context) => {
         const owner = makeFacade(spec, row, rowRuntime);
+        const extended = this.makeExtendedServices(spec, row, rowRuntime);
         ctx.provide('tools', owner.tools);
         ctx.provide('commands', owner.commands);
         ctx.provide('skills', owner.skills);
-        ctx.effect(() => () => { for (const item of rowRuntime.providers.values()) item.lifecycle.abort(); });
         ctx.provide('credentials', {
           async resolve(ref: string) {
             const value = process.env[ref];
             return typeof value === 'string' && value ? { value } : undefined;
           },
+        });
+        ctx.provide('systemPrompt', extended.systemPrompt);
+        ctx.provide('sessions', extended.sessions);
+        ctx.provide('shellEnv', extended.shellEnv);
+        ctx.provide('webServer', extended.webServer);
+        ctx.provide('fs', extended.fs);
+        ctx.provide('userApproval', extended.userApproval);
+        ctx.provide('scope', extended.scope);
+        ctx.provide('memory', extended.memory);
+        ctx.provide('connection', extended.connection);
+        ctx.provide('agents', extended.agents);
+        ctx.effect(() => () => {
+          for (const item of rowRuntime.providers.values()) item.lifecycle.abort();
+          for (const dispose of rowRuntime.disposers.splice(0)) { try { dispose(); } catch { /* ignore */ } }
         });
       },
     };
@@ -396,16 +668,23 @@ export class RuntimeHost {
       rawCommands: [],
       rawSkills: [],
       providers: new Map(),
+      systemPrompts: [],
+      shellEnvProviders: [],
+      disposers: [],
       requiredServices: [],
     };
     const owner = makeFacade(spec, row, rowRuntime);
+    const extended = this.makeExtendedServices(spec, row, rowRuntime);
     const host = {
       name: `conecode-host:${spec.id}:native:${generation}`,
       apply: (ctx: Context) => {
         ctx.provide('tools', owner.tools);
         ctx.provide('commands', owner.commands);
         ctx.provide('skills', owner.skills);
-        ctx.effect(() => () => { for (const item of rowRuntime.providers.values()) item.lifecycle.abort(); });
+        ctx.effect(() => () => {
+          for (const item of rowRuntime.providers.values()) item.lifecycle.abort();
+          for (const dispose of rowRuntime.disposers.splice(0)) { try { dispose(); } catch { /* ignore */ } }
+        });
       },
     };
     rowRuntime.hostFiber = scope.plugin(host);
@@ -418,6 +697,9 @@ export class RuntimeHost {
         tools: owner.tools,
         commands: owner.commands,
         skills: owner.skills,
+        systemPrompt: extended.systemPrompt,
+        shellEnv: extended.shellEnv,
+        scope: extended.scope,
         logger: console,
         plugin: { id: spec.id, name: spec.name },
       };
@@ -454,6 +736,9 @@ export class RuntimeHost {
           this.log(`[${plugin.spec.name}] cleanup warning: ${errorText(error)}`, 'warn');
         }
       }
+      for (const dispose of row.disposers.splice(0)) { try { dispose(); } catch { /* ignore */ } }
+      row.systemPrompts = [];
+      row.shellEnvProviders = [];
       row.contributions = emptyContributions();
     }
     plugin.rows = [];
@@ -567,12 +852,67 @@ export class RuntimeHost {
     return null;
   }
 
+  async listSystemPrompts(context?: unknown): Promise<RuntimeSystemPromptSection[]> {
+    const sections: RuntimeSystemPromptSection[] = [];
+    for (const plugin of this.plugins.values()) {
+      for (const row of plugin.rows) {
+        for (const entry of row.systemPrompts) {
+          try {
+            const content = entry.render
+              ? await withTimeout(Promise.resolve(entry.render(context)), 10_000, `systemPrompt ${entry.id}`)
+              : entry.content || '';
+            if (typeof content === 'string' && content.trim()) {
+              sections.push({
+                pluginId: plugin.spec.id,
+                rowId: row.row.id,
+                id: entry.id,
+                ...(entry.title ? { title: entry.title } : {}),
+                content: content.trim(),
+                priority: entry.priority,
+              });
+            }
+          } catch (error) {
+            this.log(`[${plugin.spec.name}] systemPrompt ${entry.id} failed: ${errorText(error)}`, 'warn');
+          }
+        }
+      }
+    }
+    return sections.sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id));
+  }
+
+  async getShellEnv(): Promise<Record<string, string>> {
+    const merged: Record<string, string> = {};
+    for (const plugin of this.plugins.values()) {
+      for (const row of plugin.rows) {
+        for (const provider of row.shellEnvProviders) {
+          try {
+            const vars = await withTimeout(Promise.resolve(provider()), 10_000, `shellEnv ${plugin.spec.id}`);
+            if (vars && typeof vars === 'object') {
+              for (const [k, v] of Object.entries(vars)) {
+                if (typeof v === 'string') merged[k] = v;
+              }
+            }
+          } catch (error) {
+            this.log(`[${plugin.spec.name}] shellEnv provider failed: ${errorText(error)}`, 'warn');
+          }
+        }
+      }
+    }
+    return merged;
+  }
+
   runtimeInfo(): Array<{ id: string; status: string; rows: number }> {
     return [...this.plugins.values()].map((plugin) => ({ id: plugin.spec.id, status: plugin.state.status, rows: plugin.rows.length }));
   }
 
   async dispose(): Promise<void> {
     for (const id of [...this.plugins.keys()]) await this.unload(id).catch(() => {});
+    this.webRoutes = [];
+    this.sessionRecords.clear();
+    this.sessionListeners.clear();
+    this.memoryProviders.clear();
+    this.agentPresets.clear();
+    this.connectionListeners.clear();
     if (this.root) await this.root.fiber.dispose().catch(() => {});
     this.root = null;
     this.llmPlugin = null;

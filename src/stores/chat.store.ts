@@ -1,4 +1,5 @@
 import { FREE_PROVIDER_ID, FREE_WEEKLY_TOKEN_LIMIT } from '../core/providers/free.adapter';
+import { reasoningReplayFor } from '../core/providers/reasoningReplay';
 import { normalizeTokenUsage, type TokenUsage } from '../core/providers/tokenUsage';
 import { create } from 'zustand';
 import { v4 as uuidv4 } from 'uuid';
@@ -17,6 +18,7 @@ import { useFreeStore } from './free.store';
 import type { MemoryEntry } from '../core/memory/memory';
 import { isVolatileMemory } from '../core/memory/durability';
 import { formatMemoryFiles } from '../core/memory/memoryFiles';
+import { hashString } from '../core/memory/v2/model';
 import { agentModePrompt, RSI_COST_LOCK_PROMPT, RSI_UI_DESIGN_PROMPT, type AgentMode } from '../core/agents/modePrompts';
 import {
   defaultRsiState, isRsiConversation, rsiDirectionPrompt, readRsiProgress, rsiWorkspaceDir,
@@ -150,7 +152,7 @@ export interface SendMessageOptions {
    * not ride along with—or be consumed by—this turn.
    */
   keepComposerImages?: boolean;
-  /** Attachments supplied by a remote composer belong only to this turn. */
+  /** Attachments already captured for this turn by the local or remote composer. */
   images?: string[];
   /** Internal task context captured when retrieval completes. */
   taskMemory?: TaskMemoryContext;
@@ -162,6 +164,7 @@ export interface SendMessageOptions {
 }
 const taskMemoryByConversation = new Map<string, TaskMemoryContext>();
 const rsiSpendBaselines = new Map<string, number>();
+const editorContextAnchors = new Map<string, { contentHash: string; messageId: string }>();
 // Stabilize auto reasoning effort per conversation so short follow-ups do not
 // downgrade thinking config mid-session and invalidate Anthropic/KV caches.
 const autoEffortByConversation = new Map<string, { modelKey: string; effort: 'low' | 'medium' | 'high' }>();
@@ -189,6 +192,15 @@ function visibleConversationWorkspace(conversationId: string, conversation?: Con
   if (useChatStore.getState().activeConversationId !== conversationId) return undefined;
   if (conversation?.rootPath !== undefined && workspace.rootPath !== conversation.rootPath) return undefined;
   return workspace;
+}
+
+function takeComposerImages(workspace: ReturnType<typeof visibleConversationWorkspace>): string[] {
+  if (!workspace) return [];
+  const images = workspace.contextFiles.flatMap((file) => file.isImage && file.dataUrl ? [file.dataUrl] : []);
+  if (images.length) {
+    useWorkspaceStore.setState({ contextFiles: workspace.contextFiles.filter((file) => !(file.isImage && file.dataUrl)) });
+  }
+  return images;
 }
 
 async function resolveTaskWorkspace(conversationId: string, conversation?: Conversation): Promise<TaskWorkspace> {
@@ -1002,6 +1014,7 @@ export interface QueuedMessage {
   /** The user asked this message to guide the current run at a safe boundary. */
   steer: boolean;
   steerError: string | null;
+  deliveryError?: string;
   images?: string[];
 }
 
@@ -1015,7 +1028,7 @@ const persistingSteers = new Map<string, string>();
  * flushQueue (background view) share it; live-array writes only touch the
  * conversation on screen.
  */
-async function deliverToConversation(convId: string, content: string, providerId: string, modelId: string, options: SendMessageOptions = {}): Promise<void> {
+async function deliverToConversation(convId: string, content: string, providerId: string, modelId: string, options: SendMessageOptions = {}, queueId?: string): Promise<void> {
   const set = useChatStore.setState;
   if (providerId === FREE_PROVIDER_ID && useFreeStore.getState().weeklyUsed >= FREE_WEEKLY_TOKEN_LIMIT) {
     set({ error: 'ConeCode Free has reached its weekly usage limit of 2B tokens.' });
@@ -1035,20 +1048,10 @@ async function deliverToConversation(convId: string, content: string, providerId
   // queue flushes is the user's next message, never this replay's attachment.
   const conversation = get().conversations.find((item) => item.id === convId);
   const wsState = visibleConversationWorkspace(convId, conversation);
-  const composerImages = options.keepComposerImages || options.images || !wsState
-    ? []
-    : wsState.contextFiles
-      .filter((f) => f.isImage && f.dataUrl)
-      .map((f) => f.dataUrl as string);
-  const attachedImages = options.images ?? composerImages;
-  if (composerImages.length) {
-    useWorkspaceStore.setState((s) => ({
-      contextFiles: s.contextFiles.filter((f) => !(f.isImage && f.dataUrl)),
-    }));
-  }
+  const attachedImages = options.images ?? (options.keepComposerImages ? [] : takeComposerImages(wsState));
   if (content.trim() || attachedImages.length) {
     const userMsg: Message = {
-      id: uuidv4(),
+      id: queueId ?? uuidv4(),
       conversationId: convId,
       role: 'user',
       content,
@@ -1057,7 +1060,12 @@ async function deliverToConversation(convId: string, content: string, providerId
       createdAt: Date.now(),
     };
     await window.electronAPI.message.create(userMsg);
-    set((s) => s.activeConversationId === convId ? { messages: [...s.messages, userMsg] } : {});
+    set((s) => ({
+      ...(s.activeConversationId === convId ? { messages: [...s.messages, userMsg] } : {}),
+      ...(queueId ? { queuedMessages: {
+        ...s.queuedMessages, [convId]: (s.queuedMessages[convId] ?? []).filter((item) => item.id !== queueId),
+      } } : {}),
+    }));
 
     // Auto-title from the first user message, and bump this conversation to
     // the top of the list (recent-first ordering).
@@ -1560,10 +1568,28 @@ function modelVisibleContent(message: Message, costLock: boolean): string {
   );
 }
 
-export function buildApiMessages(messages: Message[], runtimeContext?: {
+interface AnchoredRuntimeContext {
   afterMessageId?: string;
   message: ChatMessage;
-}): ChatMessage[] {
+}
+
+function editorAnchorForTurn(history: Message[], cachedId: string | undefined, editorLength: number): string | undefined {
+  // Keep an unchanged editor across a short follow-up. Once a full user turn
+  // or more text than the editor would sit behind it, favour the transcript:
+  // the next file edit should invalidate at most the recent exchange.
+  let userTurns = 0;
+  let suffixLength = 0;
+  for (let i = history.length - 1; cachedId && i >= 0; i--) {
+    const message = history[i];
+    if (message.id === cachedId) return cachedId;
+    if (message.role === 'user' && !message.isToolResult) userTurns++;
+    suffixLength += message.content.length;
+    if (userTurns > 1 || suffixLength > editorLength) break;
+  }
+  return history[history.length - 1]?.id;
+}
+
+export function buildApiMessages(messages: Message[], runtimeContexts: AnchoredRuntimeContext[] = []): ChatMessage[] {
   // Compaction shrinks what the MODEL sees; the transcript keeps everything.
   const costLock = useSettingsStore.getState().costLock === true;
   const live = contextMessagesForUsage(messages).map((message) => {
@@ -1600,8 +1626,11 @@ export function buildApiMessages(messages: Message[], runtimeContext?: {
   const out: ChatMessage[] = [];
   const pendingToolReplies = new Set<string>();
   const batchImages: string[] = [];
-  const contextAnchor = runtimeContext ? live.findIndex((message) => message.id === runtimeContext.afterMessageId) : -1;
-  let contextIndex = runtimeContext && runtimeContext.afterMessageId === undefined ? 0 : undefined;
+  const anchors = runtimeContexts.map(({ afterMessageId, message }) => {
+    const index = afterMessageId === undefined ? -1 : live.findIndex((item) => item.id === afterMessageId);
+    return { index: afterMessageId !== undefined && index === -1 ? live.length : index, message };
+  }).sort((a, b) => a.index - b.index);
+  let nextAnchor = 0;
 
   // Only the last few chat images go over the wire; everything older is
   // described in text instead of re-sent.
@@ -1611,8 +1640,8 @@ export function buildApiMessages(messages: Message[], runtimeContext?: {
 
   for (let idx = 0; idx < live.length; idx++) {
     // Never put workspace context between a native tool call and its replies.
-    if (contextAnchor >= 0 && idx > contextAnchor && contextIndex === undefined && pendingToolReplies.size === 0) {
-      contextIndex = out.length;
+    while (pendingToolReplies.size === 0 && nextAnchor < anchors.length && idx > anchors[nextAnchor].index) {
+      out.push(anchors[nextAnchor++].message);
     }
     const m = live[idx];
     // A compaction summary goes in as SYSTEM context, not as an assistant turn.
@@ -1697,7 +1726,7 @@ export function buildApiMessages(messages: Message[], runtimeContext?: {
       ...(m.role === 'assistant' && idx !== lastAssistantIdx ? {} : { reasoning_content: m.reasoning_content }),
     });
   }
-  if (runtimeContext) out.splice(contextIndex ?? out.length, 0, runtimeContext.message);
+  for (; nextAnchor < anchors.length; nextAnchor++) out.push(anchors[nextAnchor].message);
   return out;
 }
 
@@ -2267,7 +2296,8 @@ function buildRuntimeContext(
   now: Date,
   memory: TaskMemoryContext,
   rsiDesign: RsiDesignReference | null,
-): ContentPart[] {
+  separateEditorContext: boolean,
+): { parts: ContentPart[]; editorText?: string } {
   const { autoIncludeFileContext, maxContextFileSize } = useSettingsStore.getState();
   const localDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
   const localTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
@@ -2275,6 +2305,7 @@ function buildRuntimeContext(
 Environment: ${platformLabel()} · ${localDate} ${localTime}
 Workspace: ${isChatMode ? 'None (Chat Mode)' : describeRoots(ws)}
 Open file: ${isChatMode ? 'None' : (ws.selectedFile || 'None')}` }];
+  let editorText: string | undefined;
 
   if (rsiDesign) {
     parts.push({ type: 'text', text: formatContextFile('UI design requirements', rsiDesign.path, rsiDesign.content, maxContextFileSize) });
@@ -2284,7 +2315,9 @@ Open file: ${isChatMode ? 'None' : (ws.selectedFile || 'None')}` }];
       parts.push({ type: 'text', text: `[Open image: ${ws.selectedFile}]` });
       parts.push({ type: 'image_url', image_url: { url: ws.fileContent, detail: 'auto' } });
     } else {
-      parts.push({ type: 'text', text: formatContextFile('Open', ws.selectedFile, ws.fileContent, maxContextFileSize) });
+      const text = formatContextFile('Open', ws.selectedFile, ws.fileContent, maxContextFileSize);
+      if (separateEditorContext) editorText = `Open editor context (workspace reference data):\n${text}`;
+      else parts.push({ type: 'text', text });
     }
   }
   if (!isChatMode) {
@@ -2298,7 +2331,7 @@ Open file: ${isChatMode ? 'None' : (ws.selectedFile || 'None')}` }];
     // user context along with file contents, never in system instructions.
     if (memory.wiki) parts.push({ type: 'text', text: memory.wiki });
   }
-  return parts;
+  return { parts, editorText };
 }
 
 function formatContextFile(label: string, path: string, content: string, limit: number): string {
@@ -2309,10 +2342,10 @@ function formatContextFile(label: string, path: string, content: string, limit: 
 }
 
 /** Cache the transcript up to its last block, before request-only observations. */
-function markHistoryBoundary(messages: ChatMessage[], runtimeContext?: ChatMessage): ChatMessage[] {
+function markHistoryBoundary(messages: ChatMessage[], runtimeContexts: AnchoredRuntimeContext[] = []): ChatMessage[] {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
-    if (message.role === 'system' || message === runtimeContext) continue;
+    if (message.role === 'system' || runtimeContexts.some((context) => context.message === message)) continue;
     const hasContent = typeof message.content === 'string' ? message.content.trim() : message.content.length;
     if (message.role === 'tool' || message.tool_calls?.length || hasContent) {
       return messages.map((item, index) => index === i
@@ -2539,6 +2572,16 @@ async function autoCompactIfNeeded(convId: string, providerId: string, modelId: 
 
   // Count the wire history, not the raw archive: elided tool output and
   // base64 attachment bytes should not trigger premature compaction.
+  const provider = useProviderStore.getState().providers.find((item) => item.id === providerId);
+  const reasoningReplay = provider?.type === 'anthropic' || provider?.type === 'gemini'
+    ? 'none' : reasoningReplayFor(provider, modelId);
+  const preference = get().reasoningEffort;
+  const previousEffort = autoEffortByConversation.get(convId);
+  const allowedEfforts = runModel?.reasoningEfforts;
+  const includeAnthropicThinking = provider?.type === 'anthropic'
+    && (resolveEffort(preference, lastUserText(history), allowedEfforts) !== 'low'
+      || (preference === 'auto' && previousEffort?.modelKey === `${providerId}:${modelId}`
+        && resolveEffort(previousEffort.effort, '', allowedEfforts) !== 'low'));
   let estTokens = 0;
   for (const message of buildApiMessages(history)) {
     estTokens += 4; // approximate framing
@@ -2547,14 +2590,16 @@ async function autoCompactIfNeeded(convId: string, providerId: string, modelId: 
       : message.content.reduce((sum, part) => sum + (
         part.type === 'text' ? estimateTokens(part.text) : 1024
       ), 0); // provider-specific image token costs are not base64 length
-    estTokens += estimateTokens(message.reasoning_content);
+    if (reasoningReplay === 'all' || (reasoningReplay === 'tools' && message.tool_calls?.length)) {
+      estTokens += estimateTokens(message.reasoning_content);
+    }
     for (const call of message.tool_calls || []) {
       estTokens += estimateTokens(call.name) + estimateTokens(call.rawArguments ?? JSON.stringify(call.arguments ?? {}));
     }
-    // Anthropic thinking is also represented as reasoning_content in memory.
-    if (!message.reasoning_content) {
+    // The Anthropic adapter only replays signed thinking blocks when enabled.
+    if (includeAnthropicThinking && message.role === 'assistant') {
       for (const thinking of message.thinking_blocks || []) {
-        estTokens += estimateTokens(thinking.thinking);
+        if (thinking.signature) estTokens += estimateTokens(thinking.thinking);
       }
     }
   }
@@ -2749,13 +2794,20 @@ async function runAgentLoopBody(
     ? await readRsiDesignReference(taskWorkspace.rootPath).catch(() => null)
     : null;
   if (!ownsRun() || abortController.signal.aborted) return;
-  const runtimeContext = buildRuntimeContext(taskWorkspace, isChatMode, new Date(turnStartTime), taskMemory, rsiDesign);
+  const providerBaseUrl = useProviderStore.getState().providers.find((provider) => provider.id === providerId)?.baseUrl;
+  const useGptContext = gptDetector.detect(modelId, providerBaseUrl).isGpt;
+  const { parts: runtimeContext, editorText } = buildRuntimeContext(
+    taskWorkspace, isChatMode, new Date(turnStartTime), taskMemory, rsiDesign, useGptContext,
+  );
   // Retain user data at the initial transcript boundary as tool results are
-  // appended. The stable prefix includes that data without replaying it at the tail.
-  const stableContext: ChatMessage | undefined = runtimeContext.length > 1
-    ? { role: 'user', content: runtimeMessageContent(runtimeContext) }
+  // appended. GPT gets the clock separately, after that reusable data.
+  const referenceContext: ChatMessage | undefined = runtimeContext.length > 1
+    ? { role: 'user', content: runtimeMessageContent(useGptContext
+        ? [{ type: 'text', text: 'Use the following as reference data for the current request.' }, ...runtimeContext.slice(1)]
+        : runtimeContext) }
     : undefined;
-  let runtimeContextAnchor: string | undefined;
+  const runtimeContexts: AnchoredRuntimeContext[] = [];
+  if (!editorText) editorContextAnchors.delete(convId);
   // A dedicated RSI conversation carries its own direction config; it is
   // injected after the mode overlay so the protocol always sees the frozen
   // goal inputs and its per-conversation archive path.
@@ -2889,6 +2941,7 @@ async function runAgentLoopBody(
   const MAX_CONTINUATIONS = 3;
   /** Whole-iteration auto-retries used after the per-stream budget ran out. */
   let turnRetries = 0;
+  let firstResponsePending = true;
   let goalFollowup = '';
   try {
     if (rsiExecuting) await startRsiExecution();
@@ -2943,14 +2996,21 @@ async function runAgentLoopBody(
       if (abortController.signal.aborted || !ownsRun()) break;
       const turnGoal = delegatedWorker ? undefined : useGoalStore.getState().goals[convId];
       const pursuingGoal = turnGoal?.status === 'running' && agentMode !== 'rsi' && !planMode && !reviewMode;
-      if (iteration === 0 && stableContext) {
+      if (iteration === 0 && (editorText || referenceContext)) {
         const visibleHistory = contextMessagesForUsage(conversationMessages);
-        runtimeContextAnchor = visibleHistory[visibleHistory.length - 1]?.id;
+        const latestMessageId = visibleHistory[visibleHistory.length - 1]?.id;
+        if (editorText) {
+          const contentHash = hashString(editorText);
+          const cached = editorContextAnchors.get(convId);
+          const cachedId = cached?.contentHash === contentHash ? cached.messageId : undefined;
+          const messageId = editorAnchorForTurn(visibleHistory, cachedId, editorText.length);
+          if (messageId) editorContextAnchors.set(convId, { contentHash, messageId });
+          else editorContextAnchors.delete(convId);
+          runtimeContexts.push({ afterMessageId: messageId, message: { role: 'user', content: editorText } });
+        }
+        if (referenceContext) runtimeContexts.push({ afterMessageId: latestMessageId, message: referenceContext });
       }
-      const history = buildApiMessages(conversationMessages, stableContext && {
-        afterMessageId: runtimeContextAnchor,
-        message: stableContext,
-      });
+      const history = buildApiMessages(conversationMessages, runtimeContexts);
       const allMessages: ChatMessage[] = [
         ...buildSystemMessages(
           modelName,
@@ -2971,7 +3031,7 @@ async function runAgentLoopBody(
         // Local UI notices (/help, /diff output, etc.) are shown in the
         // transcript but must not be replayed to the model as context; tool
         // calls and their results are re-linked into a protocol-valid exchange.
-        ...markHistoryBoundary(history, stableContext),
+        ...markHistoryBoundary(history, runtimeContexts),
       ];
       const baseMessages = allMessages;
 
@@ -2982,8 +3042,8 @@ async function runAgentLoopBody(
       const continuing = stitch.active && stitch.forIteration === iteration;
       if (!continuing) stitch = freshStitch();
       const requestMessages = (frame: ComputerFrame | null): ChatMessage[] => {
-        const context: ContentPart[] = iteration === 0 && !stableContext ? [...runtimeContext] : [];
-        if (iteration === 0 && options.recoveringBackground) context.push({
+        const context: ContentPart[] = firstResponsePending && (!referenceContext || useGptContext) ? [runtimeContext[0]] : [];
+        if (firstResponsePending && options.recoveringBackground) context.push({
           type: 'text',
           text: 'Continue the interrupted task from the saved transcript. Preserve completed work and verify the current state before repeating any tool action whose result is missing.',
         });
@@ -3189,6 +3249,7 @@ async function runAgentLoopBody(
       }
       if (fallbackToPrompt) continue;
       if (abortController.signal.aborted || !ownsRun()) break;
+      firstResponsePending = false;
       // The iteration reached a live response — restore the turn-retry budget
       // so a long multi-turn run keeps full resilience against later blips.
       turnRetries = 0;
@@ -4578,7 +4639,7 @@ interface ChatStore {
    * conversation instead of blocking. Returns 'sent' when the run already
    * ended (delivered straight away), 'queued' normally, 'dropped' on garbage.
    */
-  enqueueMessage: (conversationId: string, content: string, providerId: string, modelId: string, images?: string[]) => 'queued' | 'sent' | 'dropped';
+  enqueueMessage: (conversationId: string, content: string, providerId: string, modelId: string, attachments?: string[] | 'composer') => 'queued' | 'sent' | 'dropped';
   steerQueuedMessage: (conversationId: string, id: string) => void;
   dequeueMessage: (conversationId: string, id: string) => void;
   /** Send the head of the queue, unless the run is live, held, or waiting. */
@@ -5020,6 +5081,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     rsiSpendBaselines.delete(id);
     taskMemoryByConversation.delete(id);
     autoEffortByConversation.delete(id);
+    editorContextAnchors.delete(id);
     const newSnapshots = new Map(get().workspaceSnapshots);
     newSnapshots.delete(id);
     set((s) => ({
@@ -5156,14 +5218,14 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
   },
 
-  enqueueMessage: (conversationId, content, providerId, modelId, images) => {
-    if ((!content.trim() && !images?.length) || !providerId || !modelId) return 'dropped';
-    if (!get().conversations.some((c) => c.id === conversationId)) return 'dropped';
-    if (!get().streamingRuns[conversationId]) {
-      // Race: the run ended between render and Enter — deliver straight away.
-      void deliverToConversation(conversationId, content, providerId, modelId, { images });
-      return 'sent';
-    }
+  enqueueMessage: (conversationId, content, providerId, modelId, attachments) => {
+    const conversation = get().conversations.find((c) => c.id === conversationId);
+    if (!conversation || !providerId || !modelId) return 'dropped';
+    const workspace = attachments === 'composer' ? visibleConversationWorkspace(conversationId, conversation) : undefined;
+    if (attachments === 'composer' && !workspace) return 'dropped';
+    const images = attachments === 'composer' ? takeComposerImages(workspace) : attachments;
+    if (!content.trim() && !images?.length) return 'dropped';
+    const alreadyIdle = !get().streamingRuns[conversationId];
     const item: QueuedMessage = {
       id: uuidv4(),
       content,
@@ -5180,6 +5242,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         [conversationId]: [...(s.queuedMessages[conversationId] || []), item],
       },
     }));
+    if (alreadyIdle) {
+      // The run ended between rendering the composer and clicking send.
+      void get().flushQueue(conversationId);
+      return 'sent';
+    }
     return 'queued';
   },
 
@@ -5244,13 +5311,19 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     if (!head) return;
     flushingQueues.add(conversationId);
     try {
+      await deliverToConversation(conversationId, head.content, head.providerId, head.modelId, { keepComposerImages: true, images: head.images }, head.id);
+      // A quota hold returns before the transcript write.
+      if (get().queuedMessages[conversationId]?.some((item) => item.id === head.id)) return;
+    } catch (error) {
+      const deliveryError = error instanceof Error ? error.message : String(error);
       set((s) => ({
-        queuedMessages: {
-          ...s.queuedMessages,
-          [conversationId]: (s.queuedMessages[conversationId] || []).filter((item) => item.id !== head.id),
-        },
+        ...(s.activeConversationId === conversationId ? { error: deliveryError } : {}),
+        ...(s.queuedMessages[conversationId]?.some((item) => item.id === head.id) ? {
+          queuedMessages: { ...s.queuedMessages, [conversationId]: s.queuedMessages[conversationId].map((item) =>
+            item.id === head.id ? { ...item, deliveryError } : item) },
+        } : {}),
       }));
-      await deliverToConversation(conversationId, head.content, head.providerId, head.modelId, { keepComposerImages: true, images: head.images });
+      return;
     } finally {
       flushingQueues.delete(conversationId);
     }

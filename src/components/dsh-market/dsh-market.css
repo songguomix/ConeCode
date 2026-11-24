@@ -1,18 +1,54 @@
-/* DSH market keeps its own scrollbars and drag behaviour so the global
-   workbench styles never leak into a modal that is taller than the window. */
+/* DSH Plugin Market — Design Tokens sourced 100% from docs/design/DESIGN-dsh-market.md */
 .dsh-market-panel {
+  --dm-canvas: var(--bg-0, #F7F6F2);
+  --dm-surface: var(--bg-1, #EFECE6);
+  --dm-elevated: var(--bg-2, #FAF9F6);
+  --dm-border: var(--border, rgba(24, 24, 27, 0.09));
+  --dm-border-hover: color-mix(in srgb, var(--text-primary, #18181B) 18%, transparent);
+  --dm-accent: var(--accent, #C96442);
+  --dm-ease: cubic-bezier(0.16, 1, 0.3, 1);
   position: relative;
   min-height: 0;
+  background: var(--dm-canvas);
+  border-color: var(--dm-border);
+  box-shadow: 0 1px 2px rgba(24, 24, 27, 0.05), 0 18px 48px -12px rgba(24, 24, 27, 0.16);
+  font-family: 'Inter', 'Plus Jakarta Sans', 'PingFang SC', 'Noto Sans SC', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.dark .dsh-market-panel {
+  --dm-canvas: var(--bg-0, #111214);
+  --dm-surface: var(--bg-1, #17191D);
+  --dm-elevated: var(--bg-2, #1E2127);
+  --dm-border: var(--border, rgba(255, 255, 255, 0.08));
+  --dm-border-hover: rgba(255, 255, 255, 0.15);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 24px 64px -12px rgba(0, 0, 0, 0.55);
+}
+
+.dsh-market-panel .dm-num {
+  font-variant-numeric: tabular-nums;
+}
+
+.dsh-market-panel .dm-prose {
+  max-width: 65ch;
+}
+
+.dsh-market-panel .dm-card {
+  transition: border-color 150ms var(--dm-ease), background-color 150ms var(--dm-ease);
+}
+
+.dsh-market-panel .dm-card:hover {
+  border-color: var(--dm-border-hover);
+  background: var(--dm-elevated);
 }
 
 .dsh-market-panel ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 
 .dsh-market-panel ::-webkit-scrollbar-thumb {
   border-radius: 999px;
-  background: color-mix(in srgb, var(--text-muted) 30%, transparent);
+  background: color-mix(in srgb, var(--text-muted) 26%, transparent);
 }
 
 .dsh-market-panel ::-webkit-scrollbar-track {
@@ -23,8 +59,15 @@
 .dsh-market-panel input:focus-visible,
 .dsh-market-panel select:focus-visible,
 .dsh-market-panel textarea:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline: 2px solid color-mix(in srgb, var(--dm-accent) 55%, transparent);
   outline-offset: 1px;
+}
+
+.dsh-market-panel .line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .dsh-market-panel .line-clamp-3 {
@@ -36,6 +79,6 @@
 
 @media (max-width: 640px) {
   .dsh-market-panel {
-    border-radius: 18px;
+    border-radius: 12px;
   }
 }

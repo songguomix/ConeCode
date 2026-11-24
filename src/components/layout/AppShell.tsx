@@ -1,6 +1,6 @@
 import GithubPushDialog from '../plugins/GithubPushDialog';
 import GithubReleaseDialog from '../plugins/GithubReleaseDialog';
-import { useRef, useState, useEffect } from 'react';
+import { memo, useRef, useState, useEffect } from 'react';
 import { useUIStore, useWorkspaceStore, useLanguageStore, useChatStore } from '../../stores';
 import { useScreenshotStore } from '../../stores/screenshot.store';
 import Sidebar from './Sidebar';
@@ -26,7 +26,7 @@ import ResizeHandle from './ResizeHandle';
 import { panelLayout, SIDEBAR_OVERLAY_WIDTH } from './panelLayout';
 import { workbenchVisible } from './rsiLayout';
 
-export default function AppShell() {
+function AppShell() {
   const sidebarOpen = useUIStore((s) => s.sidebarOpen);
   const toggleSidebar = useUIStore((s) => s.toggleSidebar);
   const settingsOpen = useUIStore((s) => s.settingsOpen);
@@ -194,3 +194,5 @@ export default function AppShell() {
     </div>
   );
 }
+
+export default memo(AppShell);

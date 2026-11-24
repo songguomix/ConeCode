@@ -1,10 +1,9 @@
 /**
  * Shared intent-alignment template embedded into all system main prompts.
- * Ensures the agent explicitly states its understood user intent before
- * calling tools or starting implementation.
+ * Requests one intent statement before work on each new user request.
  */
 export const INTENT_ALIGNMENT_RULE = `# Intent First
-Before any tool or work, output your understood intent using this template:
+State intent once per new user request, before work or tools.
 > **意图理解**
 > - **核心目标**：<目标>
 > - **关键约束**：<约束/默认规范>

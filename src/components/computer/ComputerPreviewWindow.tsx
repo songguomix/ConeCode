@@ -2,14 +2,24 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CSSProperties, MouseEvent, WheelEvent } from 'react';
 import { FiArrowUpRight, FiMousePointer, FiMove, FiRefreshCw, FiType } from 'react-icons/fi';
 import { MAX_TYPE_LENGTH, type DisplayGeometry } from '../../core/computer/computer';
-import type { ComputerPreviewAPI, ComputerPreviewInput, ComputerPreviewSnapshot } from '../../core/computer/preview';
+import type { ComputerPreviewAPI, ComputerPreviewInput, ComputerPreviewUpdate } from '../../core/computer/preview';
 import { useLanguageStore } from '../../stores/language.store';
 import './computer-preview.css';
 
 /** A delayed initial pull must not replace a newer push or restore a stopped screen. */
-export function newerPreviewState(current: ComputerPreviewSnapshot | null, next: ComputerPreviewSnapshot): ComputerPreviewSnapshot | null {
+export function newerPreviewState(current: ComputerPreviewUpdate | null, next: ComputerPreviewUpdate): ComputerPreviewUpdate | null {
   if (!next || !Number.isSafeInteger(next.revision) || next.revision < 0) return current;
-  return current && next.revision <= current.revision ? current : next;
+  const [latest, other] = current && next.revision <= current.revision ? [current, next] : [next, current];
+  const shot = latest.shot;
+  const previous = other?.shot;
+  // A compact push can arrive before getState resolves. Accept its matching
+  // pixels without taking any of the older status or pointer information.
+  if (latest.status.enabled && shot && !shot.dataUrl && previous?.dataUrl && shot.frameId === previous.frameId
+    && shot.capturedAt === previous.capturedAt && shot.target.id === previous.target.id
+    && latest.status.targetRevision === other?.status.targetRevision) {
+    return { ...latest, shot: { ...shot, dataUrl: previous.dataUrl } };
+  }
+  return latest;
 }
 
 export function pointInPreviewImage(
@@ -24,7 +34,7 @@ export function pointInPreviewImage(
 const CLICK_ACTIONS = new Set(['left_click', 'right_click', 'middle_click', 'double_click', 'triple_click']);
 
 interface SurfaceProps {
-  snapshot: ComputerPreviewSnapshot | null;
+  snapshot: ComputerPreviewUpdate | null;
   waiting: string;
   unavailable: string;
   failed?: boolean;
@@ -171,9 +181,9 @@ function PreviewTarget({ snapshot, waiting, unavailable, failed, controls }: Sur
 /** Isolated preview root, backed by the selected window's frame and input bridge. */
 export default function ComputerPreviewWindow() {
   const { t, locale } = useLanguageStore();
-  const [snapshot, setSnapshot] = useState<ComputerPreviewSnapshot | null>(null);
+  const [snapshot, setSnapshot] = useState<ComputerPreviewUpdate | null>(null);
   const [failed, setFailed] = useState(false);
-  const apply = useCallback((next: ComputerPreviewSnapshot) => {
+  const apply = useCallback((next: ComputerPreviewUpdate) => {
     setSnapshot((previous) => newerPreviewState(previous, next));
     setFailed(false);
   }, []);
@@ -189,7 +199,7 @@ export default function ComputerPreviewWindow() {
     const api = window.computerPreviewAPI;
     if (!api) { setFailed(true); return; }
     let disposed = false;
-    const receive = (next: ComputerPreviewSnapshot) => { if (!disposed) apply(next); };
+    const receive = (next: ComputerPreviewUpdate) => { if (!disposed) apply(next); };
     const unsubscribe = api.onState(receive);
     void api.getState().then(receive).catch(() => { if (!disposed) setFailed(true); });
     return () => { disposed = true; unsubscribe(); };

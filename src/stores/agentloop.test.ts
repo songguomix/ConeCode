@@ -3,6 +3,7 @@ import { useGithubPushStore } from './githubPush.store';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useChatStore } from './chat.store';
 import { useModelStore } from './model.store';
+import { useProviderStore } from './provider.store';
 import { useLanguageStore } from './language.store';
 import { useSettingsStore } from './settings.store';
 import { useWorkspaceStore } from './workspace.store';
@@ -804,6 +805,35 @@ describe('runAgentLoop with native tool calling', () => {
     expect(useChatStore.getState().error).toBeNull();
   });
 
+  it('keeps initial GPT runtime and recovery context through the native tools fallback', async () => {
+    const gpt = { ...model, id: 'gpt-4o' };
+    useModelStore.setState({ models: new Map([['p1', [gpt]]]) });
+    useSettingsStore.setState({ autoIncludeFileContext: true });
+    useWorkspaceStore.setState({ selectedFile: '/proj/editor.ts', fileContent: 'Current editor contents' });
+    queued = [textResponse('```json\n{"action":"read_file","path":"/proj/a.ts"}\n```'), textResponse('done')];
+    window.electronAPI.chat.stream = async (params) => {
+      streamCalls.push(params);
+      if (params.tools?.length) throw new Error('API error 400: tools is not supported for this model');
+      return queued.shift();
+    };
+
+    await useChatStore.getState().sendMessage('Continue reviewing the files', 'p1', gpt.id, { recoveringBackground: true });
+
+    expect(streamCalls).toHaveLength(3);
+    const [rejected, fallback, continuation] = streamCalls;
+    expect(rejected.tools).toBeDefined();
+    expect(fallback.tools).toBeUndefined();
+    const runtimeContext = rejected.messages.at(-1);
+    expect(runtimeContext.content).toContain('Environment:');
+    expect(runtimeContext.content).toContain('Continue the interrupted task from the saved transcript.');
+    expect(fallback.messages.at(-1)).toEqual(runtimeContext);
+    const continuationMessages = JSON.stringify(continuation.messages);
+    expect(continuationMessages).toContain('Current editor contents');
+    expect(continuationMessages).toContain('file body');
+    expect(continuationMessages).not.toContain('Environment:');
+    expect(continuationMessages).not.toContain('Continue the interrupted task from the saved transcript.');
+  });
+
   it('uses the prompt protocol when the setting says so', async () => {
     useSettingsStore.setState({ toolCallMode: 'prompt' });
     queued = [textResponse('```json\n{"action":"read_file","path":"/proj/a.ts"}\n```'), textResponse('done')];
@@ -946,6 +976,50 @@ describe('runAgentLoop with native tool calling', () => {
     expect(streamCalls).toHaveLength(1);
     expect(streamCalls[0].messages.some((m: { content: unknown }) => Array.isArray(m.content))).toBe(true);
     expect(created.some((message) => message.isSummary)).toBe(false);
+  });
+
+  it.each([
+    ['official OpenAI', 'openai', 'https://api.openai.com/v1', 'gpt-5', 'high', false],
+    ['compatible GPT', 'custom', 'https://gateway.example.test/v1', 'gpt-5', 'high', true],
+    ['Gemini', 'gemini', 'https://gemini.example.test/v1', 'gemini-2.5-pro', 'high', false],
+    ['Anthropic with thinking disabled', 'anthropic', 'https://anthropic.example.test/v1', 'claude-sonnet-4', 'low', false],
+    ['Anthropic with thinking enabled', 'anthropic', 'https://anthropic.example.test/v1', 'claude-sonnet-4', 'medium', true],
+  ] as const)('compacts reasoning history only when %s will replay it', async (_, type, baseUrl, id, reasoningEffort, shouldCompact) => {
+    const providerState = useProviderStore.getState();
+    const previousEffort = useChatStore.getState().reasoningEffort;
+    const thinking = 'Intermediate analysis about the file. '.repeat(800);
+    useProviderStore.setState({ providers: [{
+      id: 'p1', name: type, type, baseUrl, apiKey: '', defaultModel: id, timeout: 1000,
+      enabled: true, createdAt: 0, updatedAt: 0,
+    }] });
+    useModelStore.setState({ models: new Map([['p1', [{ ...model, id, contextWindow: 5_000 }]]]) });
+    useChatStore.setState({
+      reasoningEffort,
+      messages: [
+        ...Array.from({ length: 10 }, (_, index): Message => ({
+          id: `user-${index}`, conversationId: 'conv1', role: 'user', content: 'short earlier request', createdAt: index,
+        })),
+        {
+          id: 'tool-request', conversationId: 'conv1', role: 'assistant', content: '', createdAt: 10,
+          reasoning_content: thinking, thinkingBlocks: [{ thinking, signature: 'tool-thinking-signature' }],
+          toolCalls: [{ id: 'read', name: 'read_file', arguments: { path: '/proj/a.ts' } }],
+        },
+        { id: 'tool-result', conversationId: 'conv1', role: 'tool', toolCallId: 'read', content: 'file body', createdAt: 11 },
+      ],
+    });
+    if (shouldCompact) queued.push(textResponse('compact summary'));
+    queued.push(textResponse('main answer'));
+
+    try {
+      await useChatStore.getState().sendMessage('continue', 'p1', id);
+
+      expect(streamCalls).toHaveLength(shouldCompact ? 2 : 1);
+      expect(created.some((message) => message.isSummary)).toBe(shouldCompact);
+      expect(created.some((message) => message.content === 'main answer')).toBe(true);
+    } finally {
+      useProviderStore.setState({ providers: providerState.providers });
+      useChatStore.setState({ reasoningEffort: previousEffort });
+    }
   });
 
   it('continues with the main answer after automatic compaction succeeds', async () => {

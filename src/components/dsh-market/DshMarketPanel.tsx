@@ -52,31 +52,38 @@ export default function DshMarketPanel() {
     { id: 'sources' as const, label: t('sources'), icon: <FiDatabase size={13} />, count: snapshot?.sources.length },
   ];
 
+  const activeServices = snapshot?.runtime.supportedServices.length ?? 0;
+
   return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center p-2 sm:p-4 bg-black/35 backdrop-blur-sm" onMouseDown={(event) => {
+    <div className="fixed inset-0 z-[80] flex items-center justify-center p-2 sm:p-4 bg-black/40 backdrop-blur-sm" onMouseDown={(event) => {
       if (event.target === event.currentTarget) closePanel();
     }}>
       <div role="dialog" aria-modal="true" aria-label={t('title')}
-        className="dsh-market-panel w-[min(1240px,calc(100vw-16px))] h-[min(94vh,920px)] rounded-3xl border border-[var(--border)] bg-[var(--bg-0)] shadow-[0_30px_80px_rgba(0,0,0,0.28)] flex flex-col overflow-hidden">
-        <header className="shrink-0 px-4 sm:px-5 pt-4 pb-3 border-b border-[var(--border)] bg-[var(--bg-0)]/95 backdrop-blur-xl">
+        className="dsh-market-panel w-[min(1260px,calc(100vw-16px))] h-[min(94vh,920px)] rounded-2xl border border-[var(--dm-border)] flex flex-col overflow-hidden">
+        <header className="shrink-0 px-5 pt-4 pb-3 border-b border-[var(--dm-border)] bg-[var(--dm-canvas)]">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-2xl bg-gradient-to-br from-[var(--accent)] to-[#e88a6a] text-white flex items-center justify-center shadow-sm shrink-0">
-              <FiPackage size={17} />
+            <div className="w-8 h-8 rounded-lg border border-[var(--dm-border)] bg-[var(--dm-surface)] text-[var(--dm-accent)] flex items-center justify-center shrink-0">
+              <FiPackage size={16} />
             </div>
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2">
-                <h1 className="text-[15px] font-semibold text-[var(--text-primary)] truncate">{t('title')}</h1>
-                {snapshot?.offline && <span className="text-[9.5px] px-1.5 py-0.5 rounded bg-amber-500/12 text-amber-600 dark:text-amber-400">{t('offline')}</span>}
+              <div className="flex items-center gap-2 flex-wrap">
+                <h1 className="text-[16px] font-semibold tracking-[-0.02em] text-[var(--text-primary)] truncate">{t('title')}</h1>
+                {snapshot && (
+                  <span className="dm-num text-[10px] font-mono px-1.5 py-0.5 rounded-md border border-[var(--dm-border)] bg-[var(--dm-surface)] text-[var(--text-muted)]">
+                    DSH {snapshot.baseline.version} · {activeServices} {t('hostServicesReady')}
+                  </span>
+                )}
+                {snapshot?.offline && <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-amber-500/12 text-amber-600 dark:text-amber-400">{t('offline')}</span>}
               </div>
-              <p className="text-[10.5px] text-[var(--text-muted)] truncate">{t('subtitle')}</p>
+              <p className="text-[11px] text-[var(--text-muted)] truncate mt-0.5">{t('subtitle')}</p>
             </div>
             <div className="flex items-center gap-1.5 shrink-0">
               <button disabled={sourceBusy !== null} onClick={() => void refreshSources()} title={t('sync')}
-                className="w-8 h-8 rounded-xl border border-[var(--border)] text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-1)] flex items-center justify-center">
-                <FiRefreshCw size={13} />
+                className="w-8 h-8 rounded-lg border border-[var(--dm-border)] text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--dm-surface)] flex items-center justify-center transition-colors">
+                <FiRefreshCw size={13} className={sourceBusy !== null ? 'animate-spin' : ''} />
               </button>
               <button onClick={closePanel} title={t('close')} aria-label={t('close')}
-                className="w-8 h-8 rounded-xl border border-[var(--border)] text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-1)] flex items-center justify-center">
+                className="w-8 h-8 rounded-lg border border-[var(--dm-border)] text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--dm-surface)] flex items-center justify-center transition-colors">
                 <FiX size={15} />
               </button>
             </div>
@@ -85,16 +92,16 @@ export default function DshMarketPanel() {
             {tabs.map((item) => (
               <button key={item.id}
                 onClick={() => setTab(item.id)}
-                className={`px-3 py-1.5 rounded-lg text-[11px] inline-flex items-center gap-1.5 border transition-colors ${tab === item.id && !selectedPluginId ? 'bg-[var(--accent-soft)] text-[var(--accent)] border-[var(--accent-border)] font-medium' : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-1)]'}`}>
+                className={`px-3 py-1.5 rounded-lg text-[11.5px] inline-flex items-center gap-1.5 border transition-colors ${tab === item.id && !selectedPluginId ? 'bg-[var(--accent-soft)] text-[var(--accent)] border-[var(--accent-border)] font-medium' : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--dm-surface)]'}`}>
                 {item.icon}{item.label}
-                {item.count !== undefined && <span className="text-[9px] opacity-60 font-mono">{item.count}</span>}
+                {item.count !== undefined && <span className="dm-num text-[10px] opacity-65 font-mono">{item.count}</span>}
               </button>
             ))}
           </div>
         </header>
 
         {error && (
-          <div className="shrink-0 mx-4 mt-2 rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-[11px] text-red-600 dark:text-red-400 flex items-start gap-2">
+          <div className="shrink-0 mx-5 mt-2.5 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-[11px] text-red-600 dark:text-red-400 flex items-start gap-2">
             <FiAlertCircle size={13} className="mt-0.5 shrink-0" />
             <span className="flex-1 whitespace-pre-wrap break-words">{error}</span>
             <button onClick={clearError} className="shrink-0 p-0.5 rounded hover:bg-red-500/10"><FiX size={12} /></button>
@@ -106,7 +113,7 @@ export default function DshMarketPanel() {
         </main>
 
         {notice && (
-          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-xl bg-[var(--bg-2)] border border-[var(--border)] shadow-xl px-3.5 py-2 text-[11px] text-[var(--text-secondary)] flex items-center gap-2 max-w-[80%]">
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-lg bg-[var(--dm-elevated)] border border-[var(--dm-border)] shadow-xl px-3.5 py-2 text-[11px] text-[var(--text-secondary)] flex items-center gap-2 max-w-[80%]">
             <FiCheckCircle size={12} className="text-[var(--success)] shrink-0" />
             <span className="truncate">{notice}</span>
           </div>

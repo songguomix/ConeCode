@@ -258,5 +258,5 @@ export function MarketMarkdown({ text, onLink, onImage }: {
     );
   }
   flush();
-  return <div className="text-[12.5px] leading-relaxed">{nodes}</div>;
+  return <div className="dm-prose text-[12.5px] leading-[1.6]">{nodes}</div>;
 }

@@ -216,6 +216,14 @@ export class DshRuntimeManager {
     return this.request('invokeCommand', { pluginId, rowId, name, rawInput }, 180_000);
   }
 
+  async listSystemPrompts(context?: unknown): Promise<Array<{ pluginId: string; rowId: string; id: string; title?: string; content: string; priority: number }>> {
+    return this.request('listSystemPrompts', { context }, 30_000);
+  }
+
+  async getShellEnv(): Promise<Record<string, string>> {
+    return this.request('getShellEnv', {}, 30_000);
+  }
+
   shutdown(): Promise<void> {
     return this.serializeLifecycle(() => this.stopWorker());
   }
